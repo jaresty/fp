@@ -1,0 +1,133 @@
+use anyhow::Result;
+use std::collections::HashSet;
+use crate::model::{Check, CheckStatus, PrState, Thread, ThreadState};
+
+pub struct GithubClient {
+    token: String,
+    base_url: String,
+}
+
+impl GithubClient {
+    pub fn new(token: String) -> Self {
+        GithubClient { token, base_url: "https://api.github.com".into() }
+    }
+
+    #[cfg(test)]
+    pub fn with_base_url(token: String, base_url: String) -> Self {
+        GithubClient { token, base_url }
+    }
+
+    fn get(&self, path: &str) -> Result<serde_json::Value> {
+        let url = format!("{}{}", self.base_url, path);
+        let resp = reqwest::blocking::Client::new()
+            .get(&url)
+            .header("Authorization", format!("Bearer {}", self.token))
+            .header("Accept", "application/vnd.github+json")
+            .header("User-Agent", "fp/0.1")
+            .header("X-GitHub-Api-Version", "2022-11-28")
+            .send()?
+            .error_for_status()?
+            .json::<serde_json::Value>()?;
+        Ok(resp)
+    }
+
+    pub fn fetch_pr(&self, owner: &str, repo: &str, pr_number: u64) -> Result<PrState> {
+        // 1. PR metadata
+        let pr_json = self.get(&format!("/repos/{}/{}/pulls/{}", owner, repo, pr_number))?;
+        let title = pr_json["title"].as_str().unwrap_or("").to_string();
+        let branch = pr_json["head"]["ref"].as_str().unwrap_or("").to_string();
+        let draft = pr_json["draft"].as_bool().unwrap_or(false);
+
+        // 2. Check runs
+        let encoded_branch = branch.replace('/', "%2F");
+        let checks_json = self.get(&format!(
+            "/repos/{}/{}/commits/{}/check-runs", owner, repo, encoded_branch
+        ))?;
+
+        // 3. Branch protection — required check names (404 = no protection configured)
+        let required_names: HashSet<String> = self
+            .get(&format!("/repos/{}/{}/branches/{}/protection", owner, repo, encoded_branch))
+            .ok()
+            .and_then(|j| {
+                j["required_status_checks"]["contexts"]
+                    .as_array()
+                    .map(|arr| arr.iter().filter_map(|v| v.as_str().map(String::from)).collect())
+            })
+            .unwrap_or_default();
+
+        let checks: Vec<Check> = checks_json["check_runs"]
+            .as_array()
+            .unwrap_or(&vec![])
+            .iter()
+            .map(|c| {
+                let name = c["name"].as_str().unwrap_or("").to_string();
+                let status = match (c["status"].as_str(), c["conclusion"].as_str()) {
+                    (_, Some("success")) => CheckStatus::Pass,
+                    (_, Some("failure")) | (_, Some("timed_out")) | (_, Some("cancelled")) => CheckStatus::Fail,
+                    (Some("completed"), _) => CheckStatus::Fail,
+                    _ => CheckStatus::Pending,
+                };
+                let required = required_names.contains(&name);
+                Check { name, status, required }
+            })
+            .collect();
+
+        // 4. Reviews → approval
+        let reviews_json = self.get(&format!("/repos/{}/{}/pulls/{}/reviews", owner, repo, pr_number))?;
+        let approved = reviews_json
+            .as_array()
+            .unwrap_or(&vec![])
+            .iter()
+            .any(|r| r["state"].as_str() == Some("APPROVED"));
+
+        // 5. Review comments → threads (all open by default; state machine managed by fp)
+        let comments_json = self.get(&format!("/repos/{}/{}/pulls/{}/comments", owner, repo, pr_number))?;
+        let threads: Vec<Thread> = comments_json
+            .as_array()
+            .unwrap_or(&vec![])
+            .iter()
+            .map(|c| Thread {
+                id: c["id"].as_u64().unwrap_or(0),
+                state: ThreadState::Open,
+                body: c["body"].as_str().unwrap_or("").to_string(),
+                file: c["path"].as_str().map(String::from),
+                line: c["line"].as_u64().map(|l| l as u32),
+            })
+            .collect();
+
+        Ok(PrState { number: pr_number, title, branch, draft, approved, checks, threads })
+    }
+}
+
+/// Detect owner/repo from `git remote get-url origin`
+pub fn detect_repo() -> Option<(String, String)> {
+    let output = std::process::Command::new("git")
+        .args(["remote", "get-url", "origin"])
+        .output()
+        .ok()?;
+    if !output.status.success() { return None; }
+    let url = String::from_utf8(output.stdout).ok()?;
+    parse_github_remote(url.trim())
+}
+
+pub fn parse_github_remote_pub(url: &str) -> Option<(String, String)> {
+    parse_github_remote(url)
+}
+
+fn parse_github_remote(url: &str) -> Option<(String, String)> {
+    // https://github.com/owner/repo.git  or  git@github.com:owner/repo.git
+    let url = url.trim_end_matches(".git");
+    if let Some(rest) = url.strip_prefix("https://github.com/") {
+        let parts: Vec<&str> = rest.splitn(2, '/').collect();
+        if parts.len() == 2 {
+            return Some((parts[0].to_string(), parts[1].to_string()));
+        }
+    }
+    if let Some(rest) = url.strip_prefix("git@github.com:") {
+        let parts: Vec<&str> = rest.splitn(2, '/').collect();
+        if parts.len() == 2 {
+            return Some((parts[0].to_string(), parts[1].to_string()));
+        }
+    }
+    None
+}

@@ -1,16 +1,20 @@
 mod model;
 mod tasks;
 mod store;
+mod github;
 
 #[cfg(test)]
 mod tasks_test;
 #[cfg(test)]
 mod store_test;
+#[cfg(test)]
+mod github_test;
 
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
 use std::path::PathBuf;
 
+use github::{GithubClient, detect_repo};
 use store::{Store, TrackedPr};
 use tasks::generate_tasks;
 
@@ -88,31 +92,53 @@ fn main() -> Result<()> {
 
         Commands::Status { pr, json, all } => {
             let state = store.load()?;
+            let token = std::env::var("GITHUB_TOKEN").ok();
+            let repo = detect_repo();
+
+            let fetch = |number: u64, branch: &str| -> Option<crate::model::PrState> {
+                if let (Some(tok), Some((owner, repo_name))) = (&token, &repo) {
+                    let client = GithubClient::new(tok.clone());
+                    client.fetch_pr(owner, repo_name, number).ok()
+                } else {
+                    None
+                }
+            };
+
             if all {
                 let mut prs: Vec<_> = state.prs.values().collect();
                 prs.sort_by_key(|p| p.number);
                 for tracked in prs {
-                    println!("PR #{} — {} tasks (live fetch not yet implemented)", tracked.number, "?");
+                    let pr_state = fetch(tracked.number, &tracked.branch)
+                        .unwrap_or_else(|| crate::model::PrState {
+                            number: tracked.number,
+                            title: tracked.title.clone(),
+                            branch: tracked.branch.clone(),
+                            draft: false, approved: false,
+                            checks: vec![], threads: vec![],
+                        });
+                    let tasks = generate_tasks(&pr_state);
+                    if json {
+                        println!("{}", serde_json::to_string_pretty(&tasks).unwrap());
+                    } else if tasks.is_empty() {
+                        println!("PR #{} {} — ready", tracked.number, tracked.title);
+                    } else {
+                        println!("PR #{} {} — {} task(s)", tracked.number, tracked.title, tasks.len());
+                    }
                 }
             } else {
-                let number = pr.or_else(|| {
-                    // TODO: detect current branch PR
-                    None
-                }).context("specify a PR number or use --all")?;
+                let number = pr.context("specify a PR number or use --all")?;
 
                 let tracked = state.prs.get(&number)
                     .with_context(|| format!("PR #{} is not tracked. Run `fp track {}`", number, number))?;
 
-                // Build a minimal PrState from stored info — real fetch is in the next slice
-                let pr_state = model::PrState {
-                    number: tracked.number,
-                    title: tracked.title.clone(),
-                    branch: tracked.branch.clone(),
-                    draft: false,
-                    approved: false,
-                    checks: vec![],
-                    threads: vec![],
-                };
+                let pr_state = fetch(tracked.number, &tracked.branch)
+                    .unwrap_or_else(|| crate::model::PrState {
+                        number: tracked.number,
+                        title: tracked.title.clone(),
+                        branch: tracked.branch.clone(),
+                        draft: false, approved: false,
+                        checks: vec![], threads: vec![],
+                    });
                 let task_list = generate_tasks(&pr_state);
 
                 if json {
