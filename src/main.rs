@@ -21,7 +21,7 @@ use clap::{Parser, Subcommand};
 use std::path::PathBuf;
 
 use github::{GithubClient, detect_repo};
-use store::{State, Store, TrackedPr};
+use store::{Store, TrackedPr};
 use tasks::{generate_tasks, task_diff};
 
 const FP_SKILL: &str = include_str!("../assets/fp-skill.md");

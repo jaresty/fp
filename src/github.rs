@@ -168,11 +168,10 @@ impl GithubClient {
         }
         // Second pass: attach replies to their root
         for c in &all_comments {
-            if let Some(root_id) = c.get("in_reply_to_id").and_then(|v| v.as_u64()) {
-                if let Some(entry) = threads_map.iter_mut().find(|(k, _)| *k == root_id) {
+            if let Some(root_id) = c.get("in_reply_to_id").and_then(|v| v.as_u64())
+                && let Some(entry) = threads_map.iter_mut().find(|(k, _)| *k == root_id) {
                     entry.1.push(c);
                 }
-            }
         }
         let threads: Vec<Thread> = threads_map.into_iter().map(|(_, comments)| {
             let root = comments[0];
