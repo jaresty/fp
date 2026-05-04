@@ -24,6 +24,8 @@ use github::{GithubClient, detect_repo};
 use store::{State, Store, TrackedPr};
 use tasks::{generate_tasks, task_diff};
 
+const FP_SKILL: &str = include_str!("../assets/fp-skill.md");
+
 fn apply_thread_states(mut pr_state: model::PrState, store_state: &State) -> model::PrState {
     for thread in &mut pr_state.threads {
         let key = format!("{}:{}", pr_state.number, thread.id);
@@ -110,6 +112,8 @@ enum Commands {
     },
     /// Rebase all tracked PRs in stack order onto their parent branches
     RebaseStack,
+    /// Install the fp Claude Code skill into .claude/skills/fp/SKILL.md
+    InstallSkills,
 }
 
 fn git_dir() -> Result<PathBuf> {
@@ -343,6 +347,14 @@ fn main() -> Result<()> {
             println!("Created PR #{}: {} ({})", pr_state.number, pr_state.title, pr_state.branch);
         }
 
+        Commands::InstallSkills => {
+            let skill_dir = std::path::Path::new(".claude").join("skills").join("fp");
+            std::fs::create_dir_all(&skill_dir)?;
+            let skill_path = skill_dir.join("SKILL.md");
+            std::fs::write(&skill_path, FP_SKILL)?;
+            println!("Installed fp skill to {}", skill_path.display());
+        }
+
         Commands::RebaseStack => {
             let state = store.load()?;
             if state.prs.is_empty() {
@@ -426,4 +438,48 @@ fn main() -> Result<()> {
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod install_test {
+    #[test]
+    fn install_skills_writes_skill_file() {
+        use std::process::Command;
+        use tempfile::TempDir;
+
+        let dir = TempDir::new().unwrap();
+        let path = dir.path();
+
+        // Init a git repo so fp can find git dir
+        Command::new("git").args(["init"]).current_dir(path).output().unwrap();
+        Command::new("git").args(["config", "user.email", "t@t.com"]).current_dir(path).output().unwrap();
+        Command::new("git").args(["config", "user.name", "T"]).current_dir(path).output().unwrap();
+        // Need at least one commit for git rev-parse --git-dir to work
+        std::fs::write(path.join("x"), "x").unwrap();
+        Command::new("git").args(["add", "."]).current_dir(path).output().unwrap();
+        Command::new("git").args(["commit", "-m", "init"]).current_dir(path).output().unwrap();
+
+        // cargo sets CARGO_BIN_EXE_fp to the built binary path during tests
+        let fp_bin = std::env::var("CARGO_BIN_EXE_fp")
+            .map(std::path::PathBuf::from)
+            .unwrap_or_else(|_| {
+                std::env::current_exe().unwrap()
+                    .parent().unwrap()
+                    .parent().unwrap()
+                    .join("fp")
+            });
+
+        let out = Command::new(&fp_bin)
+            .arg("install-skills")
+            .current_dir(path)
+            .output()
+            .expect("failed to run fp");
+
+        assert!(out.status.success(), "stderr: {}", String::from_utf8_lossy(&out.stderr));
+
+        let skill_path = path.join(".claude").join("skills").join("fp").join("SKILL.md");
+        assert!(skill_path.exists(), "SKILL.md was not created");
+        let content = std::fs::read_to_string(&skill_path).unwrap();
+        assert!(content.contains("name: fp"), "SKILL.md missing frontmatter");
+    }
 }

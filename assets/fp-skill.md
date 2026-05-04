@@ -1,0 +1,137 @@
+---
+name: fp
+description: Use fp (fixpoint) as the actuator when helping a user drive their PRs to merge. fp surfaces blocking tasks, fetches CI logs, manages review threads, and rebases stacked branches. Run fp commands to observe real state before advising on any PR work.
+when_to_use: "Is the user asking about PR status, CI failures, review threads, stacked branches, or how to get a PR merged?"
+requires:
+  - fp CLI installed and on PATH
+  - GITHUB_TOKEN environment variable set
+  - git repository with GitHub remote
+---
+
+# fp Skill — PR Convergence Loop
+
+## MANDATORY: Run fp Before Advising
+
+Running fp commands before giving any advice is **not optional**.
+
+- Do NOT describe what might be blocking a PR without first running `fp status <pr>`.
+- Do NOT suggest how to fix a CI failure without first running `fp context <pr> <check-name>` to read the actual log.
+- Do NOT advise on review threads without first running `fp status <pr>` to see open threads.
+- Do NOT recommend rebasing without first running `fp status --all` to see all tracked PRs.
+- Do NOT proceed if `GITHUB_TOKEN` is not set — tell the user to set it before running any fp command.
+
+If you find yourself drafting advice without having run `fp status`, stop and run it first.
+
+## What fp Does
+
+fp observes PR state (checks, threads, approvals) and surfaces the exact actions needed to move a PR to merge. Claude's role is to execute those actions using fp commands — not to reason about state that fp can already observe.
+
+## Command Reference
+
+```sh
+# State observation
+fp ls [--json]                          # list tracked PRs
+fp status <pr> [--json]                 # tasks blocking this PR
+fp status --all [--json]                # all tracked PRs
+fp context <pr> <hint>                  # log tail for check, or thread body
+                                        # hint: exact check name (e.g. ci/test)
+                                        #       or thread:<id> (e.g. thread:42)
+
+# Thread management
+fp reply <pr> <thread_id> "<message>"   # post reply, mark thread Addressed
+fp resolve <pr> <thread_id>             # mark Resolved locally (no GitHub post)
+
+# Stack management
+fp rebase-stack                         # rebase each tracked branch onto parent tip
+
+# PR creation and tracking
+fp create "<title>" [--base <branch>]   # create draft PR for current branch
+fp track <pr>                           # track PR (auto-fetches metadata via API)
+fp track <pr> --title "..." --branch "..."  # track PR manually
+fp untrack <pr>                         # stop tracking
+
+# Monitoring
+fp watch [--once] [--interval <secs>]   # poll tracked PRs, print task diffs
+```
+
+## Task Types
+
+| Task | Blocking | Meaning | Action |
+|------|----------|---------|--------|
+| `FixCi` | **yes** | A required check is failing | `fp context <pr> <check>` → read log → fix → push |
+| `RespondThread` | **yes** | An open or stale review thread needs a response | `fp context <pr> thread:<id>` → `fp reply` or `fp resolve` |
+| `AwaitingCi` | no | A required check is pending | `fp watch --once` to re-check |
+| `AwaitingReview` | no | PR not approved yet | Wait |
+
+## Decision Protocol
+
+When a user asks "what's blocking my PR" or "how do I get this merged":
+
+1. Verify `GITHUB_TOKEN` is set — if not, stop and tell the user.
+2. Run `fp status <pr>` — read every task in the output.
+3. For each **blocking** task: run `fp context <pr> <hint>` to get specifics.
+4. For `FixCi`: read the log tail, identify the failure, implement the fix, push.
+5. For `RespondThread`: read the thread body, draft a reply, run `fp reply <pr> <id> "<message>"`.
+6. Run `fp watch --once` to confirm state updated after each action.
+7. Repeat from step 2 until `fp status` reports no blocking tasks.
+
+Never skip step 2. Never advise based on assumed state.
+
+## Worked Example
+
+User: "My PR #7 is stuck, what do I do?"
+
+```sh
+# Step 1: get current state
+fp status 7
+# Output:
+# PR #7 — 2 task(s):
+#   [blocking] FixCi: Fix failing check: ci/test
+#   [blocking] RespondThread: Respond to thread #88
+
+# Step 2: read the CI log
+fp context 7 ci/test
+# Output: last 50 lines of the failing job log
+
+# Step 3: fix the failing test, push, then check thread
+fp context 7 thread:88
+# Output: Thread #88 (Open)
+#   src/lib.rs:42
+#   "This function doesn't handle the empty input case"
+
+# Step 4: reply to thread
+fp reply 7 88 "Good catch — added handling for empty input in the same commit."
+
+# Step 5: confirm state
+fp watch --once
+# Output: ✓ PR #7 resolved RespondThread: Respond to thread #88
+```
+
+## Stack Workflow
+
+All branches in the stack must be tracked first:
+
+```sh
+fp track 5    # base PR
+fp track 6    # PR stacked on #5
+fp track 7    # PR stacked on #6
+fp rebase-stack
+# Output:
+# ✓ rebased feat/step-2
+# ✓ rebased feat/step-3
+```
+
+Conflicts are reported by branch name. Resolve manually, then re-run `fp rebase-stack`.
+
+## Environment Variables
+
+- `GITHUB_TOKEN` — required for all API calls. If absent, tell the user to set it.
+- `BUILDKITE_TOKEN` — required for Buildkite log content. If a Buildkite check fails and this is unset, tell the user.
+
+## Write to Disk
+
+This skill is written to `.claude/skills/fp/SKILL.md` inside the current git repository by running:
+
+```sh
+fp install-skills
+```
