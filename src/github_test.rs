@@ -86,7 +86,7 @@ mod tests {
         let mut server = mockito::Server::new();
         server.mock("GET", "/repos/owner/repo/pulls/5")
             .with_status(200).with_header("content-type","application/json")
-            .with_body(r#"{"number":5,"title":"t","draft":false,"head":{"ref":"mybranch"}}"#)
+            .with_body(r#"{"number":5,"title":"t","draft":false,"head":{"ref":"mybranch","sha":""},"base":{"ref":"main"}}"#)
             .create();
         server.mock("GET", "/repos/owner/repo/commits/mybranch/check-runs")
             .with_status(200).with_header("content-type","application/json")
@@ -95,8 +95,13 @@ mod tests {
                 {"name":"ci/lint","conclusion":"success","status":"completed"}
             ]}"#).create();
         server.mock("GET", "/repos/owner/repo/branches/mybranch/protection")
+            .with_status(404).create();
+        server.mock("GET", "/repos/owner/repo/branches/main/protection")
             .with_status(200).with_header("content-type","application/json")
             .with_body(r#"{"required_status_checks":{"contexts":["ci/test"]}}"#).create();
+        server.mock("GET", "/repos/owner/repo/commits//statuses")
+            .with_status(200).with_header("content-type","application/json")
+            .with_body(r#"[]"#).create();
         server.mock("GET", "/repos/owner/repo/pulls/5/reviews")
             .with_status(200).with_header("content-type","application/json")
             .with_body(r#"[]"#).create();
@@ -397,19 +402,56 @@ mod tests {
         assert_eq!(branch, "feat/thing");
     }
 
+    // BP1: required check names come from BASE branch protection, not head branch
+    #[test]
+    fn required_names_from_base_branch_not_head() {
+        let mut server = mockito::Server::new();
+        server.mock("GET", "/repos/owner/repo/pulls/30")
+            .with_status(200).with_header("content-type","application/json")
+            .with_body(r#"{"number":30,"title":"t","draft":false,"head":{"ref":"feat/x","sha":"sha1"},"base":{"ref":"main"},"user":{"login":"author"}}"#)
+            .create();
+        server.mock("GET", "/repos/owner/repo/commits/feat%2Fx/check-runs")
+            .with_status(200).with_header("content-type","application/json")
+            .with_body(r#"{"check_runs":[{"name":"ci/test","conclusion":"failure","status":"completed"}]}"#)
+            .create();
+        // HEAD branch has no protection (feature branch)
+        server.mock("GET", "/repos/owner/repo/branches/feat%2Fx/protection")
+            .with_status(404).create();
+        // BASE branch (main) has the required checks configured
+        server.mock("GET", "/repos/owner/repo/branches/main/protection")
+            .with_status(200).with_header("content-type","application/json")
+            .with_body(r#"{"required_status_checks":{"contexts":["ci/test"]}}"#)
+            .create();
+        server.mock("GET", "/repos/owner/repo/commits/sha1/statuses")
+            .with_status(200).with_header("content-type","application/json")
+            .with_body(r#"[]"#).create();
+        server.mock("GET", "/repos/owner/repo/pulls/30/reviews")
+            .with_status(200).with_header("content-type","application/json")
+            .with_body(r#"[]"#).create();
+        server.mock("GET", "/repos/owner/repo/pulls/30/comments")
+            .with_status(200).with_header("content-type","application/json")
+            .with_body(r#"[]"#).create();
+
+        let pr = mock_client(&server).fetch_pr("owner", "repo", 30).unwrap();
+        let check = pr.checks.iter().find(|c| c.name == "ci/test").unwrap();
+        assert!(check.required, "ci/test should be required per base branch (main) protection");
+    }
+
     // CS1: commit statuses (Buildkite-style) are included in checks alongside check-runs
     #[test]
     fn commit_statuses_merged_into_checks() {
         let mut server = mockito::Server::new();
         server.mock("GET", "/repos/owner/repo/pulls/20")
             .with_status(200).with_header("content-type","application/json")
-            .with_body(r#"{"number":20,"title":"t","draft":false,"head":{"ref":"b","sha":"abc123"},"user":{"login":"author"}}"#)
+            .with_body(r#"{"number":20,"title":"t","draft":false,"head":{"ref":"b","sha":"abc123"},"base":{"ref":"main"},"user":{"login":"author"}}"#)
             .create();
         server.mock("GET", "/repos/owner/repo/commits/b/check-runs")
             .with_status(200).with_header("content-type","application/json")
             .with_body(r#"{"check_runs":[{"name":"lint","conclusion":"success","status":"completed"}]}"#)
             .create();
         server.mock("GET", "/repos/owner/repo/branches/b/protection")
+            .with_status(404).create();
+        server.mock("GET", "/repos/owner/repo/branches/main/protection")
             .with_status(200).with_header("content-type","application/json")
             .with_body(r#"{"required_status_checks":{"contexts":["buildkite/ci"]}}"#)
             .create();

@@ -84,6 +84,7 @@ impl GithubClient {
         let title = pr_json["title"].as_str().unwrap_or("").to_string();
         let branch = pr_json["head"]["ref"].as_str().unwrap_or("").to_string();
         let draft = pr_json["draft"].as_bool().unwrap_or(false);
+        let base_branch = pr_json["base"]["ref"].as_str().unwrap_or("main").to_string();
 
         // 2. Check runs
         let encoded_branch = branch.replace('/', "%2F");
@@ -91,9 +92,10 @@ impl GithubClient {
             "/repos/{}/{}/commits/{}/check-runs", owner, repo, encoded_branch
         ))?;
 
-        // 3. Branch protection — required check names (404 = no protection configured)
+        // 3. Branch protection from BASE branch (feature branches have no protection rules)
+        let encoded_base = base_branch.replace('/', "%2F");
         let required_names: HashSet<String> = self
-            .get(&format!("/repos/{}/{}/branches/{}/protection", owner, repo, encoded_branch))
+            .get(&format!("/repos/{}/{}/branches/{}/protection", owner, repo, encoded_base))
             .ok()
             .and_then(|j| {
                 j["required_status_checks"]["contexts"]
