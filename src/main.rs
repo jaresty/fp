@@ -112,8 +112,12 @@ enum Commands {
     },
     /// Rebase all tracked PRs in stack order onto their parent branches
     RebaseStack,
-    /// Install the fp Claude Code skill into .claude/skills/fp/SKILL.md
-    InstallSkills,
+    /// Install the fp Claude Code skill into ~/.claude/skills/fp/SKILL.md
+    InstallSkills {
+        /// Alternative output path (overrides default ~/.claude/skills/fp/SKILL.md)
+        #[arg(long)]
+        path: Option<std::path::PathBuf>,
+    },
 }
 
 fn git_dir() -> Result<PathBuf> {
@@ -347,10 +351,17 @@ fn main() -> Result<()> {
             println!("Created PR #{}: {} ({})", pr_state.number, pr_state.title, pr_state.branch);
         }
 
-        Commands::InstallSkills => {
-            let skill_dir = std::path::Path::new(".claude").join("skills").join("fp");
-            std::fs::create_dir_all(&skill_dir)?;
-            let skill_path = skill_dir.join("SKILL.md");
+        Commands::InstallSkills { path } => {
+            let skill_path = match path {
+                Some(p) => p,
+                None => {
+                    let home = dirs::home_dir().context("could not determine home directory")?;
+                    home.join(".claude").join("skills").join("fp").join("SKILL.md")
+                }
+            };
+            if let Some(parent) = skill_path.parent() {
+                std::fs::create_dir_all(parent)?;
+            }
             std::fs::write(&skill_path, FP_SKILL)?;
             println!("Installed fp skill to {}", skill_path.display());
         }
@@ -477,8 +488,9 @@ mod install_test {
 
         assert!(out.status.success(), "stderr: {}", String::from_utf8_lossy(&out.stderr));
 
-        let skill_path = path.join(".claude").join("skills").join("fp").join("SKILL.md");
-        assert!(skill_path.exists(), "SKILL.md was not created");
+        let home = dirs::home_dir().expect("no home dir");
+        let skill_path = home.join(".claude").join("skills").join("fp").join("SKILL.md");
+        assert!(skill_path.exists(), "SKILL.md was not created at {}", skill_path.display());
         let content = std::fs::read_to_string(&skill_path).unwrap();
         assert!(content.contains("name: fp"), "SKILL.md missing frontmatter");
     }
