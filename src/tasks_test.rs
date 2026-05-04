@@ -10,7 +10,12 @@ mod tests {
             branch: "fix/foo".into(),
             draft: false,
             approved: true,
-            checks: vec![Check { name: "ci/test".into(), status: CheckStatus::Pass, required: true, details_url: None }],
+            checks: vec![Check {
+                name: "ci/test".into(),
+                status: CheckStatus::Pass,
+                required: true,
+                details_url: None,
+            }],
             threads: vec![],
         }
     }
@@ -31,7 +36,8 @@ mod tests {
         let tasks = generate_tasks(&pr);
         assert!(
             tasks.iter().any(|t| t.task_type == TaskType::FixCi),
-            "expected fix_ci task, got: {:?}", tasks
+            "expected fix_ci task, got: {:?}",
+            tasks
         );
     }
 
@@ -43,7 +49,8 @@ mod tests {
         let tasks = generate_tasks(&pr);
         assert!(
             tasks.iter().any(|t| t.task_type == TaskType::AwaitingCi),
-            "expected awaiting_ci task, got: {:?}", tasks
+            "expected awaiting_ci task, got: {:?}",
+            tasks
         );
     }
 
@@ -61,7 +68,8 @@ mod tests {
         let tasks = generate_tasks(&pr);
         assert!(
             tasks.iter().any(|t| t.task_type == TaskType::RespondThread),
-            "expected respond_thread task, got: {:?}", tasks
+            "expected respond_thread task, got: {:?}",
+            tasks
         );
     }
 
@@ -79,7 +87,8 @@ mod tests {
         let tasks = generate_tasks(&pr);
         assert!(
             tasks.iter().any(|t| t.task_type == TaskType::RespondThread),
-            "expected respond_thread task for stale thread, got: {:?}", tasks
+            "expected respond_thread task for stale thread, got: {:?}",
+            tasks
         );
     }
 
@@ -97,7 +106,8 @@ mod tests {
         let tasks = generate_tasks(&pr);
         assert!(
             !tasks.iter().any(|t| t.task_type == TaskType::RespondThread),
-            "resolved thread should not produce task, got: {:?}", tasks
+            "resolved thread should not produce task, got: {:?}",
+            tasks
         );
     }
 
@@ -108,8 +118,11 @@ mod tests {
         pr.approved = false;
         let tasks = generate_tasks(&pr);
         assert!(
-            tasks.iter().any(|t| t.task_type == TaskType::AwaitingReview),
-            "expected awaiting_review task, got: {:?}", tasks
+            tasks
+                .iter()
+                .any(|t| t.task_type == TaskType::AwaitingReview),
+            "expected awaiting_review task, got: {:?}",
+            tasks
         );
     }
 
@@ -119,23 +132,68 @@ mod tests {
         let mut pr_fail = pr_clean();
         pr_fail.checks[0].status = CheckStatus::Fail;
         let fail_tasks = generate_tasks(&pr_fail);
-        assert!(fail_tasks.iter().any(|t| t.task_type == TaskType::FixCi && t.blocking));
+        assert!(fail_tasks
+            .iter()
+            .any(|t| t.task_type == TaskType::FixCi && t.blocking));
 
         let mut pr_pending = pr_clean();
         pr_pending.checks[0].status = CheckStatus::Pending;
         let pending_tasks = generate_tasks(&pr_pending);
-        assert!(pending_tasks.iter().any(|t| t.task_type == TaskType::AwaitingCi && !t.blocking));
+        assert!(pending_tasks
+            .iter()
+            .any(|t| t.task_type == TaskType::AwaitingCi && !t.blocking));
     }
 
-    // D4: optional failing check does not produce fix_ci
+    // D1: now covered by non_required_failing_check_produces_fix_ci_task
+    // Keeping for historical clarity: optional failing check DOES produce FixCi (non-blocking)
     #[test]
-    fn optional_failing_check_produces_no_task() {
+    fn optional_failing_check_produces_fix_ci_non_blocking() {
         let mut pr = pr_clean();
-        pr.checks.push(Check { name: "ci/optional".into(), status: CheckStatus::Fail, required: false, details_url: None });
+        pr.checks.push(Check {
+            name: "ci/optional".into(),
+            status: CheckStatus::Fail,
+            required: false,
+            details_url: None,
+        });
         let tasks = generate_tasks(&pr);
         assert!(
-            !tasks.iter().any(|t| t.task_type == TaskType::FixCi),
-            "optional failing check should not produce fix_ci, got: {:?}", tasks
+            tasks
+                .iter()
+                .any(|t| t.task_type == TaskType::FixCi && !t.blocking),
+            "optional failing check should produce FixCi (non-blocking), got: {:?}",
+            tasks
+        );
+    }
+
+    // D1: non-required failing check produces FixCi task (blocking=false)
+    #[test]
+    fn non_required_failing_check_produces_fix_ci_task() {
+        let mut pr = pr_clean();
+        pr.checks[0].required = false;
+        pr.checks[0].status = CheckStatus::Fail;
+        let tasks = generate_tasks(&pr);
+        assert!(
+            tasks
+                .iter()
+                .any(|t| t.task_type == TaskType::FixCi && !t.blocking),
+            "non-required failing check should produce FixCi (non-blocking), got: {:?}",
+            tasks
+        );
+    }
+
+    // D3: non-required pending check produces AwaitingCi task
+    #[test]
+    fn non_required_pending_check_produces_awaiting_ci() {
+        let mut pr = pr_clean();
+        pr.checks[0].required = false;
+        pr.checks[0].status = CheckStatus::Pending;
+        let tasks = generate_tasks(&pr);
+        assert!(
+            tasks
+                .iter()
+                .any(|t| t.task_type == TaskType::AwaitingCi && !t.blocking),
+            "non-required pending check should produce AwaitingCi, got: {:?}",
+            tasks
         );
     }
 
