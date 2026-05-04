@@ -3,6 +3,7 @@ mod tasks;
 mod store;
 mod github;
 mod ci;
+mod stack;
 
 #[cfg(test)]
 mod tasks_test;
@@ -12,6 +13,8 @@ mod store_test;
 mod github_test;
 #[cfg(test)]
 mod ci_test;
+#[cfg(test)]
+mod stack_test;
 
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};

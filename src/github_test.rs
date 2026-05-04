@@ -261,6 +261,37 @@ mod tests {
         assert_eq!(check.details_url.as_deref(), Some("https://buildkite.com/org/pipeline/builds/123"));
     }
 
+    // CR1: create_pr posts to correct endpoint and returns PR number
+    #[test]
+    fn create_pr_posts_and_returns_number() {
+        let mut server = mockito::Server::new();
+        server.mock("POST", "/repos/owner/repo/pulls")
+            .with_status(201)
+            .with_header("content-type", "application/json")
+            .with_body(r#"{"number": 42, "html_url": "https://github.com/owner/repo/pull/42", "head": {"ref": "feat/thing"}, "title": "my feature"}"#)
+            .create();
+
+        let client = mock_client(&server);
+        let pr = client.create_pr("owner", "repo", "my feature", "feat/thing", "main", true).unwrap();
+        assert_eq!(pr.number, 42);
+        assert_eq!(pr.title, "my feature");
+        assert_eq!(pr.branch, "feat/thing");
+    }
+
+    // CR1: create_pr errors on API failure
+    #[test]
+    fn create_pr_errors_on_failure() {
+        let mut server = mockito::Server::new();
+        server.mock("POST", "/repos/owner/repo/pulls")
+            .with_status(422)
+            .with_header("content-type", "application/json")
+            .with_body(r#"{"message": "Validation Failed"}"#)
+            .create();
+
+        let client = mock_client(&server);
+        assert!(client.create_pr("owner", "repo", "title", "branch", "main", true).is_err());
+    }
+
     // T1: reply_to_comment posts to correct endpoint and returns posted body
     #[test]
     fn reply_to_comment_posts_and_returns_body() {

@@ -47,6 +47,30 @@ impl GithubClient {
         Ok(resp["body"].as_str().unwrap_or("").to_string())
     }
 
+    pub fn create_pr(&self, owner: &str, repo: &str, title: &str, head: &str, base: &str, draft: bool) -> Result<PrState> {
+        let url = format!("{}/repos/{}/{}/pulls", self.base_url, owner, repo);
+        let payload = serde_json::json!({ "title": title, "head": head, "base": base, "draft": draft });
+        let resp = reqwest::blocking::Client::new()
+            .post(&url)
+            .header("Authorization", format!("Bearer {}", self.token))
+            .header("Accept", "application/vnd.github+json")
+            .header("User-Agent", "fp/0.1")
+            .header("X-GitHub-Api-Version", "2022-11-28")
+            .json(&payload)
+            .send()?
+            .error_for_status()?
+            .json::<serde_json::Value>()?;
+        Ok(PrState {
+            number: resp["number"].as_u64().unwrap_or(0),
+            title: resp["title"].as_str().unwrap_or("").to_string(),
+            branch: resp["head"]["ref"].as_str().unwrap_or("").to_string(),
+            draft: resp["draft"].as_bool().unwrap_or(false),
+            approved: false,
+            checks: vec![],
+            threads: vec![],
+        })
+    }
+
     pub fn fetch_pr_metadata(&self, owner: &str, repo: &str, pr_number: u64) -> Result<(String, String)> {
         let pr_json = self.get(&format!("/repos/{}/{}/pulls/{}", owner, repo, pr_number))?;
         let title = pr_json["title"].as_str().unwrap_or("").to_string();
