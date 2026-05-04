@@ -2,6 +2,7 @@ mod model;
 mod tasks;
 mod store;
 mod github;
+mod ci;
 
 #[cfg(test)]
 mod tasks_test;
@@ -9,6 +10,8 @@ mod tasks_test;
 mod store_test;
 #[cfg(test)]
 mod github_test;
+#[cfg(test)]
+mod ci_test;
 
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
@@ -309,7 +312,13 @@ fn main() -> Result<()> {
                 if let Some(check) = pr_state.checks.iter().find(|c| c.name == hint) {
                     println!("Check: {} ({:?})", check.name, check.status);
                     if let Some(url) = &check.details_url {
-                        println!("  Logs: {}", url);
+                        let provider = ci::parse_ci_provider(url);
+                        let token = std::env::var("GITHUB_TOKEN").unwrap_or_default();
+                        let log_client = ci::CiLogClient::new(token);
+                        match log_client.fetch_logs(&provider) {
+                            Ok(logs) => println!("{}", logs),
+                            Err(e) => println!("  Log URL: {}\n  (fetch failed: {})", url, e),
+                        }
                     } else {
                         println!("  No details URL available");
                     }
