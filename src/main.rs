@@ -74,6 +74,22 @@ enum Commands {
         #[arg(long, default_value = "30")]
         interval: u64,
     },
+    /// Reply to a PR review thread and mark it as addressed
+    Reply {
+        /// PR number
+        pr: u64,
+        /// Thread (comment) ID
+        thread_id: u64,
+        /// Reply message body
+        message: String,
+    },
+    /// Mark a PR review thread as resolved (local state only)
+    Resolve {
+        /// PR number
+        pr: u64,
+        /// Thread (comment) ID
+        thread_id: u64,
+    },
     /// Show full context for a task (check logs URL, thread body, etc.)
     Context {
         /// PR number
@@ -219,6 +235,22 @@ fn main() -> Result<()> {
         Commands::Untrack { pr } => {
             store.untrack(pr)?;
             println!("Untracked PR #{}", pr);
+        }
+
+        Commands::Reply { pr, thread_id, message } => {
+            let token = std::env::var("GITHUB_TOKEN")
+                .context("GITHUB_TOKEN not set")?;
+            let (owner, repo_name) = detect_repo()
+                .context("could not detect GitHub repo from git remote")?;
+            let client = GithubClient::new(token);
+            let posted = client.reply_to_comment(&owner, &repo_name, thread_id, &message)?;
+            store.set_thread_state(pr, thread_id, model::ThreadState::Addressed)?;
+            println!("Replied to thread #{}: {}", thread_id, posted);
+        }
+
+        Commands::Resolve { pr, thread_id } => {
+            store.set_thread_state(pr, thread_id, model::ThreadState::Resolved)?;
+            println!("Thread #{} marked as resolved (local state)", thread_id);
         }
 
         Commands::Watch { once, interval } => {

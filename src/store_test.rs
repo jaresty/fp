@@ -78,4 +78,22 @@ mod tests {
         let ts = state.thread_states.get("42:999").copied().unwrap_or(ThreadState::Open);
         assert_eq!(ts, ThreadState::Open);
     }
+
+    // T3: reply transitions thread to Addressed
+    #[test]
+    fn reply_sets_thread_state_to_addressed() {
+        let (store, _dir) = make_store();
+        store.set_thread_state(1, 42, ThreadState::Addressed).unwrap();
+        let state = store.load().unwrap();
+        assert_eq!(state.thread_states.get("1:42"), Some(&ThreadState::Addressed));
+    }
+
+    // T4: resolve transitions thread to Resolved
+    #[test]
+    fn resolve_sets_thread_state_to_resolved() {
+        let (store, _dir) = make_store();
+        store.set_thread_state(1, 42, ThreadState::Resolved).unwrap();
+        let state = store.load().unwrap();
+        assert_eq!(state.thread_states.get("1:42"), Some(&ThreadState::Resolved));
+    }
 }

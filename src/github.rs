@@ -31,6 +31,22 @@ impl GithubClient {
         Ok(resp)
     }
 
+    pub fn reply_to_comment(&self, owner: &str, repo: &str, comment_id: u64, body: &str) -> Result<String> {
+        let url = format!("{}/repos/{}/{}/pulls/comments/{}/replies", self.base_url, owner, repo, comment_id);
+        let payload = serde_json::json!({ "body": body });
+        let resp = reqwest::blocking::Client::new()
+            .post(&url)
+            .header("Authorization", format!("Bearer {}", self.token))
+            .header("Accept", "application/vnd.github+json")
+            .header("User-Agent", "fp/0.1")
+            .header("X-GitHub-Api-Version", "2022-11-28")
+            .json(&payload)
+            .send()?
+            .error_for_status()?
+            .json::<serde_json::Value>()?;
+        Ok(resp["body"].as_str().unwrap_or("").to_string())
+    }
+
     pub fn fetch_pr_metadata(&self, owner: &str, repo: &str, pr_number: u64) -> Result<(String, String)> {
         let pr_json = self.get(&format!("/repos/{}/{}/pulls/{}", owner, repo, pr_number))?;
         let title = pr_json["title"].as_str().unwrap_or("").to_string();
