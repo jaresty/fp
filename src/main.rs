@@ -157,22 +157,35 @@ fn main() -> Result<()> {
             if all {
                 let mut prs: Vec<_> = state.prs.values().collect();
                 prs.sort_by_key(|p| p.number);
-                for tracked in prs {
-                    let pr_state = fetch(tracked.number, &tracked.branch)
-                        .unwrap_or_else(|| crate::model::PrState {
-                            number: tracked.number,
-                            title: tracked.title.clone(),
-                            branch: tracked.branch.clone(),
-                            draft: false, approved: false,
-                            checks: vec![], threads: vec![],
-                        });
-                    let tasks = generate_tasks(&pr_state);
-                    if json {
-                        println!("{}", serde_json::to_string_pretty(&tasks).unwrap());
-                    } else if tasks.is_empty() {
-                        println!("PR #{} {} — ready", tracked.number, tracked.title);
-                    } else {
-                        println!("PR #{} {} — {} task(s)", tracked.number, tracked.title, tasks.len());
+                if json {
+                    let all_tasks: Vec<_> = prs.iter().map(|tracked| {
+                        let pr_state = fetch(tracked.number, &tracked.branch)
+                            .unwrap_or_else(|| crate::model::PrState {
+                                number: tracked.number,
+                                title: tracked.title.clone(),
+                                branch: tracked.branch.clone(),
+                                draft: false, approved: false,
+                                checks: vec![], threads: vec![],
+                            });
+                        (tracked.number, generate_tasks(&pr_state))
+                    }).collect();
+                    println!("{}", serde_json::to_string_pretty(&all_tasks).unwrap());
+                } else {
+                    for tracked in prs {
+                        let pr_state = fetch(tracked.number, &tracked.branch)
+                            .unwrap_or_else(|| crate::model::PrState {
+                                number: tracked.number,
+                                title: tracked.title.clone(),
+                                branch: tracked.branch.clone(),
+                                draft: false, approved: false,
+                                checks: vec![], threads: vec![],
+                            });
+                        let tasks = generate_tasks(&pr_state);
+                        if tasks.is_empty() {
+                            println!("PR #{} {} — ready", tracked.number, tracked.title);
+                        } else {
+                            println!("PR #{} {} — {} task(s)", tracked.number, tracked.title, tasks.len());
+                        }
                     }
                 }
             } else {
