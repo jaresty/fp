@@ -31,6 +31,29 @@ impl GithubClient {
         Ok(resp)
     }
 
+    pub fn reply_to_comment(&self, owner: &str, repo: &str, comment_id: u64, body: &str) -> Result<String> {
+        let url = format!("{}/repos/{}/{}/pulls/comments/{}/replies", self.base_url, owner, repo, comment_id);
+        let payload = serde_json::json!({ "body": body });
+        let resp = reqwest::blocking::Client::new()
+            .post(&url)
+            .header("Authorization", format!("Bearer {}", self.token))
+            .header("Accept", "application/vnd.github+json")
+            .header("User-Agent", "fp/0.1")
+            .header("X-GitHub-Api-Version", "2022-11-28")
+            .json(&payload)
+            .send()?
+            .error_for_status()?
+            .json::<serde_json::Value>()?;
+        Ok(resp["body"].as_str().unwrap_or("").to_string())
+    }
+
+    pub fn fetch_pr_metadata(&self, owner: &str, repo: &str, pr_number: u64) -> Result<(String, String)> {
+        let pr_json = self.get(&format!("/repos/{}/{}/pulls/{}", owner, repo, pr_number))?;
+        let title = pr_json["title"].as_str().unwrap_or("").to_string();
+        let branch = pr_json["head"]["ref"].as_str().unwrap_or("").to_string();
+        Ok((title, branch))
+    }
+
     pub fn fetch_pr(&self, owner: &str, repo: &str, pr_number: u64) -> Result<PrState> {
         // 1. PR metadata
         let pr_json = self.get(&format!("/repos/{}/{}/pulls/{}", owner, repo, pr_number))?;
@@ -68,7 +91,8 @@ impl GithubClient {
                     _ => CheckStatus::Pending,
                 };
                 let required = required_names.contains(&name);
-                Check { name, status, required }
+                let details_url = c["details_url"].as_str().map(String::from);
+                Check { name, status, required, details_url }
             })
             .collect();
 
@@ -110,6 +134,7 @@ pub fn detect_repo() -> Option<(String, String)> {
     parse_github_remote(url.trim())
 }
 
+#[cfg(test)]
 pub fn parse_github_remote_pub(url: &str) -> Option<(String, String)> {
     parse_github_remote(url)
 }

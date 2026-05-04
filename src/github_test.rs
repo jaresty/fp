@@ -231,4 +231,88 @@ mod tests {
         let result = parse_github_remote_pub("git@github.com:owner/repo.git");
         assert_eq!(result, Some(("owner".into(), "repo".into())));
     }
+
+    // D5: check details_url populated from check-runs API
+    #[test]
+    fn check_details_url_populated() {
+        let mut server = mockito::Server::new();
+        server.mock("GET", "/repos/owner/repo/pulls/10")
+            .with_status(200).with_header("content-type","application/json")
+            .with_body(r#"{"number":10,"title":"t","draft":false,"head":{"ref":"b"}}"#).create();
+        server.mock("GET", "/repos/owner/repo/commits/b/check-runs")
+            .with_status(200).with_header("content-type","application/json")
+            .with_body(r#"{"check_runs":[{
+                "name":"ci/test",
+                "conclusion":"failure",
+                "status":"completed",
+                "details_url":"https://buildkite.com/org/pipeline/builds/123"
+            }]}"#).create();
+        server.mock("GET", "/repos/owner/repo/branches/b/protection")
+            .with_status(404).create();
+        server.mock("GET", "/repos/owner/repo/pulls/10/reviews")
+            .with_status(200).with_header("content-type","application/json")
+            .with_body(r#"[]"#).create();
+        server.mock("GET", "/repos/owner/repo/pulls/10/comments")
+            .with_status(200).with_header("content-type","application/json")
+            .with_body(r#"[]"#).create();
+
+        let pr = mock_client(&server).fetch_pr("owner", "repo", 10).unwrap();
+        let check = pr.checks.iter().find(|c| c.name == "ci/test").unwrap();
+        assert_eq!(check.details_url.as_deref(), Some("https://buildkite.com/org/pipeline/builds/123"));
+    }
+
+    // T1: reply_to_comment posts to correct endpoint and returns posted body
+    #[test]
+    fn reply_to_comment_posts_and_returns_body() {
+        let mut server = mockito::Server::new();
+        server.mock("POST", "/repos/owner/repo/pulls/comments/999/replies")
+            .with_status(201)
+            .with_header("content-type", "application/json")
+            .with_body(r#"{"id": 1000, "body": "Thanks, fixed!"}"#)
+            .create();
+
+        let client = mock_client(&server);
+        let body = client.reply_to_comment("owner", "repo", 999, "Thanks, fixed!").unwrap();
+        assert_eq!(body, "Thanks, fixed!");
+    }
+
+    // T1: reply_to_comment errors on API failure
+    #[test]
+    fn reply_to_comment_errors_on_failure() {
+        let mut server = mockito::Server::new();
+        server.mock("POST", "/repos/owner/repo/pulls/comments/999/replies")
+            .with_status(422)
+            .create();
+
+        let client = mock_client(&server);
+        assert!(client.reply_to_comment("owner", "repo", 999, "text").is_err());
+    }
+
+    // D1: fetch_pr_metadata returns (title, branch) from GitHub API
+    #[test]
+    fn fetch_pr_metadata_returns_title_and_branch() {
+        let mut server = mockito::Server::new();
+        server.mock("GET", "/repos/owner/repo/pulls/42")
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body(r#"{"number":42,"title":"my feature","draft":false,"head":{"ref":"feat/thing"}}"#)
+            .create();
+
+        let client = mock_client(&server);
+        let (title, branch) = client.fetch_pr_metadata("owner", "repo", 42).unwrap();
+        assert_eq!(title, "my feature");
+        assert_eq!(branch, "feat/thing");
+    }
+
+    // D2: fetch_pr_metadata returns error when API call fails
+    #[test]
+    fn fetch_pr_metadata_errors_on_404() {
+        let mut server = mockito::Server::new();
+        server.mock("GET", "/repos/owner/repo/pulls/999")
+            .with_status(404)
+            .create();
+
+        let client = mock_client(&server);
+        assert!(client.fetch_pr_metadata("owner", "repo", 999).is_err());
+    }
 }

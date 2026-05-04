@@ -1,0 +1,78 @@
+name: Autobump
+
+on:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: write
+
+jobs:
+  bump:
+    name: Bump version tag
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # full history needed to find last tag
+          token: ${{ secrets.RELEASE_TOKEN }}
+
+      - name: Determine version bump
+        id: bump
+        shell: bash
+        run: |
+          # Find the most recent semver tag, default to v0.0.0
+          LAST_TAG=$(git tag --list 'v*.*.*' --sort=-version:refname | head -n1)
+          LAST_TAG="${LAST_TAG:-v0.0.0}"
+          echo "Last tag: $LAST_TAG"
+
+          # Get commits since last tag
+          COMMITS=$(git log "${LAST_TAG}..HEAD" --pretty=format:"%s" 2>/dev/null || git log --pretty=format:"%s")
+
+          # Determine bump type from conventional commits
+          BUMP="patch"
+          while IFS= read -r msg; do
+            if echo "$msg" | grep -qE '^(feat|fix|refactor|chore|docs|test|perf|build|ci)(\(.+\))?!:' || \
+               echo "$msg" | grep -qi 'BREAKING CHANGE'; then
+              BUMP="major"
+              break
+            elif echo "$msg" | grep -qE '^feat(\(.+\))?:'; then
+              if [ "$BUMP" != "major" ]; then
+                BUMP="minor"
+              fi
+            fi
+          done <<< "$COMMITS"
+
+          echo "Bump type: $BUMP"
+
+          # Parse current version
+          VERSION="${LAST_TAG#v}"
+          MAJOR=$(echo "$VERSION" | cut -d. -f1)
+          MINOR=$(echo "$VERSION" | cut -d. -f2)
+          PATCH=$(echo "$VERSION" | cut -d. -f3)
+
+          # Apply bump
+          case "$BUMP" in
+            major) MAJOR=$((MAJOR + 1)); MINOR=0; PATCH=0 ;;
+            minor) MINOR=$((MINOR + 1)); PATCH=0 ;;
+            patch) PATCH=$((PATCH + 1)) ;;
+          esac
+
+          NEW_TAG="v${MAJOR}.${MINOR}.${PATCH}"
+          echo "New tag: $NEW_TAG"
+          echo "new_tag=$NEW_TAG" >> "$GITHUB_OUTPUT"
+          echo "bump=$BUMP" >> "$GITHUB_OUTPUT"
+
+      - name: Create and push tag
+        env:
+          NEW_TAG: ${{ steps.bump.outputs.new_tag }}
+          # Use RELEASE_TOKEN so the pushed tag triggers the release workflow.
+          # GITHUB_TOKEN pushes are intentionally blocked from triggering further workflows.
+          GH_TOKEN: ${{ secrets.RELEASE_TOKEN }}
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git tag "$NEW_TAG" -m "Release $NEW_TAG"
+          git push origin "$NEW_TAG"
+          echo "Tagged $NEW_TAG"

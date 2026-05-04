@@ -4,6 +4,7 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
+use crate::model::ThreadState;
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct TrackedPr {
@@ -15,6 +16,8 @@ pub struct TrackedPr {
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct State {
     pub prs: HashMap<u64, TrackedPr>,
+    #[serde(default)]
+    pub thread_states: HashMap<String, ThreadState>,
 }
 
 pub struct Store {
@@ -52,5 +55,11 @@ impl Store {
         let mut state = self.load()?;
         state.prs.remove(&number);
         self.save(&state)
+    }
+
+    pub fn set_thread_state(&self, pr: u64, thread_id: u64, state: ThreadState) -> Result<()> {
+        let mut s = self.load()?;
+        s.thread_states.insert(format!("{}:{}", pr, thread_id), state);
+        self.save(&s)
     }
 }
