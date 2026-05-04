@@ -144,7 +144,7 @@ mod tests {
         let mut server = mockito::Server::new();
         server.mock("GET", "/repos/owner/repo/pulls/7")
             .with_status(200).with_header("content-type","application/json")
-            .with_body(r#"{"number":7,"title":"t","draft":false,"head":{"ref":"b"}}"#).create();
+            .with_body(r#"{"number":7,"title":"t","draft":false,"head":{"ref":"b"},"user":{"login":"author"}}"#).create();
         server.mock("GET", "/repos/owner/repo/commits/b/check-runs")
             .with_status(200).with_header("content-type","application/json")
             .with_body(r#"{"check_runs":[]}"#).create();
@@ -160,6 +160,7 @@ mod tests {
                 "body": "needs fix",
                 "path": "src/lib.rs",
                 "line": 42,
+                "user": {"login": "reviewer"},
                 "pull_request_review_id": 1
             }]"#).create();
 
@@ -171,6 +172,67 @@ mod tests {
         assert_eq!(t.file.as_deref(), Some("src/lib.rs"));
         assert_eq!(t.line, Some(42));
         assert_eq!(t.state, ThreadState::Open);
+    }
+
+    // D3b: reply comment (in_reply_to_id set) is not a separate thread
+    #[test]
+    fn reply_comment_not_surfaced_as_separate_thread() {
+        let mut server = mockito::Server::new();
+        server.mock("GET", "/repos/owner/repo/pulls/11")
+            .with_status(200).with_header("content-type","application/json")
+            .with_body(r#"{"number":11,"title":"t","draft":false,"head":{"ref":"b"},"user":{"login":"author"}}"#).create();
+        server.mock("GET", "/repos/owner/repo/commits/b/check-runs")
+            .with_status(200).with_header("content-type","application/json")
+            .with_body(r#"{"check_runs":[]}"#).create();
+        server.mock("GET", "/repos/owner/repo/branches/b/protection")
+            .with_status(404).create();
+        server.mock("GET", "/repos/owner/repo/pulls/11/reviews")
+            .with_status(200).with_header("content-type","application/json")
+            .with_body(r#"[]"#).create();
+        server.mock("GET", "/repos/owner/repo/pulls/11/comments")
+            .with_status(200).with_header("content-type","application/json")
+            .with_body(r#"[
+                {"id": 100, "body": "needs fix", "path": "src/lib.rs", "line": 10,
+                 "user": {"login": "reviewer"}, "pull_request_review_id": 1},
+                {"id": 101, "body": "fixed it", "path": "src/lib.rs", "line": 10,
+                 "in_reply_to_id": 100,
+                 "user": {"login": "author"}, "pull_request_review_id": 1}
+            ]"#).create();
+
+        let pr = mock_client(&server).fetch_pr("owner", "repo", 11).unwrap();
+        assert_eq!(pr.threads.len(), 1, "reply comment should not be a separate thread");
+        assert_eq!(pr.threads[0].id, 100, "thread ID should be root comment ID");
+    }
+
+    // D3c: thread state = Addressed when PR author's comment is last
+    #[test]
+    fn thread_addressed_when_author_replied_last() {
+        let mut server = mockito::Server::new();
+        server.mock("GET", "/repos/owner/repo/pulls/12")
+            .with_status(200).with_header("content-type","application/json")
+            .with_body(r#"{"number":12,"title":"t","draft":false,"head":{"ref":"b"},"user":{"login":"author"}}"#).create();
+        server.mock("GET", "/repos/owner/repo/commits/b/check-runs")
+            .with_status(200).with_header("content-type","application/json")
+            .with_body(r#"{"check_runs":[]}"#).create();
+        server.mock("GET", "/repos/owner/repo/branches/b/protection")
+            .with_status(404).create();
+        server.mock("GET", "/repos/owner/repo/pulls/12/reviews")
+            .with_status(200).with_header("content-type","application/json")
+            .with_body(r#"[]"#).create();
+        server.mock("GET", "/repos/owner/repo/pulls/12/comments")
+            .with_status(200).with_header("content-type","application/json")
+            .with_body(r#"[
+                {"id": 200, "body": "needs fix", "path": "src/lib.rs", "line": 5,
+                 "user": {"login": "reviewer"}, "pull_request_review_id": 2},
+                {"id": 201, "body": "fixed", "path": "src/lib.rs", "line": 5,
+                 "in_reply_to_id": 200,
+                 "user": {"login": "author"}, "pull_request_review_id": 2}
+            ]"#).create();
+
+        let pr = mock_client(&server).fetch_pr("owner", "repo", 12).unwrap();
+        assert_eq!(pr.threads.len(), 1);
+        assert_eq!(pr.threads[0].state, ThreadState::Addressed,
+            "thread should be Addressed when PR author replied last");
     }
 
     // D4: approved true when APPROVED review present

@@ -128,20 +128,45 @@ impl GithubClient {
             .iter()
             .any(|r| r["state"].as_str() == Some("APPROVED"));
 
-        // 5. Review comments → threads (all open by default; state machine managed by fp)
+        // 5. Review comments → threads grouped by root (in_reply_to_id == null)
+        let pr_author = pr_json["user"]["login"].as_str().unwrap_or("").to_string();
         let comments_json = self.get(&format!("/repos/{}/{}/pulls/{}/comments", owner, repo, pr_number))?;
-        let threads: Vec<Thread> = comments_json
-            .as_array()
-            .unwrap_or(&vec![])
-            .iter()
-            .map(|c| Thread {
-                id: c["id"].as_u64().unwrap_or(0),
-                state: ThreadState::Open,
-                body: c["body"].as_str().unwrap_or("").to_string(),
-                file: c["path"].as_str().map(String::from),
-                line: c["line"].as_u64().map(|l| l as u32),
-            })
-            .collect();
+        let all_comments = comments_json.as_array().cloned().unwrap_or_default();
+
+        // Build ordered list: (root_id, comments_in_thread) preserving API order
+        let mut threads_map: Vec<(u64, Vec<&serde_json::Value>)> = Vec::new();
+        // First pass: register root comments in order
+        for c in &all_comments {
+            if c.get("in_reply_to_id").and_then(|v| v.as_u64()).is_none() {
+                let id = c["id"].as_u64().unwrap_or(0);
+                threads_map.push((id, vec![c]));
+            }
+        }
+        // Second pass: attach replies to their root
+        for c in &all_comments {
+            if let Some(root_id) = c.get("in_reply_to_id").and_then(|v| v.as_u64()) {
+                if let Some(entry) = threads_map.iter_mut().find(|(k, _)| *k == root_id) {
+                    entry.1.push(c);
+                }
+            }
+        }
+        let threads: Vec<Thread> = threads_map.into_iter().map(|(_, comments)| {
+            let root = comments[0];
+            let last = comments.last().unwrap();
+            let last_author = last["user"]["login"].as_str().unwrap_or("");
+            let state = if last_author == pr_author {
+                ThreadState::Addressed
+            } else {
+                ThreadState::Open
+            };
+            Thread {
+                id: root["id"].as_u64().unwrap_or(0),
+                state,
+                body: root["body"].as_str().unwrap_or("").to_string(),
+                file: root["path"].as_str().map(String::from),
+                line: root["line"].as_u64().map(|l| l as u32),
+            }
+        }).collect();
 
         Ok(PrState { number: pr_number, title, branch, draft, approved, checks, threads })
     }
