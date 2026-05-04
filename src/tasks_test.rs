@@ -138,4 +138,54 @@ mod tests {
             "optional failing check should not produce fix_ci, got: {:?}", tasks
         );
     }
+
+    // DW3: task_diff returns new tasks not in previous set
+    #[test]
+    fn task_diff_returns_new_tasks() {
+        use crate::tasks::{task_diff, Task};
+        let prev: Vec<Task> = vec![];
+        let curr = vec![Task {
+            pr: 1,
+            task_type: TaskType::AwaitingReview,
+            blocking: false,
+            description: "Waiting for approval".into(),
+            context_hint: "approval".into(),
+        }];
+        let (new, resolved) = task_diff(&prev, &curr);
+        assert_eq!(new.len(), 1);
+        assert!(resolved.is_empty());
+    }
+
+    // DW3: task_diff returns resolved tasks absent from current set
+    #[test]
+    fn task_diff_returns_resolved_tasks() {
+        use crate::tasks::{task_diff, Task};
+        let prev = vec![Task {
+            pr: 1,
+            task_type: TaskType::AwaitingReview,
+            blocking: false,
+            description: "Waiting for approval".into(),
+            context_hint: "approval".into(),
+        }];
+        let curr: Vec<Task> = vec![];
+        let (new, resolved) = task_diff(&prev, &curr);
+        assert!(new.is_empty());
+        assert_eq!(resolved.len(), 1);
+    }
+
+    // DW3: task_diff returns empty when tasks unchanged
+    #[test]
+    fn task_diff_returns_empty_when_unchanged() {
+        use crate::tasks::{task_diff, Task};
+        let tasks = vec![Task {
+            pr: 1,
+            task_type: TaskType::FixCi,
+            blocking: true,
+            description: "Fix failing check: ci/test".into(),
+            context_hint: "ci/test".into(),
+        }];
+        let (new, resolved) = task_diff(&tasks, &tasks);
+        assert!(new.is_empty());
+        assert!(resolved.is_empty());
+    }
 }

@@ -16,7 +16,7 @@ use std::path::PathBuf;
 
 use github::{GithubClient, detect_repo};
 use store::{State, Store, TrackedPr};
-use tasks::generate_tasks;
+use tasks::{generate_tasks, task_diff};
 
 fn apply_thread_states(mut pr_state: model::PrState, store_state: &State) -> model::PrState {
     for thread in &mut pr_state.threads {
@@ -62,6 +62,15 @@ enum Commands {
     },
     /// Remove a PR from the tracked set
     Untrack { pr: u64 },
+    /// Poll all tracked PRs and print task changes
+    Watch {
+        /// Fetch once and exit
+        #[arg(long)]
+        once: bool,
+        /// Poll interval in seconds (default: 30)
+        #[arg(long, default_value = "30")]
+        interval: u64,
+    },
     /// Show full context for a task (check logs URL, thread body, etc.)
     Context {
         /// PR number
@@ -207,6 +216,61 @@ fn main() -> Result<()> {
         Commands::Untrack { pr } => {
             store.untrack(pr)?;
             println!("Untracked PR #{}", pr);
+        }
+
+        Commands::Watch { once, interval } => {
+            let mut prev_tasks: std::collections::HashMap<u64, Vec<tasks::Task>> = std::collections::HashMap::new();
+            loop {
+                let state = store.load()?;
+                let token = std::env::var("GITHUB_TOKEN").ok();
+                let repo = detect_repo();
+                let mut prs: Vec<_> = state.prs.values().collect();
+                prs.sort_by_key(|p| p.number);
+
+                for tracked in &prs {
+                    let pr_state = if let (Some(tok), Some((owner, repo_name))) = (&token, &repo) {
+                        let client = GithubClient::new(tok.clone());
+                        client.fetch_pr(owner, repo_name, tracked.number).ok()
+                    } else {
+                        None
+                    }.unwrap_or_else(|| model::PrState {
+                        number: tracked.number,
+                        title: tracked.title.clone(),
+                        branch: tracked.branch.clone(),
+                        draft: false, approved: false,
+                        checks: vec![], threads: vec![],
+                    });
+                    let pr_state = apply_thread_states(pr_state, &state);
+                    let curr = generate_tasks(&pr_state);
+
+                    let prev = prev_tasks.get(&tracked.number).map(|v| v.as_slice()).unwrap_or(&[]);
+                    let (new, resolved) = task_diff(prev, &curr);
+
+                    if prev_tasks.contains_key(&tracked.number) {
+                        for t in &new {
+                            let flag = if t.blocking { "[blocking]" } else { "[waiting]" };
+                            println!("+ PR #{} {} {:?}: {}", tracked.number, flag, t.task_type, t.description);
+                        }
+                        for t in &resolved {
+                            println!("✓ PR #{} resolved {:?}: {}", tracked.number, t.task_type, t.description);
+                        }
+                    } else {
+                        if curr.is_empty() {
+                            println!("PR #{} {} — ready", tracked.number, tracked.title);
+                        } else {
+                            println!("PR #{} {} — {} task(s)", tracked.number, tracked.title, curr.len());
+                            for t in &curr {
+                                let flag = if t.blocking { "[blocking]" } else { "[waiting]" };
+                                println!("  {} {:?}: {}", flag, t.task_type, t.description);
+                            }
+                        }
+                    }
+                    prev_tasks.insert(tracked.number, curr);
+                }
+
+                if once { break; }
+                std::thread::sleep(std::time::Duration::from_secs(interval));
+            }
         }
 
         Commands::Context { pr, hint } => {
