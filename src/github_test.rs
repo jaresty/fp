@@ -397,6 +397,51 @@ mod tests {
         assert_eq!(branch, "feat/thing");
     }
 
+    // CS1: commit statuses (Buildkite-style) are included in checks alongside check-runs
+    #[test]
+    fn commit_statuses_merged_into_checks() {
+        let mut server = mockito::Server::new();
+        server.mock("GET", "/repos/owner/repo/pulls/20")
+            .with_status(200).with_header("content-type","application/json")
+            .with_body(r#"{"number":20,"title":"t","draft":false,"head":{"ref":"b","sha":"abc123"},"user":{"login":"author"}}"#)
+            .create();
+        server.mock("GET", "/repos/owner/repo/commits/b/check-runs")
+            .with_status(200).with_header("content-type","application/json")
+            .with_body(r#"{"check_runs":[{"name":"lint","conclusion":"success","status":"completed"}]}"#)
+            .create();
+        server.mock("GET", "/repos/owner/repo/branches/b/protection")
+            .with_status(200).with_header("content-type","application/json")
+            .with_body(r#"{"required_status_checks":{"contexts":["buildkite/ci"]}}"#)
+            .create();
+        server.mock("GET", "/repos/owner/repo/commits/abc123/statuses")
+            .with_status(200).with_header("content-type","application/json")
+            .with_body(r#"[
+                {"context":"buildkite/ci","state":"failure","target_url":"https://buildkite.com/build/1"},
+                {"context":"buildkite/lint","state":"success","target_url":null}
+            ]"#)
+            .create();
+        server.mock("GET", "/repos/owner/repo/pulls/20/reviews")
+            .with_status(200).with_header("content-type","application/json")
+            .with_body(r#"[]"#).create();
+        server.mock("GET", "/repos/owner/repo/pulls/20/comments")
+            .with_status(200).with_header("content-type","application/json")
+            .with_body(r#"[]"#).create();
+
+        let pr = mock_client(&server).fetch_pr("owner", "repo", 20).unwrap();
+        // check-run still present
+        assert!(pr.checks.iter().any(|c| c.name == "lint"), "check-run check missing");
+        // commit status present
+        let bk = pr.checks.iter().find(|c| c.name == "buildkite/ci")
+            .expect("buildkite/ci status missing from checks");
+        assert_eq!(bk.status, CheckStatus::Fail, "failure state should map to Fail");
+        assert!(bk.required, "buildkite/ci should be required per branch protection");
+        assert_eq!(bk.details_url.as_deref(), Some("https://buildkite.com/build/1"));
+        let bk_lint = pr.checks.iter().find(|c| c.name == "buildkite/lint")
+            .expect("buildkite/lint status missing");
+        assert_eq!(bk_lint.status, CheckStatus::Pass);
+        assert!(!bk_lint.required);
+    }
+
     // D2: fetch_pr_metadata returns error when API call fails
     #[test]
     fn fetch_pr_metadata_errors_on_404() {

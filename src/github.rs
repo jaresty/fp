@@ -102,7 +102,13 @@ impl GithubClient {
             })
             .unwrap_or_default();
 
-        let checks: Vec<Check> = checks_json["check_runs"]
+        // 3b. Commit statuses (e.g. Buildkite) — uses SHA, not branch name
+        let sha = pr_json["head"]["sha"].as_str().unwrap_or("").to_string();
+        let statuses_json = self.get(&format!(
+            "/repos/{}/{}/commits/{}/statuses", owner, repo, sha
+        )).unwrap_or_default();
+
+        let mut checks: Vec<Check> = checks_json["check_runs"]
             .as_array()
             .unwrap_or(&vec![])
             .iter()
@@ -119,6 +125,24 @@ impl GithubClient {
                 Check { name, status, required, details_url }
             })
             .collect();
+
+        // Append commit statuses (deduplicate by context — statuses API returns most-recent first)
+        let mut seen_contexts: HashSet<String> = checks.iter().map(|c| c.name.clone()).collect();
+        if let Some(statuses) = statuses_json.as_array() {
+            for s in statuses {
+                let name = s["context"].as_str().unwrap_or("").to_string();
+                if name.is_empty() || seen_contexts.contains(&name) { continue; }
+                seen_contexts.insert(name.clone());
+                let status = match s["state"].as_str() {
+                    Some("success") => CheckStatus::Pass,
+                    Some("failure") | Some("error") => CheckStatus::Fail,
+                    _ => CheckStatus::Pending,
+                };
+                let required = required_names.contains(&name);
+                let details_url = s["target_url"].as_str().filter(|u| !u.is_empty()).map(String::from);
+                checks.push(Check { name, status, required, details_url });
+            }
+        }
 
         // 4. Reviews → approval
         let reviews_json = self.get(&format!("/repos/{}/{}/pulls/{}/reviews", owner, repo, pr_number))?;
