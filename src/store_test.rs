@@ -1,6 +1,5 @@
 #[cfg(test)]
 mod tests {
-    use crate::model::ThreadState;
     use crate::store::{Store, TrackedPr};
     use tempfile::tempdir;
 
@@ -48,52 +47,4 @@ mod tests {
         assert_eq!(state.prs.len(), 2);
     }
 
-    // D3: thread state persists across store load/save cycles
-    #[test]
-    fn thread_state_persists_across_invocations() {
-        let (store, _dir) = make_store();
-        store.set_thread_state(42, 999, ThreadState::Addressed).unwrap();
-        let state = store.load().unwrap();
-        assert_eq!(state.thread_states.get("42:999"), Some(&ThreadState::Addressed));
-    }
-
-    // D4: thread state survives process restart (fresh Store::open on same path)
-    #[test]
-    fn thread_state_survives_restart() {
-        let dir = tempdir().unwrap();
-        {
-            let store = Store::open(dir.path());
-            store.set_thread_state(1, 100, ThreadState::Resolved).unwrap();
-        }
-        let store2 = Store::open(dir.path());
-        let state = store2.load().unwrap();
-        assert_eq!(state.thread_states.get("1:100"), Some(&ThreadState::Resolved));
-    }
-
-    // D3: default thread state for unknown thread is Open
-    #[test]
-    fn unknown_thread_defaults_to_open() {
-        let (store, _dir) = make_store();
-        let state = store.load().unwrap();
-        let ts = state.thread_states.get("42:999").copied().unwrap_or(ThreadState::Open);
-        assert_eq!(ts, ThreadState::Open);
-    }
-
-    // T3: reply transitions thread to Addressed
-    #[test]
-    fn reply_sets_thread_state_to_addressed() {
-        let (store, _dir) = make_store();
-        store.set_thread_state(1, 42, ThreadState::Addressed).unwrap();
-        let state = store.load().unwrap();
-        assert_eq!(state.thread_states.get("1:42"), Some(&ThreadState::Addressed));
-    }
-
-    // T4: resolve transitions thread to Resolved
-    #[test]
-    fn resolve_sets_thread_state_to_resolved() {
-        let (store, _dir) = make_store();
-        store.set_thread_state(1, 42, ThreadState::Resolved).unwrap();
-        let state = store.load().unwrap();
-        assert_eq!(state.thread_states.get("1:42"), Some(&ThreadState::Resolved));
-    }
 }

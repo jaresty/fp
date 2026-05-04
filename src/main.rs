@@ -26,20 +26,6 @@ use tasks::{generate_tasks, task_diff};
 
 const FP_SKILL: &str = include_str!("../assets/fp-skill.md");
 
-fn apply_thread_states(mut pr_state: model::PrState, store_state: &State) -> model::PrState {
-    for thread in &mut pr_state.threads {
-        let key = format!("{}:{}", pr_state.number, thread.id);
-        if let Some(&stored) = store_state.thread_states.get(&key) {
-            // Only Resolved is a permanent user decision that overrides API state.
-            // Open/Addressed are derived from the API (last commenter) and must not
-            // be overridden by stale store entries.
-            if stored == model::ThreadState::Resolved {
-                thread.state = stored;
-            }
-        }
-    }
-    pr_state
-}
 
 #[derive(Parser)]
 #[command(name = "fp", about = "PR convergence loop")]
@@ -92,13 +78,6 @@ enum Commands {
         thread_id: u64,
         /// Reply message body
         message: String,
-    },
-    /// Mark a PR review thread as resolved (local state only)
-    Resolve {
-        /// PR number
-        pr: u64,
-        /// Thread (comment) ID
-        thread_id: u64,
     },
     /// Show full context for a task (check logs URL, thread body, etc.)
     Context {
@@ -179,14 +158,14 @@ fn main() -> Result<()> {
                 let mut prs: Vec<_> = state.prs.values().collect();
                 prs.sort_by_key(|p| p.number);
                 for tracked in prs {
-                    let pr_state = apply_thread_states(fetch(tracked.number, &tracked.branch)
+                    let pr_state = fetch(tracked.number, &tracked.branch)
                         .unwrap_or_else(|| crate::model::PrState {
                             number: tracked.number,
                             title: tracked.title.clone(),
                             branch: tracked.branch.clone(),
                             draft: false, approved: false,
                             checks: vec![], threads: vec![],
-                        }), &state);
+                        });
                     let tasks = generate_tasks(&pr_state);
                     if json {
                         println!("{}", serde_json::to_string_pretty(&tasks).unwrap());
@@ -202,14 +181,14 @@ fn main() -> Result<()> {
                 let tracked = state.prs.get(&number)
                     .with_context(|| format!("PR #{} is not tracked. Run `fp track {}`", number, number))?;
 
-                let pr_state = apply_thread_states(fetch(tracked.number, &tracked.branch)
+                let pr_state = fetch(tracked.number, &tracked.branch)
                     .unwrap_or_else(|| crate::model::PrState {
                         number: tracked.number,
                         title: tracked.title.clone(),
                         branch: tracked.branch.clone(),
                         draft: false, approved: false,
                         checks: vec![], threads: vec![],
-                    }), &state);
+                    });
                 let task_list = generate_tasks(&pr_state);
 
                 if json {
@@ -273,11 +252,6 @@ fn main() -> Result<()> {
             println!("Replied to thread #{}: {}", thread_id, posted);
         }
 
-        Commands::Resolve { pr, thread_id } => {
-            store.set_thread_state(pr, thread_id, model::ThreadState::Resolved)?;
-            println!("Thread #{} marked as resolved (local state)", thread_id);
-        }
-
         Commands::Watch { once, interval } => {
             let mut prev_tasks: std::collections::HashMap<u64, Vec<tasks::Task>> = std::collections::HashMap::new();
             loop {
@@ -300,7 +274,6 @@ fn main() -> Result<()> {
                         draft: false, approved: false,
                         checks: vec![], threads: vec![],
                     });
-                    let pr_state = apply_thread_states(pr_state, &state);
                     let curr = generate_tasks(&pr_state);
 
                     let prev = prev_tasks.get(&tracked.number).map(|v| v.as_slice()).unwrap_or(&[]);
@@ -455,54 +428,4 @@ fn main() -> Result<()> {
     Ok(())
 }
 
-#[cfg(test)]
-mod thread_state_tests {
-    use super::apply_thread_states;
-    use crate::model::{PrState, Thread, ThreadState};
-    use crate::store::State;
-    use std::collections::HashMap;
-
-    fn make_pr(thread_id: u64, api_state: ThreadState) -> PrState {
-        PrState {
-            number: 1,
-            title: "t".into(),
-            branch: "b".into(),
-            draft: false,
-            approved: true,
-            checks: vec![],
-            threads: vec![Thread {
-                id: thread_id,
-                state: api_state,
-                body: "needs fix".into(),
-                file: None,
-                line: None,
-            }],
-        }
-    }
-
-    fn store_with(pr: u64, thread: u64, state: ThreadState) -> State {
-        let mut s = State::default();
-        s.thread_states.insert(format!("{}:{}", pr, thread), state);
-        s
-    }
-
-    // Store Resolved overrides API Open
-    #[test]
-    fn resolved_in_store_overrides_api_open() {
-        let pr = make_pr(42, ThreadState::Open);
-        let store = store_with(1, 42, ThreadState::Resolved);
-        let result = apply_thread_states(pr, &store);
-        assert_eq!(result.threads[0].state, ThreadState::Resolved);
-    }
-
-    // Store Addressed does NOT override API Open (reviewer re-replied)
-    #[test]
-    fn addressed_in_store_does_not_override_api_open() {
-        let pr = make_pr(42, ThreadState::Open);
-        let store = store_with(1, 42, ThreadState::Addressed);
-        let result = apply_thread_states(pr, &store);
-        assert_eq!(result.threads[0].state, ThreadState::Open,
-            "stale Addressed in store should not hide reviewer re-reply");
-    }
-}
 
