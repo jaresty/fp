@@ -134,6 +134,7 @@ pub fn detect_repo() -> Option<(String, String)> {
     parse_github_remote(url.trim())
 }
 
+#[cfg(test)]
 pub fn parse_github_remote_pub(url: &str) -> Option<(String, String)> {
     parse_github_remote(url)
 }

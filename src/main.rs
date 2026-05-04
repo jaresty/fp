@@ -140,7 +140,7 @@ fn main() -> Result<()> {
             let token = std::env::var("GITHUB_TOKEN").ok();
             let repo = detect_repo();
 
-            let fetch = |number: u64, branch: &str| -> Option<crate::model::PrState> {
+            let fetch = |number: u64, _branch: &str| -> Option<crate::model::PrState> {
                 if let (Some(tok), Some((owner, repo_name))) = (&token, &repo) {
                     let client = GithubClient::new(tok.clone());
                     client.fetch_pr(owner, repo_name, number).ok()

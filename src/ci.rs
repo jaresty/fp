@@ -18,28 +18,26 @@ pub fn parse_ci_provider(url: &str) -> CiProvider {
         }
         // Try: owner repo actions runs {run_id} jobs/{job_id}  — need different split
         let parts: Vec<&str> = rest.split('/').collect();
-        if parts.len() >= 7 && parts[2] == "actions" && parts[3] == "runs" && parts[5] == "jobs" {
-            if let Ok(job_id) = parts[6].parse::<u64>() {
-                return CiProvider::GitHubActions {
-                    owner: parts[0].to_string(),
-                    repo: parts[1].to_string(),
-                    job_id,
-                };
-            }
+        if parts.len() >= 7 && parts[2] == "actions" && parts[3] == "runs" && parts[5] == "jobs"
+            && let Ok(job_id) = parts[6].parse::<u64>() {
+            return CiProvider::GitHubActions {
+                owner: parts[0].to_string(),
+                repo: parts[1].to_string(),
+                job_id,
+            };
         }
     }
 
     if let Some(rest) = url_no_fragment.strip_prefix("https://buildkite.com/") {
         let parts: Vec<&str> = rest.split('/').collect();
         // org/pipeline/builds/{build_num}
-        if parts.len() >= 4 && parts[2] == "builds" {
-            if let Ok(build_num) = parts[3].parse::<u64>() {
-                return CiProvider::Buildkite {
-                    org: parts[0].to_string(),
-                    pipeline: parts[1].to_string(),
-                    build_num,
-                };
-            }
+        if parts.len() >= 4 && parts[2] == "builds"
+            && let Ok(build_num) = parts[3].parse::<u64>() {
+            return CiProvider::Buildkite {
+                org: parts[0].to_string(),
+                pipeline: parts[1].to_string(),
+                build_num,
+            };
         }
     }
 
@@ -86,16 +84,15 @@ impl CiLogClient {
             .send()?;
 
         // GitHub returns 302 redirect to actual log content
-        if resp.status().is_redirection() {
-            if let Some(location) = resp.headers().get("Location") {
-                let log_url = location.to_str()?;
-                let log_resp = reqwest::blocking::Client::new()
-                    .get(log_url)
-                    .send()?
-                    .error_for_status()?;
-                let text = log_resp.text()?;
-                return Ok(tail_lines(&text, 100));
-            }
+        if resp.status().is_redirection()
+            && let Some(location) = resp.headers().get("Location") {
+            let log_url = location.to_str()?;
+            let log_resp = reqwest::blocking::Client::new()
+                .get(log_url)
+                .send()?
+                .error_for_status()?;
+            let text = log_resp.text()?;
+            return Ok(tail_lines(&text, 100));
         }
 
         let text = resp.error_for_status()?.text()?;
@@ -129,11 +126,9 @@ impl CiLogClient {
                                 .get(log_url)
                                 .header("Authorization", format!("Bearer {}", tok))
                                 .send()
-                            {
-                                if let Ok(text) = log_resp.text() {
-                                    output.push_str(&tail_lines(&text, 50));
-                                    output.push('\n');
-                                }
+                                && let Ok(text) = log_resp.text() {
+                                output.push_str(&tail_lines(&text, 50));
+                                output.push('\n');
                             }
                         }
                     }
