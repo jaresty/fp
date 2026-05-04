@@ -31,6 +31,13 @@ impl GithubClient {
         Ok(resp)
     }
 
+    pub fn fetch_pr_metadata(&self, owner: &str, repo: &str, pr_number: u64) -> Result<(String, String)> {
+        let pr_json = self.get(&format!("/repos/{}/{}/pulls/{}", owner, repo, pr_number))?;
+        let title = pr_json["title"].as_str().unwrap_or("").to_string();
+        let branch = pr_json["head"]["ref"].as_str().unwrap_or("").to_string();
+        Ok((title, branch))
+    }
+
     pub fn fetch_pr(&self, owner: &str, repo: &str, pr_number: u64) -> Result<PrState> {
         // 1. PR metadata
         let pr_json = self.get(&format!("/repos/{}/{}/pulls/{}", owner, repo, pr_number))?;
@@ -68,7 +75,8 @@ impl GithubClient {
                     _ => CheckStatus::Pending,
                 };
                 let required = required_names.contains(&name);
-                Check { name, status, required }
+                let details_url = c["details_url"].as_str().map(String::from);
+                Check { name, status, required, details_url }
             })
             .collect();
 

@@ -13,9 +13,11 @@ pub struct Check {
     pub name: String,
     pub status: CheckStatus,
     pub required: bool,
+    #[serde(default)]
+    pub details_url: Option<String>,
 }
 
-#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ThreadState {
     Open,

@@ -10,7 +10,7 @@ mod tests {
             branch: "fix/foo".into(),
             draft: false,
             approved: true,
-            checks: vec![Check { name: "ci/test".into(), status: CheckStatus::Pass, required: true }],
+            checks: vec![Check { name: "ci/test".into(), status: CheckStatus::Pass, required: true, details_url: None }],
             threads: vec![],
         }
     }
@@ -131,7 +131,7 @@ mod tests {
     #[test]
     fn optional_failing_check_produces_no_task() {
         let mut pr = pr_clean();
-        pr.checks.push(Check { name: "ci/optional".into(), status: CheckStatus::Fail, required: false });
+        pr.checks.push(Check { name: "ci/optional".into(), status: CheckStatus::Fail, required: false, details_url: None });
         let tasks = generate_tasks(&pr);
         assert!(
             !tasks.iter().any(|t| t.task_type == TaskType::FixCi),

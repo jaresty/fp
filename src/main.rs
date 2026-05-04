@@ -15,8 +15,18 @@ use clap::{Parser, Subcommand};
 use std::path::PathBuf;
 
 use github::{GithubClient, detect_repo};
-use store::{Store, TrackedPr};
+use store::{State, Store, TrackedPr};
 use tasks::generate_tasks;
+
+fn apply_thread_states(mut pr_state: model::PrState, store_state: &State) -> model::PrState {
+    for thread in &mut pr_state.threads {
+        let key = format!("{}:{}", pr_state.number, thread.id);
+        if let Some(&stored) = store_state.thread_states.get(&key) {
+            thread.state = stored;
+        }
+    }
+    pr_state
+}
 
 #[derive(Parser)]
 #[command(name = "fp", about = "PR convergence loop")]
@@ -52,6 +62,13 @@ enum Commands {
     },
     /// Remove a PR from the tracked set
     Untrack { pr: u64 },
+    /// Show full context for a task (check logs URL, thread body, etc.)
+    Context {
+        /// PR number
+        pr: u64,
+        /// Context hint from task output (check name or thread:<id>)
+        hint: String,
+    },
 }
 
 fn git_dir() -> Result<PathBuf> {
@@ -108,14 +125,14 @@ fn main() -> Result<()> {
                 let mut prs: Vec<_> = state.prs.values().collect();
                 prs.sort_by_key(|p| p.number);
                 for tracked in prs {
-                    let pr_state = fetch(tracked.number, &tracked.branch)
+                    let pr_state = apply_thread_states(fetch(tracked.number, &tracked.branch)
                         .unwrap_or_else(|| crate::model::PrState {
                             number: tracked.number,
                             title: tracked.title.clone(),
                             branch: tracked.branch.clone(),
                             draft: false, approved: false,
                             checks: vec![], threads: vec![],
-                        });
+                        }), &state);
                     let tasks = generate_tasks(&pr_state);
                     if json {
                         println!("{}", serde_json::to_string_pretty(&tasks).unwrap());
@@ -131,14 +148,14 @@ fn main() -> Result<()> {
                 let tracked = state.prs.get(&number)
                     .with_context(|| format!("PR #{} is not tracked. Run `fp track {}`", number, number))?;
 
-                let pr_state = fetch(tracked.number, &tracked.branch)
+                let pr_state = apply_thread_states(fetch(tracked.number, &tracked.branch)
                     .unwrap_or_else(|| crate::model::PrState {
                         number: tracked.number,
                         title: tracked.title.clone(),
                         branch: tracked.branch.clone(),
                         draft: false, approved: false,
                         checks: vec![], threads: vec![],
-                    });
+                    }), &state);
                 let task_list = generate_tasks(&pr_state);
 
                 if json {
@@ -158,8 +175,31 @@ fn main() -> Result<()> {
         }
 
         Commands::Track { pr, title, branch } => {
-            let title = title.unwrap_or_else(|| format!("PR #{}", pr));
-            let branch = branch.unwrap_or_default();
+            let (title, branch) = match (title, branch) {
+                (Some(t), Some(b)) => (t, b),
+                (t_opt, b_opt) => {
+                    let token = std::env::var("GITHUB_TOKEN").ok();
+                    let repo = detect_repo();
+                    if let (Some(tok), Some((owner, repo_name))) = (token, repo) {
+                        let client = GithubClient::new(tok);
+                        match client.fetch_pr_metadata(&owner, &repo_name, pr) {
+                            Ok((fetched_title, fetched_branch)) => (
+                                t_opt.unwrap_or(fetched_title),
+                                b_opt.unwrap_or(fetched_branch),
+                            ),
+                            Err(_) => (
+                                t_opt.unwrap_or_else(|| format!("PR #{}", pr)),
+                                b_opt.unwrap_or_default(),
+                            ),
+                        }
+                    } else {
+                        (
+                            t_opt.unwrap_or_else(|| format!("PR #{}", pr)),
+                            b_opt.unwrap_or_default(),
+                        )
+                    }
+                }
+            };
             store.track(TrackedPr { number: pr, title: title.clone(), branch })?;
             println!("Tracking PR #{} — {}", pr, title);
         }
@@ -167,6 +207,52 @@ fn main() -> Result<()> {
         Commands::Untrack { pr } => {
             store.untrack(pr)?;
             println!("Untracked PR #{}", pr);
+        }
+
+        Commands::Context { pr, hint } => {
+            let state = store.load()?;
+            let token = std::env::var("GITHUB_TOKEN").ok();
+            let repo = detect_repo();
+
+            let tracked = state.prs.get(&pr)
+                .with_context(|| format!("PR #{} is not tracked. Run `fp track {}`", pr, pr))?;
+
+            let pr_state = if let (Some(tok), Some((owner, repo_name))) = (token, repo) {
+                let client = GithubClient::new(tok);
+                client.fetch_pr(&owner, &repo_name, pr).ok()
+            } else {
+                None
+            }.unwrap_or_else(|| model::PrState {
+                number: tracked.number,
+                title: tracked.title.clone(),
+                branch: tracked.branch.clone(),
+                draft: false, approved: false,
+                checks: vec![], threads: vec![],
+            });
+
+            if let Some(stripped) = hint.strip_prefix("thread:") {
+                let thread_id: u64 = stripped.parse().context("invalid thread id")?;
+                if let Some(thread) = pr_state.threads.iter().find(|t| t.id == thread_id) {
+                    println!("Thread #{} ({:?})", thread.id, thread.state);
+                    if let (Some(file), Some(line)) = (&thread.file, thread.line) {
+                        println!("  {}:{}", file, line);
+                    }
+                    println!("  {}", thread.body);
+                } else {
+                    println!("Thread #{} not found in PR #{}", thread_id, pr);
+                }
+            } else {
+                if let Some(check) = pr_state.checks.iter().find(|c| c.name == hint) {
+                    println!("Check: {} ({:?})", check.name, check.status);
+                    if let Some(url) = &check.details_url {
+                        println!("  Logs: {}", url);
+                    } else {
+                        println!("  No details URL available");
+                    }
+                } else {
+                    println!("Check '{}' not found in PR #{}", hint, pr);
+                }
+            }
         }
     }
 

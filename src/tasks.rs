@@ -76,4 +76,3 @@ pub fn generate_tasks(pr: &PrState) -> Vec<Task> {
     tasks
 }
 
-// TODO: add details_url to Check for external CI log fetching
