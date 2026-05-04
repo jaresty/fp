@@ -30,7 +30,12 @@ fn apply_thread_states(mut pr_state: model::PrState, store_state: &State) -> mod
     for thread in &mut pr_state.threads {
         let key = format!("{}:{}", pr_state.number, thread.id);
         if let Some(&stored) = store_state.thread_states.get(&key) {
-            thread.state = stored;
+            // Only Resolved is a permanent user decision that overrides API state.
+            // Open/Addressed are derived from the API (last commenter) and must not
+            // be overridden by stale store entries.
+            if stored == model::ThreadState::Resolved {
+                thread.state = stored;
+            }
         }
     }
     pr_state
@@ -265,7 +270,6 @@ fn main() -> Result<()> {
                 .context("could not detect GitHub repo from git remote")?;
             let client = GithubClient::new(token);
             let posted = client.reply_to_comment(&owner, &repo_name, pr, thread_id, &message)?;
-            store.set_thread_state(pr, thread_id, model::ThreadState::Addressed)?;
             println!("Replied to thread #{}: {}", thread_id, posted);
         }
 
@@ -449,5 +453,56 @@ fn main() -> Result<()> {
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod thread_state_tests {
+    use super::apply_thread_states;
+    use crate::model::{PrState, Thread, ThreadState};
+    use crate::store::State;
+    use std::collections::HashMap;
+
+    fn make_pr(thread_id: u64, api_state: ThreadState) -> PrState {
+        PrState {
+            number: 1,
+            title: "t".into(),
+            branch: "b".into(),
+            draft: false,
+            approved: true,
+            checks: vec![],
+            threads: vec![Thread {
+                id: thread_id,
+                state: api_state,
+                body: "needs fix".into(),
+                file: None,
+                line: None,
+            }],
+        }
+    }
+
+    fn store_with(pr: u64, thread: u64, state: ThreadState) -> State {
+        let mut s = State::default();
+        s.thread_states.insert(format!("{}:{}", pr, thread), state);
+        s
+    }
+
+    // Store Resolved overrides API Open
+    #[test]
+    fn resolved_in_store_overrides_api_open() {
+        let pr = make_pr(42, ThreadState::Open);
+        let store = store_with(1, 42, ThreadState::Resolved);
+        let result = apply_thread_states(pr, &store);
+        assert_eq!(result.threads[0].state, ThreadState::Resolved);
+    }
+
+    // Store Addressed does NOT override API Open (reviewer re-replied)
+    #[test]
+    fn addressed_in_store_does_not_override_api_open() {
+        let pr = make_pr(42, ThreadState::Open);
+        let store = store_with(1, 42, ThreadState::Addressed);
+        let result = apply_thread_states(pr, &store);
+        assert_eq!(result.threads[0].state, ThreadState::Open,
+            "stale Addressed in store should not hide reviewer re-reply");
+    }
 }
 
