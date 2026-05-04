@@ -100,6 +100,16 @@ enum Commands {
         /// Context hint from task output (check name or thread:<id>)
         hint: String,
     },
+    /// Create a draft PR for the current branch and start tracking it
+    Create {
+        /// PR title
+        title: String,
+        /// Base branch (default: main)
+        #[arg(long, default_value = "main")]
+        base: String,
+    },
+    /// Rebase all tracked PRs in stack order onto their parent branches
+    RebaseStack,
 }
 
 fn git_dir() -> Result<PathBuf> {
@@ -308,6 +318,57 @@ fn main() -> Result<()> {
 
                 if once { break; }
                 std::thread::sleep(std::time::Duration::from_secs(interval));
+            }
+        }
+
+        Commands::Create { title, base } => {
+            let token = std::env::var("GITHUB_TOKEN").context("GITHUB_TOKEN not set")?;
+            let (owner, repo_name) = detect_repo()
+                .context("could not detect GitHub repo from git remote")?;
+
+            // Get current branch
+            let out = std::process::Command::new("git")
+                .args(["rev-parse", "--abbrev-ref", "HEAD"])
+                .output()
+                .context("failed to run git")?;
+            let head_branch = String::from_utf8(out.stdout)?.trim().to_string();
+
+            let client = GithubClient::new(token);
+            let pr_state = client.create_pr(&owner, &repo_name, &title, &head_branch, &base, true)?;
+            store.track(TrackedPr {
+                number: pr_state.number,
+                title: pr_state.title.clone(),
+                branch: pr_state.branch.clone(),
+            })?;
+            println!("Created PR #{}: {} ({})", pr_state.number, pr_state.title, pr_state.branch);
+        }
+
+        Commands::RebaseStack => {
+            let state = store.load()?;
+            if state.prs.is_empty() {
+                println!("No tracked PRs.");
+                return Ok(());
+            }
+
+            // Collect tracked branches
+            let branches: Vec<String> = state.prs.values().map(|p| p.branch.clone()).collect();
+
+            // Detect stack topology from git
+            let work_dir = git_dir.parent()
+                .map(|p| p.to_path_buf())
+                .unwrap_or_else(|| std::env::current_dir().unwrap());
+
+            let parent_of = stack::detect_parent_of(&branches, &work_dir)?;
+            let result = stack::rebase_stack(&branches, &parent_of, &work_dir)?;
+
+            for branch in &result.rebased {
+                println!("✓ rebased {}", branch);
+            }
+            for branch in &result.conflicts {
+                println!("✗ conflict on {} — resolve manually", branch);
+            }
+            if result.rebased.is_empty() && result.conflicts.is_empty() {
+                println!("Stack is already up to date.");
             }
         }
 
