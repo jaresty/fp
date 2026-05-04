@@ -292,18 +292,18 @@ mod tests {
         assert!(client.create_pr("owner", "repo", "title", "branch", "main", true).is_err());
     }
 
-    // T1: reply_to_comment posts to correct endpoint and returns posted body
+    // T1: reply_to_comment posts to correct endpoint (includes pr_number) and returns posted body
     #[test]
     fn reply_to_comment_posts_and_returns_body() {
         let mut server = mockito::Server::new();
-        server.mock("POST", "/repos/owner/repo/pulls/comments/999/replies")
+        server.mock("POST", "/repos/owner/repo/pulls/42/comments/999/replies")
             .with_status(201)
             .with_header("content-type", "application/json")
             .with_body(r#"{"id": 1000, "body": "Thanks, fixed!"}"#)
             .create();
 
         let client = mock_client(&server);
-        let body = client.reply_to_comment("owner", "repo", 999, "Thanks, fixed!").unwrap();
+        let body = client.reply_to_comment("owner", "repo", 42, 999, "Thanks, fixed!").unwrap();
         assert_eq!(body, "Thanks, fixed!");
     }
 
@@ -311,12 +311,12 @@ mod tests {
     #[test]
     fn reply_to_comment_errors_on_failure() {
         let mut server = mockito::Server::new();
-        server.mock("POST", "/repos/owner/repo/pulls/comments/999/replies")
+        server.mock("POST", "/repos/owner/repo/pulls/42/comments/999/replies")
             .with_status(422)
             .create();
 
         let client = mock_client(&server);
-        assert!(client.reply_to_comment("owner", "repo", 999, "text").is_err());
+        assert!(client.reply_to_comment("owner", "repo", 42, 999, "text").is_err());
     }
 
     // D1: fetch_pr_metadata returns (title, branch) from GitHub API

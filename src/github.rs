@@ -31,8 +31,8 @@ impl GithubClient {
         Ok(resp)
     }
 
-    pub fn reply_to_comment(&self, owner: &str, repo: &str, comment_id: u64, body: &str) -> Result<String> {
-        let url = format!("{}/repos/{}/{}/pulls/comments/{}/replies", self.base_url, owner, repo, comment_id);
+    pub fn reply_to_comment(&self, owner: &str, repo: &str, pr_number: u64, comment_id: u64, body: &str) -> Result<String> {
+        let url = format!("{}/repos/{}/{}/pulls/{}/comments/{}/replies", self.base_url, owner, repo, pr_number, comment_id);
         let payload = serde_json::json!({ "body": body });
         let resp = reqwest::blocking::Client::new()
             .post(&url)

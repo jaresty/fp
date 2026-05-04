@@ -264,7 +264,7 @@ fn main() -> Result<()> {
             let (owner, repo_name) = detect_repo()
                 .context("could not detect GitHub repo from git remote")?;
             let client = GithubClient::new(token);
-            let posted = client.reply_to_comment(&owner, &repo_name, thread_id, &message)?;
+            let posted = client.reply_to_comment(&owner, &repo_name, pr, thread_id, &message)?;
             store.set_thread_state(pr, thread_id, model::ThreadState::Addressed)?;
             println!("Replied to thread #{}: {}", thread_id, posted);
         }
