@@ -156,7 +156,7 @@ impl GithubClient {
 
         // 5. Review comments → threads grouped by root (in_reply_to_id == null)
         let pr_author = pr_json["user"]["login"].as_str().unwrap_or("").to_string();
-        let comments_json = self.get(&format!("/repos/{}/{}/pulls/{}/comments", owner, repo, pr_number))?;
+        let comments_json = self.get(&format!("/repos/{}/{}/pulls/{}/comments?per_page=100", owner, repo, pr_number))?;
         let all_comments = comments_json.as_array().cloned().unwrap_or_default();
 
         // Build ordered list: (root_id, comments_in_thread) preserving API order

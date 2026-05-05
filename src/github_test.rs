@@ -1,6 +1,6 @@
 #[cfg(test)]
 mod tests {
-    use crate::github::{GithubClient, parse_github_remote_pub};
+    use crate::github::{parse_github_remote_pub, GithubClient};
     use crate::model::{CheckStatus, ThreadState};
 
     fn mock_client(server: &mockito::Server) -> GithubClient {
@@ -12,36 +12,43 @@ mod tests {
     fn fetch_pr_returns_title_branch_draft() {
         let mut server = mockito::Server::new();
 
-        server.mock("GET", "/repos/owner/repo/pulls/42")
+        server
+            .mock("GET", "/repos/owner/repo/pulls/42")
             .with_status(200)
             .with_header("content-type", "application/json")
-            .with_body(r#"{
+            .with_body(
+                r#"{
                 "number": 42,
                 "title": "my PR",
                 "draft": false,
                 "head": { "ref": "fix/foo" }
-            }"#)
+            }"#,
+            )
             .create();
         // checks endpoint
-        server.mock("GET", "/repos/owner/repo/commits/fix%2Ffoo/check-runs")
+        server
+            .mock("GET", "/repos/owner/repo/commits/fix%2Ffoo/check-runs")
             .with_status(200)
             .with_header("content-type", "application/json")
             .with_body(r#"{"check_runs": []}"#)
             .create();
         // branch protection
-        server.mock("GET", "/repos/owner/repo/branches/fix%2Ffoo/protection")
+        server
+            .mock("GET", "/repos/owner/repo/branches/fix%2Ffoo/protection")
             .with_status(200)
             .with_header("content-type", "application/json")
             .with_body(r#"{"required_status_checks": {"contexts": []}}"#)
             .create();
         // reviews
-        server.mock("GET", "/repos/owner/repo/pulls/42/reviews")
+        server
+            .mock("GET", "/repos/owner/repo/pulls/42/reviews")
             .with_status(200)
             .with_header("content-type", "application/json")
             .with_body(r#"[]"#)
             .create();
         // review comments
-        server.mock("GET", "/repos/owner/repo/pulls/42/comments")
+        server
+            .mock("GET", "/repos/owner/repo/pulls/42/comments?per_page=100")
             .with_status(200)
             .with_header("content-type", "application/json")
             .with_body(r#"[]"#)
@@ -59,22 +66,34 @@ mod tests {
     #[test]
     fn fetch_pr_sets_draft_true() {
         let mut server = mockito::Server::new();
-        server.mock("GET", "/repos/owner/repo/pulls/1")
+        server
+            .mock("GET", "/repos/owner/repo/pulls/1")
             .with_status(200)
             .with_header("content-type", "application/json")
             .with_body(r#"{"number":1,"title":"draft","draft":true,"head":{"ref":"wip"}}"#)
             .create();
-        server.mock("GET", "/repos/owner/repo/commits/wip/check-runs")
-            .with_status(200).with_header("content-type","application/json")
-            .with_body(r#"{"check_runs":[]}"#).create();
-        server.mock("GET", "/repos/owner/repo/branches/wip/protection")
-            .with_status(404).create();
-        server.mock("GET", "/repos/owner/repo/pulls/1/reviews")
-            .with_status(200).with_header("content-type","application/json")
-            .with_body(r#"[]"#).create();
-        server.mock("GET", "/repos/owner/repo/pulls/1/comments")
-            .with_status(200).with_header("content-type","application/json")
-            .with_body(r#"[]"#).create();
+        server
+            .mock("GET", "/repos/owner/repo/commits/wip/check-runs")
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body(r#"{"check_runs":[]}"#)
+            .create();
+        server
+            .mock("GET", "/repos/owner/repo/branches/wip/protection")
+            .with_status(404)
+            .create();
+        server
+            .mock("GET", "/repos/owner/repo/pulls/1/reviews")
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body(r#"[]"#)
+            .create();
+        server
+            .mock("GET", "/repos/owner/repo/pulls/1/comments?per_page=100")
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body(r#"[]"#)
+            .create();
 
         let pr = mock_client(&server).fetch_pr("owner", "repo", 1).unwrap();
         assert!(pr.draft);
@@ -88,26 +107,45 @@ mod tests {
             .with_status(200).with_header("content-type","application/json")
             .with_body(r#"{"number":5,"title":"t","draft":false,"head":{"ref":"mybranch","sha":""},"base":{"ref":"main"}}"#)
             .create();
-        server.mock("GET", "/repos/owner/repo/commits/mybranch/check-runs")
-            .with_status(200).with_header("content-type","application/json")
-            .with_body(r#"{"check_runs":[
+        server
+            .mock("GET", "/repos/owner/repo/commits/mybranch/check-runs")
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body(
+                r#"{"check_runs":[
                 {"name":"ci/test","conclusion":"failure","status":"completed"},
                 {"name":"ci/lint","conclusion":"success","status":"completed"}
-            ]}"#).create();
-        server.mock("GET", "/repos/owner/repo/branches/mybranch/protection")
-            .with_status(404).create();
-        server.mock("GET", "/repos/owner/repo/branches/main/protection")
-            .with_status(200).with_header("content-type","application/json")
-            .with_body(r#"{"required_status_checks":{"contexts":["ci/test"]}}"#).create();
-        server.mock("GET", "/repos/owner/repo/commits//statuses")
-            .with_status(200).with_header("content-type","application/json")
-            .with_body(r#"[]"#).create();
-        server.mock("GET", "/repos/owner/repo/pulls/5/reviews")
-            .with_status(200).with_header("content-type","application/json")
-            .with_body(r#"[]"#).create();
-        server.mock("GET", "/repos/owner/repo/pulls/5/comments")
-            .with_status(200).with_header("content-type","application/json")
-            .with_body(r#"[]"#).create();
+            ]}"#,
+            )
+            .create();
+        server
+            .mock("GET", "/repos/owner/repo/branches/mybranch/protection")
+            .with_status(404)
+            .create();
+        server
+            .mock("GET", "/repos/owner/repo/branches/main/protection")
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body(r#"{"required_status_checks":{"contexts":["ci/test"]}}"#)
+            .create();
+        server
+            .mock("GET", "/repos/owner/repo/commits//statuses")
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body(r#"[]"#)
+            .create();
+        server
+            .mock("GET", "/repos/owner/repo/pulls/5/reviews")
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body(r#"[]"#)
+            .create();
+        server
+            .mock("GET", "/repos/owner/repo/pulls/5/comments?per_page=100")
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body(r#"[]"#)
+            .create();
 
         let pr = mock_client(&server).fetch_pr("owner", "repo", 5).unwrap();
         let test_check = pr.checks.iter().find(|c| c.name == "ci/test").unwrap();
@@ -122,21 +160,38 @@ mod tests {
     #[test]
     fn pending_check_maps_to_pending_status() {
         let mut server = mockito::Server::new();
-        server.mock("GET", "/repos/owner/repo/pulls/6")
-            .with_status(200).with_header("content-type","application/json")
-            .with_body(r#"{"number":6,"title":"t","draft":false,"head":{"ref":"b"}}"#).create();
-        server.mock("GET", "/repos/owner/repo/commits/b/check-runs")
-            .with_status(200).with_header("content-type","application/json")
-            .with_body(r#"{"check_runs":[{"name":"ci/test","conclusion":null,"status":"in_progress"}]}"#).create();
-        server.mock("GET", "/repos/owner/repo/branches/b/protection")
-            .with_status(200).with_header("content-type","application/json")
-            .with_body(r#"{"required_status_checks":{"contexts":["ci/test"]}}"#).create();
-        server.mock("GET", "/repos/owner/repo/pulls/6/reviews")
-            .with_status(200).with_header("content-type","application/json")
-            .with_body(r#"[]"#).create();
-        server.mock("GET", "/repos/owner/repo/pulls/6/comments")
-            .with_status(200).with_header("content-type","application/json")
-            .with_body(r#"[]"#).create();
+        server
+            .mock("GET", "/repos/owner/repo/pulls/6")
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body(r#"{"number":6,"title":"t","draft":false,"head":{"ref":"b"}}"#)
+            .create();
+        server
+            .mock("GET", "/repos/owner/repo/commits/b/check-runs")
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body(
+                r#"{"check_runs":[{"name":"ci/test","conclusion":null,"status":"in_progress"}]}"#,
+            )
+            .create();
+        server
+            .mock("GET", "/repos/owner/repo/branches/b/protection")
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body(r#"{"required_status_checks":{"contexts":["ci/test"]}}"#)
+            .create();
+        server
+            .mock("GET", "/repos/owner/repo/pulls/6/reviews")
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body(r#"[]"#)
+            .create();
+        server
+            .mock("GET", "/repos/owner/repo/pulls/6/comments?per_page=100")
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body(r#"[]"#)
+            .create();
 
         let pr = mock_client(&server).fetch_pr("owner", "repo", 6).unwrap();
         let check = pr.checks.iter().find(|c| c.name == "ci/test").unwrap();
@@ -150,24 +205,37 @@ mod tests {
         server.mock("GET", "/repos/owner/repo/pulls/7")
             .with_status(200).with_header("content-type","application/json")
             .with_body(r#"{"number":7,"title":"t","draft":false,"head":{"ref":"b"},"user":{"login":"author"}}"#).create();
-        server.mock("GET", "/repos/owner/repo/commits/b/check-runs")
-            .with_status(200).with_header("content-type","application/json")
-            .with_body(r#"{"check_runs":[]}"#).create();
-        server.mock("GET", "/repos/owner/repo/branches/b/protection")
-            .with_status(404).create();
-        server.mock("GET", "/repos/owner/repo/pulls/7/reviews")
-            .with_status(200).with_header("content-type","application/json")
-            .with_body(r#"[]"#).create();
-        server.mock("GET", "/repos/owner/repo/pulls/7/comments")
-            .with_status(200).with_header("content-type","application/json")
-            .with_body(r#"[{
+        server
+            .mock("GET", "/repos/owner/repo/commits/b/check-runs")
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body(r#"{"check_runs":[]}"#)
+            .create();
+        server
+            .mock("GET", "/repos/owner/repo/branches/b/protection")
+            .with_status(404)
+            .create();
+        server
+            .mock("GET", "/repos/owner/repo/pulls/7/reviews")
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body(r#"[]"#)
+            .create();
+        server
+            .mock("GET", "/repos/owner/repo/pulls/7/comments?per_page=100")
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body(
+                r#"[{
                 "id": 999,
                 "body": "needs fix",
                 "path": "src/lib.rs",
                 "line": 42,
                 "user": {"login": "reviewer"},
                 "pull_request_review_id": 1
-            }]"#).create();
+            }]"#,
+            )
+            .create();
 
         let pr = mock_client(&server).fetch_pr("owner", "repo", 7).unwrap();
         assert_eq!(pr.threads.len(), 1);
@@ -186,26 +254,43 @@ mod tests {
         server.mock("GET", "/repos/owner/repo/pulls/11")
             .with_status(200).with_header("content-type","application/json")
             .with_body(r#"{"number":11,"title":"t","draft":false,"head":{"ref":"b"},"user":{"login":"author"}}"#).create();
-        server.mock("GET", "/repos/owner/repo/commits/b/check-runs")
-            .with_status(200).with_header("content-type","application/json")
-            .with_body(r#"{"check_runs":[]}"#).create();
-        server.mock("GET", "/repos/owner/repo/branches/b/protection")
-            .with_status(404).create();
-        server.mock("GET", "/repos/owner/repo/pulls/11/reviews")
-            .with_status(200).with_header("content-type","application/json")
-            .with_body(r#"[]"#).create();
-        server.mock("GET", "/repos/owner/repo/pulls/11/comments")
-            .with_status(200).with_header("content-type","application/json")
-            .with_body(r#"[
+        server
+            .mock("GET", "/repos/owner/repo/commits/b/check-runs")
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body(r#"{"check_runs":[]}"#)
+            .create();
+        server
+            .mock("GET", "/repos/owner/repo/branches/b/protection")
+            .with_status(404)
+            .create();
+        server
+            .mock("GET", "/repos/owner/repo/pulls/11/reviews")
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body(r#"[]"#)
+            .create();
+        server
+            .mock("GET", "/repos/owner/repo/pulls/11/comments?per_page=100")
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body(
+                r#"[
                 {"id": 100, "body": "needs fix", "path": "src/lib.rs", "line": 10,
                  "user": {"login": "reviewer"}, "pull_request_review_id": 1},
                 {"id": 101, "body": "fixed it", "path": "src/lib.rs", "line": 10,
                  "in_reply_to_id": 100,
                  "user": {"login": "author"}, "pull_request_review_id": 1}
-            ]"#).create();
+            ]"#,
+            )
+            .create();
 
         let pr = mock_client(&server).fetch_pr("owner", "repo", 11).unwrap();
-        assert_eq!(pr.threads.len(), 1, "reply comment should not be a separate thread");
+        assert_eq!(
+            pr.threads.len(),
+            1,
+            "reply comment should not be a separate thread"
+        );
         assert_eq!(pr.threads[0].id, 100, "thread ID should be root comment ID");
     }
 
@@ -216,48 +301,78 @@ mod tests {
         server.mock("GET", "/repos/owner/repo/pulls/12")
             .with_status(200).with_header("content-type","application/json")
             .with_body(r#"{"number":12,"title":"t","draft":false,"head":{"ref":"b"},"user":{"login":"author"}}"#).create();
-        server.mock("GET", "/repos/owner/repo/commits/b/check-runs")
-            .with_status(200).with_header("content-type","application/json")
-            .with_body(r#"{"check_runs":[]}"#).create();
-        server.mock("GET", "/repos/owner/repo/branches/b/protection")
-            .with_status(404).create();
-        server.mock("GET", "/repos/owner/repo/pulls/12/reviews")
-            .with_status(200).with_header("content-type","application/json")
-            .with_body(r#"[]"#).create();
-        server.mock("GET", "/repos/owner/repo/pulls/12/comments")
-            .with_status(200).with_header("content-type","application/json")
-            .with_body(r#"[
+        server
+            .mock("GET", "/repos/owner/repo/commits/b/check-runs")
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body(r#"{"check_runs":[]}"#)
+            .create();
+        server
+            .mock("GET", "/repos/owner/repo/branches/b/protection")
+            .with_status(404)
+            .create();
+        server
+            .mock("GET", "/repos/owner/repo/pulls/12/reviews")
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body(r#"[]"#)
+            .create();
+        server
+            .mock("GET", "/repos/owner/repo/pulls/12/comments?per_page=100")
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body(
+                r#"[
                 {"id": 200, "body": "needs fix", "path": "src/lib.rs", "line": 5,
                  "user": {"login": "reviewer"}, "pull_request_review_id": 2},
                 {"id": 201, "body": "fixed", "path": "src/lib.rs", "line": 5,
                  "in_reply_to_id": 200,
                  "user": {"login": "author"}, "pull_request_review_id": 2}
-            ]"#).create();
+            ]"#,
+            )
+            .create();
 
         let pr = mock_client(&server).fetch_pr("owner", "repo", 12).unwrap();
         assert_eq!(pr.threads.len(), 1);
-        assert_eq!(pr.threads[0].state, ThreadState::Addressed,
-            "thread should be Addressed when PR author replied last");
+        assert_eq!(
+            pr.threads[0].state,
+            ThreadState::Addressed,
+            "thread should be Addressed when PR author replied last"
+        );
     }
 
     // D4: approved true when APPROVED review present
     #[test]
     fn approved_true_when_approved_review_present() {
         let mut server = mockito::Server::new();
-        server.mock("GET", "/repos/owner/repo/pulls/8")
-            .with_status(200).with_header("content-type","application/json")
-            .with_body(r#"{"number":8,"title":"t","draft":false,"head":{"ref":"b"}}"#).create();
-        server.mock("GET", "/repos/owner/repo/commits/b/check-runs")
-            .with_status(200).with_header("content-type","application/json")
-            .with_body(r#"{"check_runs":[]}"#).create();
-        server.mock("GET", "/repos/owner/repo/branches/b/protection")
-            .with_status(404).create();
-        server.mock("GET", "/repos/owner/repo/pulls/8/reviews")
-            .with_status(200).with_header("content-type","application/json")
-            .with_body(r#"[{"state":"APPROVED"}]"#).create();
-        server.mock("GET", "/repos/owner/repo/pulls/8/comments")
-            .with_status(200).with_header("content-type","application/json")
-            .with_body(r#"[]"#).create();
+        server
+            .mock("GET", "/repos/owner/repo/pulls/8")
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body(r#"{"number":8,"title":"t","draft":false,"head":{"ref":"b"}}"#)
+            .create();
+        server
+            .mock("GET", "/repos/owner/repo/commits/b/check-runs")
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body(r#"{"check_runs":[]}"#)
+            .create();
+        server
+            .mock("GET", "/repos/owner/repo/branches/b/protection")
+            .with_status(404)
+            .create();
+        server
+            .mock("GET", "/repos/owner/repo/pulls/8/reviews")
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body(r#"[{"state":"APPROVED"}]"#)
+            .create();
+        server
+            .mock("GET", "/repos/owner/repo/pulls/8/comments?per_page=100")
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body(r#"[]"#)
+            .create();
 
         let pr = mock_client(&server).fetch_pr("owner", "repo", 8).unwrap();
         assert!(pr.approved);
@@ -267,20 +382,34 @@ mod tests {
     #[test]
     fn approved_false_when_no_approved_review() {
         let mut server = mockito::Server::new();
-        server.mock("GET", "/repos/owner/repo/pulls/9")
-            .with_status(200).with_header("content-type","application/json")
-            .with_body(r#"{"number":9,"title":"t","draft":false,"head":{"ref":"b"}}"#).create();
-        server.mock("GET", "/repos/owner/repo/commits/b/check-runs")
-            .with_status(200).with_header("content-type","application/json")
-            .with_body(r#"{"check_runs":[]}"#).create();
-        server.mock("GET", "/repos/owner/repo/branches/b/protection")
-            .with_status(404).create();
-        server.mock("GET", "/repos/owner/repo/pulls/9/reviews")
-            .with_status(200).with_header("content-type","application/json")
-            .with_body(r#"[{"state":"CHANGES_REQUESTED"}]"#).create();
-        server.mock("GET", "/repos/owner/repo/pulls/9/comments")
-            .with_status(200).with_header("content-type","application/json")
-            .with_body(r#"[]"#).create();
+        server
+            .mock("GET", "/repos/owner/repo/pulls/9")
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body(r#"{"number":9,"title":"t","draft":false,"head":{"ref":"b"}}"#)
+            .create();
+        server
+            .mock("GET", "/repos/owner/repo/commits/b/check-runs")
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body(r#"{"check_runs":[]}"#)
+            .create();
+        server
+            .mock("GET", "/repos/owner/repo/branches/b/protection")
+            .with_status(404)
+            .create();
+        server
+            .mock("GET", "/repos/owner/repo/pulls/9/reviews")
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body(r#"[{"state":"CHANGES_REQUESTED"}]"#)
+            .create();
+        server
+            .mock("GET", "/repos/owner/repo/pulls/9/comments?per_page=100")
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body(r#"[]"#)
+            .create();
 
         let pr = mock_client(&server).fetch_pr("owner", "repo", 9).unwrap();
         assert!(!pr.approved);
@@ -303,29 +432,48 @@ mod tests {
     #[test]
     fn check_details_url_populated() {
         let mut server = mockito::Server::new();
-        server.mock("GET", "/repos/owner/repo/pulls/10")
-            .with_status(200).with_header("content-type","application/json")
-            .with_body(r#"{"number":10,"title":"t","draft":false,"head":{"ref":"b"}}"#).create();
-        server.mock("GET", "/repos/owner/repo/commits/b/check-runs")
-            .with_status(200).with_header("content-type","application/json")
-            .with_body(r#"{"check_runs":[{
+        server
+            .mock("GET", "/repos/owner/repo/pulls/10")
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body(r#"{"number":10,"title":"t","draft":false,"head":{"ref":"b"}}"#)
+            .create();
+        server
+            .mock("GET", "/repos/owner/repo/commits/b/check-runs")
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body(
+                r#"{"check_runs":[{
                 "name":"ci/test",
                 "conclusion":"failure",
                 "status":"completed",
                 "details_url":"https://buildkite.com/org/pipeline/builds/123"
-            }]}"#).create();
-        server.mock("GET", "/repos/owner/repo/branches/b/protection")
-            .with_status(404).create();
-        server.mock("GET", "/repos/owner/repo/pulls/10/reviews")
-            .with_status(200).with_header("content-type","application/json")
-            .with_body(r#"[]"#).create();
-        server.mock("GET", "/repos/owner/repo/pulls/10/comments")
-            .with_status(200).with_header("content-type","application/json")
-            .with_body(r#"[]"#).create();
+            }]}"#,
+            )
+            .create();
+        server
+            .mock("GET", "/repos/owner/repo/branches/b/protection")
+            .with_status(404)
+            .create();
+        server
+            .mock("GET", "/repos/owner/repo/pulls/10/reviews")
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body(r#"[]"#)
+            .create();
+        server
+            .mock("GET", "/repos/owner/repo/pulls/10/comments?per_page=100")
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body(r#"[]"#)
+            .create();
 
         let pr = mock_client(&server).fetch_pr("owner", "repo", 10).unwrap();
         let check = pr.checks.iter().find(|c| c.name == "ci/test").unwrap();
-        assert_eq!(check.details_url.as_deref(), Some("https://buildkite.com/org/pipeline/builds/123"));
+        assert_eq!(
+            check.details_url.as_deref(),
+            Some("https://buildkite.com/org/pipeline/builds/123")
+        );
     }
 
     // CR1: create_pr posts to correct endpoint and returns PR number
@@ -339,7 +487,9 @@ mod tests {
             .create();
 
         let client = mock_client(&server);
-        let pr = client.create_pr("owner", "repo", "my feature", "feat/thing", "main", true).unwrap();
+        let pr = client
+            .create_pr("owner", "repo", "my feature", "feat/thing", "main", true)
+            .unwrap();
         assert_eq!(pr.number, 42);
         assert_eq!(pr.title, "my feature");
         assert_eq!(pr.branch, "feat/thing");
@@ -349,28 +499,34 @@ mod tests {
     #[test]
     fn create_pr_errors_on_failure() {
         let mut server = mockito::Server::new();
-        server.mock("POST", "/repos/owner/repo/pulls")
+        server
+            .mock("POST", "/repos/owner/repo/pulls")
             .with_status(422)
             .with_header("content-type", "application/json")
             .with_body(r#"{"message": "Validation Failed"}"#)
             .create();
 
         let client = mock_client(&server);
-        assert!(client.create_pr("owner", "repo", "title", "branch", "main", true).is_err());
+        assert!(client
+            .create_pr("owner", "repo", "title", "branch", "main", true)
+            .is_err());
     }
 
     // T1: reply_to_comment posts to correct endpoint (includes pr_number) and returns posted body
     #[test]
     fn reply_to_comment_posts_and_returns_body() {
         let mut server = mockito::Server::new();
-        server.mock("POST", "/repos/owner/repo/pulls/42/comments/999/replies")
+        server
+            .mock("POST", "/repos/owner/repo/pulls/42/comments/999/replies")
             .with_status(201)
             .with_header("content-type", "application/json")
             .with_body(r#"{"id": 1000, "body": "Thanks, fixed!"}"#)
             .create();
 
         let client = mock_client(&server);
-        let body = client.reply_to_comment("owner", "repo", 42, 999, "Thanks, fixed!").unwrap();
+        let body = client
+            .reply_to_comment("owner", "repo", 42, 999, "Thanks, fixed!")
+            .unwrap();
         assert_eq!(body, "Thanks, fixed!");
     }
 
@@ -378,22 +534,28 @@ mod tests {
     #[test]
     fn reply_to_comment_errors_on_failure() {
         let mut server = mockito::Server::new();
-        server.mock("POST", "/repos/owner/repo/pulls/42/comments/999/replies")
+        server
+            .mock("POST", "/repos/owner/repo/pulls/42/comments/999/replies")
             .with_status(422)
             .create();
 
         let client = mock_client(&server);
-        assert!(client.reply_to_comment("owner", "repo", 42, 999, "text").is_err());
+        assert!(client
+            .reply_to_comment("owner", "repo", 42, 999, "text")
+            .is_err());
     }
 
     // D1: fetch_pr_metadata returns (title, branch) from GitHub API
     #[test]
     fn fetch_pr_metadata_returns_title_and_branch() {
         let mut server = mockito::Server::new();
-        server.mock("GET", "/repos/owner/repo/pulls/42")
+        server
+            .mock("GET", "/repos/owner/repo/pulls/42")
             .with_status(200)
             .with_header("content-type", "application/json")
-            .with_body(r#"{"number":42,"title":"my feature","draft":false,"head":{"ref":"feat/thing"}}"#)
+            .with_body(
+                r#"{"number":42,"title":"my feature","draft":false,"head":{"ref":"feat/thing"}}"#,
+            )
             .create();
 
         let client = mock_client(&server);
@@ -415,26 +577,42 @@ mod tests {
             .with_body(r#"{"check_runs":[{"name":"ci/test","conclusion":"failure","status":"completed"}]}"#)
             .create();
         // HEAD branch has no protection (feature branch)
-        server.mock("GET", "/repos/owner/repo/branches/feat%2Fx/protection")
-            .with_status(404).create();
+        server
+            .mock("GET", "/repos/owner/repo/branches/feat%2Fx/protection")
+            .with_status(404)
+            .create();
         // BASE branch (main) has the required checks configured
-        server.mock("GET", "/repos/owner/repo/branches/main/protection")
-            .with_status(200).with_header("content-type","application/json")
+        server
+            .mock("GET", "/repos/owner/repo/branches/main/protection")
+            .with_status(200)
+            .with_header("content-type", "application/json")
             .with_body(r#"{"required_status_checks":{"contexts":["ci/test"]}}"#)
             .create();
-        server.mock("GET", "/repos/owner/repo/commits/sha1/statuses")
-            .with_status(200).with_header("content-type","application/json")
-            .with_body(r#"[]"#).create();
-        server.mock("GET", "/repos/owner/repo/pulls/30/reviews")
-            .with_status(200).with_header("content-type","application/json")
-            .with_body(r#"[]"#).create();
-        server.mock("GET", "/repos/owner/repo/pulls/30/comments")
-            .with_status(200).with_header("content-type","application/json")
-            .with_body(r#"[]"#).create();
+        server
+            .mock("GET", "/repos/owner/repo/commits/sha1/statuses")
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body(r#"[]"#)
+            .create();
+        server
+            .mock("GET", "/repos/owner/repo/pulls/30/reviews")
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body(r#"[]"#)
+            .create();
+        server
+            .mock("GET", "/repos/owner/repo/pulls/30/comments?per_page=100")
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body(r#"[]"#)
+            .create();
 
         let pr = mock_client(&server).fetch_pr("owner", "repo", 30).unwrap();
         let check = pr.checks.iter().find(|c| c.name == "ci/test").unwrap();
-        assert!(check.required, "ci/test should be required per base branch (main) protection");
+        assert!(
+            check.required,
+            "ci/test should be required per base branch (main) protection"
+        );
     }
 
     // CS1: commit statuses (Buildkite-style) are included in checks alongside check-runs
@@ -445,14 +623,22 @@ mod tests {
             .with_status(200).with_header("content-type","application/json")
             .with_body(r#"{"number":20,"title":"t","draft":false,"head":{"ref":"b","sha":"abc123"},"base":{"ref":"main"},"user":{"login":"author"}}"#)
             .create();
-        server.mock("GET", "/repos/owner/repo/commits/b/check-runs")
-            .with_status(200).with_header("content-type","application/json")
-            .with_body(r#"{"check_runs":[{"name":"lint","conclusion":"success","status":"completed"}]}"#)
+        server
+            .mock("GET", "/repos/owner/repo/commits/b/check-runs")
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body(
+                r#"{"check_runs":[{"name":"lint","conclusion":"success","status":"completed"}]}"#,
+            )
             .create();
-        server.mock("GET", "/repos/owner/repo/branches/b/protection")
-            .with_status(404).create();
-        server.mock("GET", "/repos/owner/repo/branches/main/protection")
-            .with_status(200).with_header("content-type","application/json")
+        server
+            .mock("GET", "/repos/owner/repo/branches/b/protection")
+            .with_status(404)
+            .create();
+        server
+            .mock("GET", "/repos/owner/repo/branches/main/protection")
+            .with_status(200)
+            .with_header("content-type", "application/json")
             .with_body(r#"{"required_status_checks":{"contexts":["buildkite/ci"]}}"#)
             .create();
         server.mock("GET", "/repos/owner/repo/commits/abc123/statuses")
@@ -462,23 +648,48 @@ mod tests {
                 {"context":"buildkite/lint","state":"success","target_url":null}
             ]"#)
             .create();
-        server.mock("GET", "/repos/owner/repo/pulls/20/reviews")
-            .with_status(200).with_header("content-type","application/json")
-            .with_body(r#"[]"#).create();
-        server.mock("GET", "/repos/owner/repo/pulls/20/comments")
-            .with_status(200).with_header("content-type","application/json")
-            .with_body(r#"[]"#).create();
+        server
+            .mock("GET", "/repos/owner/repo/pulls/20/reviews")
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body(r#"[]"#)
+            .create();
+        server
+            .mock("GET", "/repos/owner/repo/pulls/20/comments?per_page=100")
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body(r#"[]"#)
+            .create();
 
         let pr = mock_client(&server).fetch_pr("owner", "repo", 20).unwrap();
         // check-run still present
-        assert!(pr.checks.iter().any(|c| c.name == "lint"), "check-run check missing");
+        assert!(
+            pr.checks.iter().any(|c| c.name == "lint"),
+            "check-run check missing"
+        );
         // commit status present
-        let bk = pr.checks.iter().find(|c| c.name == "buildkite/ci")
+        let bk = pr
+            .checks
+            .iter()
+            .find(|c| c.name == "buildkite/ci")
             .expect("buildkite/ci status missing from checks");
-        assert_eq!(bk.status, CheckStatus::Fail, "failure state should map to Fail");
-        assert!(bk.required, "buildkite/ci should be required per branch protection");
-        assert_eq!(bk.details_url.as_deref(), Some("https://buildkite.com/build/1"));
-        let bk_lint = pr.checks.iter().find(|c| c.name == "buildkite/lint")
+        assert_eq!(
+            bk.status,
+            CheckStatus::Fail,
+            "failure state should map to Fail"
+        );
+        assert!(
+            bk.required,
+            "buildkite/ci should be required per branch protection"
+        );
+        assert_eq!(
+            bk.details_url.as_deref(),
+            Some("https://buildkite.com/build/1")
+        );
+        let bk_lint = pr
+            .checks
+            .iter()
+            .find(|c| c.name == "buildkite/lint")
             .expect("buildkite/lint status missing");
         assert_eq!(bk_lint.status, CheckStatus::Pass);
         assert!(!bk_lint.required);
@@ -488,11 +699,48 @@ mod tests {
     #[test]
     fn fetch_pr_metadata_errors_on_404() {
         let mut server = mockito::Server::new();
-        server.mock("GET", "/repos/owner/repo/pulls/999")
+        server
+            .mock("GET", "/repos/owner/repo/pulls/999")
             .with_status(404)
             .create();
 
         let client = mock_client(&server);
         assert!(client.fetch_pr_metadata("owner", "repo", 999).is_err());
+    }
+
+    // Pagination: fetch_pr uses per_page=100 to get all review comments
+    #[test]
+    fn fetch_pr_includes_per_page_param_for_comments() {
+        let mut server = mockito::Server::new();
+        server.mock("GET", "/repos/owner/repo/pulls/42")
+            .with_status(200).with_header("content-type","application/json")
+            .with_body(r#"{"number":42,"title":"t","draft":false,"head":{"ref":"b"},"user":{"login":"author"}}"#)
+            .create();
+        server
+            .mock("GET", "/repos/owner/repo/commits/b/check-runs")
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body(r#"{"check_runs":[]}"#)
+            .create();
+        server
+            .mock("GET", "/repos/owner/repo/branches/b/protection")
+            .with_status(404)
+            .create();
+        server
+            .mock("GET", "/repos/owner/repo/pulls/42/reviews")
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body(r#"[]"#)
+            .create();
+        // The fix requires per_page=100 query param
+        server
+            .mock("GET", "/repos/owner/repo/pulls/42/comments?per_page=100")
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body(r#"[]"#)
+            .create();
+
+        let pr = mock_client(&server).fetch_pr("owner", "repo", 42).unwrap();
+        assert_eq!(pr.threads.len(), 0);
     }
 }
