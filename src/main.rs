@@ -437,6 +437,9 @@ fn main() -> Result<()> {
                         println!("  {}:{}", file, line);
                     }
                     println!("  {}", thread.body);
+                    for reply in &thread.replies {
+                        println!("  > {}", reply);
+                    }
                 } else {
                     println!("Thread #{} not found in PR #{}", thread_id, pr);
                 }

@@ -262,6 +262,7 @@ impl GithubClient {
                 id: root["id"].as_u64().unwrap_or(0),
                 state,
                 body: root["body"].as_str().unwrap_or("").to_string(),
+                replies: comments[1..].iter().map(|c| c["body"].as_str().unwrap_or("").to_string()).collect(),
                 file: root["path"].as_str().map(String::from),
                 line: root["line"].as_u64().map(|l| l as u32),
             }

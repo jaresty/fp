@@ -294,6 +294,41 @@ mod tests {
         assert_eq!(pr.threads[0].id, 100, "thread ID should be root comment ID");
     }
 
+    // D3d: thread.replies contains bodies of non-root comments in order
+    #[test]
+    fn thread_replies_populated_from_non_root_comments() {
+        let mut server = mockito::Server::new();
+        server.mock("GET", "/repos/owner/repo/pulls/77")
+            .with_status(200).with_header("content-type","application/json")
+            .with_body(r#"{"number":77,"title":"t","draft":false,"head":{"ref":"b"},"user":{"login":"author"}}"#).create();
+        server.mock("GET", "/repos/owner/repo/commits/b/check-runs")
+            .with_status(200).with_header("content-type","application/json")
+            .with_body(r#"{"check_runs":[]}"#).create();
+        server.mock("GET", "/repos/owner/repo/branches/b/protection")
+            .with_status(404).create();
+        server.mock("GET", "/repos/owner/repo/pulls/77/reviews")
+            .with_status(200).with_header("content-type","application/json")
+            .with_body(r#"[]"#).create();
+        server.mock("GET", "/repos/owner/repo/pulls/77/comments?per_page=100&page=1")
+            .with_status(200).with_header("content-type","application/json")
+            .with_body(r#"[
+                {"id": 200, "body": "root comment", "path": "src/lib.rs", "line": 5,
+                 "user": {"login": "reviewer"}},
+                {"id": 201, "body": "first reply", "path": "src/lib.rs", "line": 5,
+                 "in_reply_to_id": 200, "user": {"login": "author"}},
+                {"id": 202, "body": "second reply", "path": "src/lib.rs", "line": 5,
+                 "in_reply_to_id": 200, "user": {"login": "reviewer"}}
+            ]"#).create();
+
+        let pr = mock_client(&server).fetch_pr("owner", "repo", 77).unwrap();
+        assert_eq!(pr.threads.len(), 1);
+        let t = &pr.threads[0];
+        assert_eq!(t.body, "root comment");
+        assert_eq!(t.replies.len(), 2, "thread should have 2 replies, got: {:?}", t.replies);
+        assert_eq!(t.replies[0], "first reply");
+        assert_eq!(t.replies[1], "second reply");
+    }
+
     // D3c: thread state = Addressed when PR author's comment is last
     #[test]
     fn thread_addressed_when_author_replied_last() {
@@ -913,6 +948,7 @@ mod tests {
                 id: 1,
                 state: crate::model::ThreadState::Resolved,
                 body: "please fix this".to_string(),
+                replies: vec![],
                 file: Some("src/main.rs".to_string()),
                 line: Some(42),
             },
@@ -920,6 +956,7 @@ mod tests {
                 id: 2,
                 state: crate::model::ThreadState::Open,
                 body: "another issue".to_string(),
+                replies: vec![],
                 file: None,
                 line: None,
             },
@@ -947,10 +984,10 @@ mod tests {
         use crate::github::fetch_open_threads;
         use crate::model::{Thread, ThreadState};
         let threads = vec![
-            Thread { id: 1, state: ThreadState::Open, body: "open".into(), file: None, line: None },
-            Thread { id: 2, state: ThreadState::Stale, body: "stale".into(), file: None, line: None },
-            Thread { id: 3, state: ThreadState::Addressed, body: "addressed".into(), file: None, line: None },
-            Thread { id: 4, state: ThreadState::Resolved, body: "resolved".into(), file: None, line: None },
+            Thread { id: 1, state: ThreadState::Open, body: "open".into(), replies: vec![], file: None, line: None },
+            Thread { id: 2, state: ThreadState::Stale, body: "stale".into(), replies: vec![], file: None, line: None },
+            Thread { id: 3, state: ThreadState::Addressed, body: "addressed".into(), replies: vec![], file: None, line: None },
+            Thread { id: 4, state: ThreadState::Resolved, body: "resolved".into(), replies: vec![], file: None, line: None },
         ];
         let open = fetch_open_threads(&threads);
         assert_eq!(open.len(), 2, "expected 2 open/stale threads, got: {}", open.len());

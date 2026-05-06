@@ -62,6 +62,7 @@ mod tests {
             id: 42,
             state: ThreadState::Open,
             body: "needs fix".into(),
+            replies: vec![],
             file: Some("src/main.rs".into()),
             line: Some(10),
         });
@@ -81,6 +82,7 @@ mod tests {
             id: 43,
             state: ThreadState::Stale,
             body: "stale thread".into(),
+            replies: vec![],
             file: None,
             line: None,
         });
@@ -100,6 +102,7 @@ mod tests {
             id: 44,
             state: ThreadState::Resolved,
             body: "all good".into(),
+            replies: vec![],
             file: None,
             line: None,
         });

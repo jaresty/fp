@@ -31,6 +31,7 @@ pub struct Thread {
     pub id: u64,
     pub state: ThreadState,
     pub body: String,
+    pub replies: Vec<String>,
     pub file: Option<String>,
     pub line: Option<u32>,
 }
