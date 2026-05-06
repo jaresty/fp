@@ -130,6 +130,44 @@ mod tests {
         assert!(result.error_lines.is_empty());
     }
 
+    // D6-c: truncated logs include a --full-log hint; short logs do not
+    #[test]
+    fn truncation_hint_present_iff_log_was_truncated() {
+        let mut server = mockito::Server::new();
+
+        // 200-line log → truncated → hint must appear
+        let long_log_url = format!("{}/long-log", server.url());
+        server.mock("GET", "/repos/owner/repo/actions/jobs/10/logs")
+            .with_status(302).with_header("Location", &long_log_url).create();
+        let long_log: String = (1..=200).map(|i| format!("line {}", i)).collect::<Vec<_>>().join("\n");
+        server.mock("GET", "/long-log")
+            .with_status(200).with_header("content-type", "text/plain")
+            .with_body(&long_log).create();
+
+        // 50-line log → not truncated → no hint
+        let short_log_url = format!("{}/short-log", server.url());
+        server.mock("GET", "/repos/owner/repo/actions/jobs/11/logs")
+            .with_status(302).with_header("Location", &short_log_url).create();
+        let short_log: String = (1..=50).map(|i| format!("line {}", i)).collect::<Vec<_>>().join("\n");
+        server.mock("GET", "/short-log")
+            .with_status(200).with_header("content-type", "text/plain")
+            .with_body(&short_log).create();
+
+        let client = crate::ci::CiLogClient::with_base_url("tok".into(), server.url());
+
+        let long_result = client.fetch_logs(&CiProvider::GitHubActions {
+            owner: "owner".into(), repo: "repo".into(), job_id: 10,
+        }).unwrap();
+        assert!(long_result.contains("--full-log"),
+            "truncated log (200 lines) should contain --full-log hint, got: {}", long_result);
+
+        let short_result = client.fetch_logs(&CiProvider::GitHubActions {
+            owner: "owner".into(), repo: "repo".into(), job_id: 11,
+        }).unwrap();
+        assert!(!short_result.contains("--full-log"),
+            "short log (50 lines) should NOT contain --full-log hint, got: {}", short_result);
+    }
+
     // D6-b (fetch_raw_log): GitHub Actions fetch_raw_log returns full untruncated log (not tail)
     #[test]
     fn fetch_raw_log_github_actions_returns_full_text() {

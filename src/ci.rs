@@ -139,11 +139,11 @@ impl CiLogClient {
                 .send()?
                 .error_for_status()?;
             let text = log_resp.text()?;
-            return Ok(tail_lines(&text, 100));
+            return Ok(tail_lines_with_hint(&text, 100));
         }
 
         let text = resp.error_for_status()?.text()?;
-        Ok(tail_lines(&text, 100))
+        Ok(tail_lines_with_hint(&text, 100))
     }
 
     fn fetch_buildkite_logs(&self, org: &str, pipeline: &str, build_num: u64) -> Result<String> {
@@ -202,6 +202,17 @@ fn tail_lines(text: &str, n: usize) -> String {
     let lines: Vec<&str> = text.lines().collect();
     let start = lines.len().saturating_sub(n);
     lines[start..].join("\n")
+}
+
+fn tail_lines_with_hint(text: &str, n: usize) -> String {
+    let lines: Vec<&str> = text.lines().collect();
+    let truncated = lines.len() > n;
+    let start = lines.len().saturating_sub(n);
+    let mut out = lines[start..].join("\n");
+    if truncated {
+        out.push_str("\n(log truncated — use --full-log flag for the complete output)");
+    }
+    out
 }
 
 #[derive(Debug, serde::Serialize)]
