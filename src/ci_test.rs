@@ -106,4 +106,27 @@ mod tests {
         let result = client.fetch_logs(&CiProvider::Unknown(url.into())).unwrap();
         assert!(result.contains(url));
     }
+
+    // D6-a: extract_buildkite_log returns structured BuildkiteLogResult with step, error_lines, context_lines, log_url
+    #[test]
+    fn extract_buildkite_log_returns_structured_result() {
+        use crate::ci::extract_buildkite_log;
+        let raw_log = "Starting step rspec\nline1\nline2\nError: test failed\nline4\npanic: something bad";
+        let result = extract_buildkite_log(raw_log, "rspec", "https://buildkite.com/org/pipe/builds/1");
+        assert_eq!(result.step, "rspec");
+        assert!(result.error_lines.iter().any(|l| l.contains("Error: test failed")),
+            "error_lines should contain Error: line, got: {:?}", result.error_lines);
+        assert!(result.error_lines.iter().any(|l| l.contains("panic:")),
+            "error_lines should contain panic: line, got: {:?}", result.error_lines);
+        assert_eq!(result.log_url, "https://buildkite.com/org/pipe/builds/1");
+    }
+
+    // D6-b: extract_buildkite_log log_url is always present even when no errors found
+    #[test]
+    fn extract_buildkite_log_log_url_always_present() {
+        use crate::ci::extract_buildkite_log;
+        let result = extract_buildkite_log("all good\nno errors here", "build", "https://buildkite.com/x/y/builds/5");
+        assert_eq!(result.log_url, "https://buildkite.com/x/y/builds/5");
+        assert!(result.error_lines.is_empty());
+    }
 }

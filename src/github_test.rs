@@ -48,7 +48,7 @@ mod tests {
             .create();
         // review comments
         server
-            .mock("GET", "/repos/owner/repo/pulls/42/comments?per_page=100")
+            .mock("GET", "/repos/owner/repo/pulls/42/comments?per_page=100&page=1")
             .with_status(200)
             .with_header("content-type", "application/json")
             .with_body(r#"[]"#)
@@ -89,7 +89,7 @@ mod tests {
             .with_body(r#"[]"#)
             .create();
         server
-            .mock("GET", "/repos/owner/repo/pulls/1/comments?per_page=100")
+            .mock("GET", "/repos/owner/repo/pulls/1/comments?per_page=100&page=1")
             .with_status(200)
             .with_header("content-type", "application/json")
             .with_body(r#"[]"#)
@@ -141,7 +141,7 @@ mod tests {
             .with_body(r#"[]"#)
             .create();
         server
-            .mock("GET", "/repos/owner/repo/pulls/5/comments?per_page=100")
+            .mock("GET", "/repos/owner/repo/pulls/5/comments?per_page=100&page=1")
             .with_status(200)
             .with_header("content-type", "application/json")
             .with_body(r#"[]"#)
@@ -187,7 +187,7 @@ mod tests {
             .with_body(r#"[]"#)
             .create();
         server
-            .mock("GET", "/repos/owner/repo/pulls/6/comments?per_page=100")
+            .mock("GET", "/repos/owner/repo/pulls/6/comments?per_page=100&page=1")
             .with_status(200)
             .with_header("content-type", "application/json")
             .with_body(r#"[]"#)
@@ -222,7 +222,7 @@ mod tests {
             .with_body(r#"[]"#)
             .create();
         server
-            .mock("GET", "/repos/owner/repo/pulls/7/comments?per_page=100")
+            .mock("GET", "/repos/owner/repo/pulls/7/comments?per_page=100&page=1")
             .with_status(200)
             .with_header("content-type", "application/json")
             .with_body(
@@ -271,7 +271,7 @@ mod tests {
             .with_body(r#"[]"#)
             .create();
         server
-            .mock("GET", "/repos/owner/repo/pulls/11/comments?per_page=100")
+            .mock("GET", "/repos/owner/repo/pulls/11/comments?per_page=100&page=1")
             .with_status(200)
             .with_header("content-type", "application/json")
             .with_body(
@@ -318,7 +318,7 @@ mod tests {
             .with_body(r#"[]"#)
             .create();
         server
-            .mock("GET", "/repos/owner/repo/pulls/12/comments?per_page=100")
+            .mock("GET", "/repos/owner/repo/pulls/12/comments?per_page=100&page=1")
             .with_status(200)
             .with_header("content-type", "application/json")
             .with_body(
@@ -368,7 +368,7 @@ mod tests {
             .with_body(r#"[{"state":"APPROVED"}]"#)
             .create();
         server
-            .mock("GET", "/repos/owner/repo/pulls/8/comments?per_page=100")
+            .mock("GET", "/repos/owner/repo/pulls/8/comments?per_page=100&page=1")
             .with_status(200)
             .with_header("content-type", "application/json")
             .with_body(r#"[]"#)
@@ -405,7 +405,7 @@ mod tests {
             .with_body(r#"[{"state":"CHANGES_REQUESTED"}]"#)
             .create();
         server
-            .mock("GET", "/repos/owner/repo/pulls/9/comments?per_page=100")
+            .mock("GET", "/repos/owner/repo/pulls/9/comments?per_page=100&page=1")
             .with_status(200)
             .with_header("content-type", "application/json")
             .with_body(r#"[]"#)
@@ -462,7 +462,7 @@ mod tests {
             .with_body(r#"[]"#)
             .create();
         server
-            .mock("GET", "/repos/owner/repo/pulls/10/comments?per_page=100")
+            .mock("GET", "/repos/owner/repo/pulls/10/comments?per_page=100&page=1")
             .with_status(200)
             .with_header("content-type", "application/json")
             .with_body(r#"[]"#)
@@ -601,7 +601,7 @@ mod tests {
             .with_body(r#"[]"#)
             .create();
         server
-            .mock("GET", "/repos/owner/repo/pulls/30/comments?per_page=100")
+            .mock("GET", "/repos/owner/repo/pulls/30/comments?per_page=100&page=1")
             .with_status(200)
             .with_header("content-type", "application/json")
             .with_body(r#"[]"#)
@@ -655,7 +655,7 @@ mod tests {
             .with_body(r#"[]"#)
             .create();
         server
-            .mock("GET", "/repos/owner/repo/pulls/20/comments?per_page=100")
+            .mock("GET", "/repos/owner/repo/pulls/20/comments?per_page=100&page=1")
             .with_status(200)
             .with_header("content-type", "application/json")
             .with_body(r#"[]"#)
@@ -732,9 +732,9 @@ mod tests {
             .with_header("content-type", "application/json")
             .with_body(r#"[]"#)
             .create();
-        // The fix requires per_page=100 query param
+        // The fix requires per_page=100&page=1 (paginated path)
         server
-            .mock("GET", "/repos/owner/repo/pulls/42/comments?per_page=100")
+            .mock("GET", "/repos/owner/repo/pulls/42/comments?per_page=100&page=1")
             .with_status(200)
             .with_header("content-type", "application/json")
             .with_body(r#"[]"#)
@@ -742,5 +742,241 @@ mod tests {
 
         let pr = mock_client(&server).fetch_pr("owner", "repo", 42).unwrap();
         assert_eq!(pr.threads.len(), 0);
+    }
+
+    fn base_pr_mocks(server: &mut mockito::Server, pr_number: u64, comments_path: &str, comments_body: &str) {
+        server.mock("GET", format!("/repos/owner/repo/pulls/{}", pr_number).as_str())
+            .with_status(200).with_header("content-type", "application/json")
+            .with_body(format!(r#"{{"number":{},"title":"t","draft":false,"head":{{"ref":"b"}},"user":{{"login":"author"}}}}"#, pr_number))
+            .create();
+        server.mock("GET", format!("/repos/owner/repo/commits/b/check-runs").as_str())
+            .with_status(200).with_header("content-type", "application/json")
+            .with_body(r#"{"check_runs":[]}"#).create();
+        server.mock("GET", "/repos/owner/repo/branches/b/protection")
+            .with_status(404).create();
+        server.mock("GET", format!("/repos/owner/repo/pulls/{}/reviews", pr_number).as_str())
+            .with_status(200).with_header("content-type", "application/json")
+            .with_body(r#"[]"#).create();
+        server.mock("GET", comments_path)
+            .with_status(200).with_header("content-type", "application/json")
+            .with_body(comments_body).create();
+    }
+
+    // D1+D2: get_paginated follows Link header and accumulates items across pages, stopping when no next
+    #[test]
+    fn fetch_pr_paginates_comments_across_multiple_pages() {
+        let mut server = mockito::Server::new();
+        let page2_url = format!("{}/repos/owner/repo/pulls/43/comments?per_page=100&page=2", server.url());
+        let link_header = format!(r#"<{}>; rel="next""#, page2_url);
+
+        server.mock("GET", "/repos/owner/repo/pulls/43")
+            .with_status(200).with_header("content-type", "application/json")
+            .with_body(r#"{"number":43,"title":"t","draft":false,"head":{"ref":"b"},"user":{"login":"author"}}"#)
+            .create();
+        server.mock("GET", "/repos/owner/repo/commits/b/check-runs")
+            .with_status(200).with_header("content-type", "application/json")
+            .with_body(r#"{"check_runs":[]}"#).create();
+        server.mock("GET", "/repos/owner/repo/branches/b/protection")
+            .with_status(404).create();
+        server.mock("GET", "/repos/owner/repo/pulls/43/reviews")
+            .with_status(200).with_header("content-type", "application/json")
+            .with_body(r#"[]"#).create();
+
+        // Page 1: returns one comment, has Link: next
+        server.mock("GET", "/repos/owner/repo/pulls/43/comments?per_page=100&page=1")
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_header("link", &link_header)
+            .with_body(r#"[{"id":1,"path":"a.rs","line":1,"body":"comment1","user":{"login":"reviewer"},"in_reply_to_id":null}]"#)
+            .create();
+
+        // Page 2: returns one comment, no Link header
+        server.mock("GET", "/repos/owner/repo/pulls/43/comments?per_page=100&page=2")
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body(r#"[{"id":2,"path":"b.rs","line":2,"body":"comment2","user":{"login":"reviewer"},"in_reply_to_id":null}]"#)
+            .create();
+
+        let pr = mock_client(&server).fetch_pr("owner", "repo", 43).unwrap();
+        // Both comments from both pages must be present
+        assert_eq!(pr.threads.len(), 2, "expected threads from both pages, got {}", pr.threads.len());
+    }
+
+    // D3: comments endpoint no longer uses bare per_page=100 — uses paginated path
+    #[test]
+    fn fetch_pr_comments_uses_paginated_path_not_flat_per_page() {
+        let mut server = mockito::Server::new();
+
+        server.mock("GET", "/repos/owner/repo/pulls/44")
+            .with_status(200).with_header("content-type", "application/json")
+            .with_body(r#"{"number":44,"title":"t","draft":false,"head":{"ref":"b"},"user":{"login":"author"}}"#)
+            .create();
+        server.mock("GET", "/repos/owner/repo/commits/b/check-runs")
+            .with_status(200).with_header("content-type", "application/json")
+            .with_body(r#"{"check_runs":[]}"#).create();
+        server.mock("GET", "/repos/owner/repo/branches/b/protection")
+            .with_status(404).create();
+        server.mock("GET", "/repos/owner/repo/pulls/44/reviews")
+            .with_status(200).with_header("content-type", "application/json")
+            .with_body(r#"[]"#).create();
+
+        // Only register the paginated path (page=1), NOT the flat per_page=100 path
+        server.mock("GET", "/repos/owner/repo/pulls/44/comments?per_page=100&page=1")
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body(r#"[]"#)
+            .create();
+
+        // If fetch_pr still uses ?per_page=100 (no page=), this will 404 and the test will fail
+        let pr = mock_client(&server).fetch_pr("owner", "repo", 44).unwrap();
+        assert_eq!(pr.threads.len(), 0);
+    }
+
+    // D3-a: check-run deduplication — when same name appears twice, keep only latest started_at
+    #[test]
+    fn check_run_dedup_keeps_latest_by_started_at() {
+        let mut server = mockito::Server::new();
+        server.mock("GET", "/repos/owner/repo/pulls/50")
+            .with_status(200).with_header("content-type", "application/json")
+            .with_body(r#"{"number":50,"title":"t","draft":false,"head":{"ref":"br","sha":"sha50"},"base":{"ref":"main"},"user":{"login":"author"}}"#)
+            .create();
+        // Two runs with same name: old=failure, new=success
+        server.mock("GET", "/repos/owner/repo/commits/br/check-runs")
+            .with_status(200).with_header("content-type", "application/json")
+            .with_body(r#"{"check_runs":[
+                {"name":"rspec","status":"completed","conclusion":"failure","started_at":"2026-05-01T00:00:00Z","details_url":null},
+                {"name":"rspec","status":"completed","conclusion":"success","started_at":"2026-05-06T00:00:00Z","details_url":null}
+            ]}"#)
+            .create();
+        server.mock("GET", "/repos/owner/repo/branches/main/protection")
+            .with_status(404).create();
+        server.mock("GET", "/repos/owner/repo/commits/sha50/statuses")
+            .with_status(200).with_header("content-type", "application/json")
+            .with_body(r#"[]"#).create();
+        server.mock("GET", "/repos/owner/repo/pulls/50/reviews")
+            .with_status(200).with_header("content-type", "application/json")
+            .with_body(r#"[]"#).create();
+        server.mock("GET", "/repos/owner/repo/pulls/50/comments?per_page=100&page=1")
+            .with_status(200).with_header("content-type", "application/json")
+            .with_body(r#"[]"#).create();
+
+        let pr = mock_client(&server).fetch_pr("owner", "repo", 50).unwrap();
+        let rspec_checks: Vec<_> = pr.checks.iter().filter(|c| c.name == "rspec").collect();
+        assert_eq!(rspec_checks.len(), 1, "expected exactly 1 rspec check after dedup");
+        assert_eq!(rspec_checks[0].status, crate::model::CheckStatus::Pass,
+            "expected latest (passing) run to win");
+    }
+
+    // D3-b: commit status dedup is already handled by seen_contexts; this verifies the second
+    // occurrence of the same context is dropped even when it has a different state
+    #[test]
+    fn commit_status_dedup_drops_duplicate_context() {
+        let mut server = mockito::Server::new();
+        server.mock("GET", "/repos/owner/repo/pulls/51")
+            .with_status(200).with_header("content-type", "application/json")
+            .with_body(r#"{"number":51,"title":"t","draft":false,"head":{"ref":"br51","sha":"sha51"},"base":{"ref":"main"},"user":{"login":"author"}}"#)
+            .create();
+        server.mock("GET", "/repos/owner/repo/commits/br51/check-runs")
+            .with_status(200).with_header("content-type", "application/json")
+            .with_body(r#"{"check_runs":[]}"#).create();
+        server.mock("GET", "/repos/owner/repo/branches/main/protection")
+            .with_status(404).create();
+        // Two statuses with same context: first=success (most recent per API), second=failure (older)
+        server.mock("GET", "/repos/owner/repo/commits/sha51/statuses")
+            .with_status(200).with_header("content-type", "application/json")
+            .with_body(r#"[
+                {"context":"buildkite/primary","state":"success","target_url":"https://buildkite.com/org/p/builds/1"},
+                {"context":"buildkite/primary","state":"failure","target_url":"https://buildkite.com/org/p/builds/0"}
+            ]"#).create();
+        server.mock("GET", "/repos/owner/repo/pulls/51/reviews")
+            .with_status(200).with_header("content-type", "application/json")
+            .with_body(r#"[]"#).create();
+        server.mock("GET", "/repos/owner/repo/pulls/51/comments?per_page=100&page=1")
+            .with_status(200).with_header("content-type", "application/json")
+            .with_body(r#"[]"#).create();
+
+        let pr = mock_client(&server).fetch_pr("owner", "repo", 51).unwrap();
+        let bk: Vec<_> = pr.checks.iter().filter(|c| c.name == "buildkite/primary").collect();
+        assert_eq!(bk.len(), 1, "expected exactly 1 buildkite/primary status after dedup");
+        assert_eq!(bk[0].status, crate::model::CheckStatus::Pass,
+            "expected first (most recent) status entry to win");
+    }
+
+    // D2-a: fetch_resolved_threads returns threads with resolved state
+    #[test]
+    fn fetch_resolved_threads_returns_resolved() {
+        use crate::github::fetch_resolved_threads;
+        // A resolved thread: root comment with resolved_at set (GitHub marks via pull_request_review_threads API)
+        // fp models resolved threads as ThreadState::Resolved
+        let threads = vec![
+            crate::model::Thread {
+                id: 1,
+                state: crate::model::ThreadState::Resolved,
+                body: "please fix this".to_string(),
+                file: Some("src/main.rs".to_string()),
+                line: Some(42),
+            },
+            crate::model::Thread {
+                id: 2,
+                state: crate::model::ThreadState::Open,
+                body: "another issue".to_string(),
+                file: None,
+                line: None,
+            },
+        ];
+        let resolved = fetch_resolved_threads(&threads);
+        assert_eq!(resolved.len(), 1, "expected only 1 resolved thread, got: {}", resolved.len());
+        assert_eq!(resolved[0].id, 1);
+    }
+
+    // D4-a: resolve_track_branch returns fetched branch when explicit is absent
+    #[test]
+    fn resolve_track_branch_uses_fetched_when_explicit_absent() {
+        use crate::github::resolve_track_branch;
+        let result = resolve_track_branch(None, Some("feature/foo".to_string()), 99);
+        assert_eq!(result.unwrap(), "feature/foo");
+    }
+
+    // D4-b: resolve_track_branch errors with corrective message when both fail
+    #[test]
+    fn resolve_track_branch_errors_with_corrective_message() {
+        use crate::github::resolve_track_branch;
+        let err = resolve_track_branch(None, None, 99).unwrap_err();
+        let msg = err.to_string();
+        assert!(msg.contains("fp track 99 --branch"), "error should contain corrective command, got: {msg}");
+    }
+
+    // D4-c: resolve_track_branch prefers explicit over fetched
+    #[test]
+    fn resolve_track_branch_prefers_explicit() {
+        use crate::github::resolve_track_branch;
+        let result = resolve_track_branch(Some("explicit-branch".to_string()), Some("fetched-branch".to_string()), 99);
+        assert_eq!(result.unwrap(), "explicit-branch");
+    }
+
+    // D1-a: resolve_github_token uses gh_token fallback when GITHUB_TOKEN is absent
+    #[test]
+    fn resolve_github_token_uses_gh_fallback() {
+        use crate::github::resolve_github_token_with;
+        let result = resolve_github_token_with(None, Some("gh-token-from-cli".to_string()));
+        assert_eq!(result.unwrap(), "gh-token-from-cli");
+    }
+
+    // D1-b: resolve_github_token errors with enumerated remediation when both sources fail
+    #[test]
+    fn resolve_github_token_error_enumerates_options() {
+        use crate::github::resolve_github_token_with;
+        let err = resolve_github_token_with(None, None).unwrap_err();
+        let msg = err.to_string();
+        assert!(msg.contains("export GITHUB_TOKEN"), "error should mention export GITHUB_TOKEN, got: {msg}");
+        assert!(msg.contains("gh auth login"), "error should mention gh auth login, got: {msg}");
+    }
+
+    // D1-c: resolve_github_token returns env var when set, without calling gh
+    #[test]
+    fn resolve_github_token_prefers_env_var() {
+        use crate::github::resolve_github_token_with;
+        let result = resolve_github_token_with(Some("env-token".to_string()), None);
+        assert_eq!(result.unwrap(), "env-token");
     }
 }

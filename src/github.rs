@@ -2,6 +2,19 @@ use anyhow::Result;
 use std::collections::HashSet;
 use crate::model::{Check, CheckStatus, PrState, Thread, ThreadState};
 
+fn parse_next_link(link_header: &str) -> Option<String> {
+    // Link: <url>; rel="next", <url>; rel="last"
+    for part in link_header.split(',') {
+        let part = part.trim();
+        if part.contains(r#"rel="next""#) {
+            if let (Some(start), Some(end)) = (part.find('<'), part.find('>')) {
+                return Some(part[start + 1..end].to_string());
+            }
+        }
+    }
+    None
+}
+
 pub struct GithubClient {
     token: String,
     base_url: String,
@@ -29,6 +42,32 @@ impl GithubClient {
             .error_for_status()?
             .json::<serde_json::Value>()?;
         Ok(resp)
+    }
+
+    fn get_paginated(&self, path: &str) -> Result<serde_json::Value> {
+        let sep = if path.contains('?') { "&" } else { "?" };
+        let first_url = format!("{}{}{sep}per_page=100&page=1", self.base_url, path);
+        let mut all_items: Vec<serde_json::Value> = Vec::new();
+        let mut next_url: Option<String> = Some(first_url);
+        while let Some(url) = next_url {
+            let resp = reqwest::blocking::Client::new()
+                .get(&url)
+                .header("Authorization", format!("Bearer {}", self.token))
+                .header("Accept", "application/vnd.github+json")
+                .header("User-Agent", "fp/0.1")
+                .header("X-GitHub-Api-Version", "2022-11-28")
+                .send()?
+                .error_for_status()?;
+            next_url = resp.headers()
+                .get("link")
+                .and_then(|v| v.to_str().ok())
+                .and_then(parse_next_link);
+            let page: serde_json::Value = resp.json()?;
+            if let Some(arr) = page.as_array() {
+                all_items.extend(arr.iter().cloned());
+            }
+        }
+        Ok(serde_json::Value::Array(all_items))
     }
 
     pub fn reply_to_comment(&self, owner: &str, repo: &str, pr_number: u64, comment_id: u64, body: &str) -> Result<String> {
@@ -110,10 +149,24 @@ impl GithubClient {
             "/repos/{}/{}/commits/{}/statuses", owner, repo, sha
         )).unwrap_or_default();
 
-        let mut checks: Vec<Check> = checks_json["check_runs"]
-            .as_array()
-            .unwrap_or(&vec![])
-            .iter()
+        // Build check-runs, deduplicated by name keeping the latest started_at (ISO8601 lexicographic)
+        // Insertion order preserved: track name ordering for stable output
+        let mut name_order: Vec<String> = Vec::new();
+        let mut best_run_by_name: std::collections::HashMap<String, serde_json::Value> = std::collections::HashMap::new();
+        for c in checks_json["check_runs"].as_array().unwrap_or(&vec![]) {
+            let name = c["name"].as_str().unwrap_or("").to_string();
+            let started_at = c["started_at"].as_str().unwrap_or("").to_string();
+            if let Some(existing) = best_run_by_name.get(&name) {
+                if started_at.as_str() > existing["started_at"].as_str().unwrap_or("") {
+                    best_run_by_name.insert(name, c.clone());
+                }
+            } else {
+                name_order.push(name.clone());
+                best_run_by_name.insert(name, c.clone());
+            }
+        }
+        let mut checks: Vec<Check> = name_order.iter()
+            .filter_map(|name| best_run_by_name.get(name))
             .map(|c| {
                 let name = c["name"].as_str().unwrap_or("").to_string();
                 let status = match (c["status"].as_str(), c["conclusion"].as_str()) {
@@ -156,7 +209,7 @@ impl GithubClient {
 
         // 5. Review comments → threads grouped by root (in_reply_to_id == null)
         let pr_author = pr_json["user"]["login"].as_str().unwrap_or("").to_string();
-        let comments_json = self.get(&format!("/repos/{}/{}/pulls/{}/comments?per_page=100", owner, repo, pr_number))?;
+        let comments_json = self.get_paginated(&format!("/repos/{}/{}/pulls/{}/comments", owner, repo, pr_number))?;
         let all_comments = comments_json.as_array().cloned().unwrap_or_default();
 
         // Build ordered list: (root_id, comments_in_thread) preserving API order
@@ -195,6 +248,56 @@ impl GithubClient {
 
         Ok(PrState { number: pr_number, title, branch, draft, approved, checks, threads })
     }
+}
+
+/// Resolve GitHub token: GITHUB_TOKEN env → gh CLI → hard error with enumerated remediation.
+/// `env_token` and `gh_token` are injectable for tests; pass `None` to use live sources.
+pub fn resolve_github_token_with(
+    env_token: Option<String>,
+    gh_token: Option<String>,
+) -> Result<String> {
+    if let Some(t) = env_token.filter(|s| !s.is_empty()) {
+        return Ok(t);
+    }
+    if let Some(t) = gh_token.filter(|s| !s.is_empty()) {
+        return Ok(t);
+    }
+    anyhow::bail!(
+        "fp: no GitHub credentials found.\n  Option 1: export GITHUB_TOKEN=<token>\n  Option 2: gh auth login"
+    )
+}
+
+/// Return only threads with Resolved state — the audit trail for `fp threads --resolved`.
+pub fn fetch_resolved_threads(threads: &[crate::model::Thread]) -> Vec<&crate::model::Thread> {
+    threads.iter().filter(|t| t.state == crate::model::ThreadState::Resolved).collect()
+}
+
+/// Resolve the branch for a tracked PR. Prefers explicit, then fetched; errors with corrective
+/// message when both are absent.
+pub fn resolve_track_branch(
+    explicit: Option<String>,
+    fetched: Option<String>,
+    pr_number: u64,
+) -> Result<String> {
+    if let Some(b) = explicit.filter(|s| !s.is_empty()) { return Ok(b); }
+    if let Some(b) = fetched.filter(|s| !s.is_empty()) { return Ok(b); }
+    anyhow::bail!(
+        "fp: could not determine branch for PR #{}.\nRun: fp track {} --branch <branch-name>",
+        pr_number, pr_number
+    )
+}
+
+/// Production token resolution: reads GITHUB_TOKEN env, falls back to `gh auth token`.
+pub fn resolve_github_token() -> Result<String> {
+    let env_token = std::env::var("GITHUB_TOKEN").ok();
+    let gh_token = std::process::Command::new("gh")
+        .args(["auth", "token"])
+        .output()
+        .ok()
+        .filter(|o| o.status.success())
+        .and_then(|o| String::from_utf8(o.stdout).ok())
+        .map(|s| s.trim().to_string());
+    resolve_github_token_with(env_token, gh_token)
 }
 
 /// Detect owner/repo from `git remote get-url origin`

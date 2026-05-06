@@ -20,7 +20,7 @@ use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
 use std::path::PathBuf;
 
-use github::{GithubClient, detect_repo};
+use github::{GithubClient, detect_repo, resolve_github_token, resolve_track_branch, fetch_resolved_threads};
 use store::{Store, TrackedPr};
 use tasks::{generate_tasks, task_diff};
 
@@ -85,6 +85,24 @@ enum Commands {
         pr: u64,
         /// Context hint from task output (check name or thread:<id>)
         hint: String,
+        /// Write the full raw log to a temp file and print its path
+        #[arg(long)]
+        full_log: bool,
+    },
+    /// Show review threads for a PR
+    Threads {
+        /// PR number
+        pr: u64,
+        /// Show resolved threads (default: open/stale only)
+        #[arg(long)]
+        resolved: bool,
+        #[arg(long)]
+        json: bool,
+    },
+    /// Print machine-readable capability manifest for agent consumption
+    AgentContext {
+        #[arg(long)]
+        json: bool,
     },
     /// Create a draft PR for the current branch and start tracking it
     Create {
@@ -102,6 +120,18 @@ enum Commands {
         #[arg(long)]
         path: Option<std::path::PathBuf>,
     },
+}
+
+/// Send a macOS system notification via osascript. Silently ignores errors on non-macOS or
+/// headless environments where notifications are unavailable.
+fn notify_macos(message: &str) {
+    let script = format!(
+        r#"display notification "{}" with title "fp""#,
+        message.replace('"', "'")
+    );
+    let _ = std::process::Command::new("osascript")
+        .args(["-e", &script])
+        .output();
 }
 
 fn git_dir() -> Result<PathBuf> {
@@ -208,32 +238,22 @@ fn main() -> Result<()> {
         }
 
         Commands::Track { pr, title, branch } => {
-            let (title, branch) = match (title, branch) {
-                (Some(t), Some(b)) => (t, b),
-                (t_opt, b_opt) => {
-                    let token = std::env::var("GITHUB_TOKEN").ok();
-                    let repo = detect_repo();
-                    if let (Some(tok), Some((owner, repo_name))) = (token, repo) {
-                        let client = GithubClient::new(tok);
-                        match client.fetch_pr_metadata(&owner, &repo_name, pr) {
-                            Ok((fetched_title, fetched_branch)) => (
-                                t_opt.unwrap_or(fetched_title),
-                                b_opt.unwrap_or(fetched_branch),
-                            ),
-                            Err(_) => (
-                                t_opt.unwrap_or_else(|| format!("PR #{}", pr)),
-                                b_opt.unwrap_or_default(),
-                            ),
-                        }
-                    } else {
-                        (
-                            t_opt.unwrap_or_else(|| format!("PR #{}", pr)),
-                            b_opt.unwrap_or_default(),
-                        )
-                    }
-                }
+            let (title, resolved_branch) = {
+                let token = resolve_github_token().ok();
+                let repo = detect_repo();
+                let (fetched_title, fetched_branch) = if let (Some(tok), Some((owner, repo_name))) = (token, repo) {
+                    let client = GithubClient::new(tok);
+                    client.fetch_pr_metadata(&owner, &repo_name, pr).ok()
+                        .map(|(t, b)| (Some(t), Some(b)))
+                        .unwrap_or((None, None))
+                } else {
+                    (None, None)
+                };
+                let resolved_title = title.or(fetched_title).unwrap_or_else(|| format!("PR #{}", pr));
+                let resolved_branch = resolve_track_branch(branch, fetched_branch, pr)?;
+                (resolved_title, resolved_branch)
             };
-            store.track(TrackedPr { number: pr, title: title.clone(), branch })?;
+            store.track(TrackedPr { number: pr, title: title.clone(), branch: resolved_branch })?;
             println!("Tracking PR #{} — {}", pr, title);
         }
 
@@ -243,8 +263,7 @@ fn main() -> Result<()> {
         }
 
         Commands::Reply { pr, thread_id, message } => {
-            let token = std::env::var("GITHUB_TOKEN")
-                .context("GITHUB_TOKEN not set")?;
+            let token = resolve_github_token()?;
             let (owner, repo_name) = detect_repo()
                 .context("could not detect GitHub repo from git remote")?;
             let client = GithubClient::new(token);
@@ -283,6 +302,7 @@ fn main() -> Result<()> {
                         for t in &new {
                             let flag = if t.blocking { "[blocking]" } else { "[waiting]" };
                             println!("+ PR #{} {} {:?}: {}", tracked.number, flag, t.task_type, t.description);
+                            notify_macos(&format!("PR #{}: {}", tracked.number, t.description));
                         }
                         for t in &resolved {
                             println!("✓ PR #{} resolved {:?}: {}", tracked.number, t.task_type, t.description);
@@ -307,7 +327,7 @@ fn main() -> Result<()> {
         }
 
         Commands::Create { title, base } => {
-            let token = std::env::var("GITHUB_TOKEN").context("GITHUB_TOKEN not set")?;
+            let token = resolve_github_token()?;
             let (owner, repo_name) = detect_repo()
                 .context("could not detect GitHub repo from git remote")?;
 
@@ -372,7 +392,7 @@ fn main() -> Result<()> {
             }
         }
 
-        Commands::Context { pr, hint } => {
+        Commands::Context { pr, hint, full_log } => {
             let state = store.load()?;
             let token = std::env::var("GITHUB_TOKEN").ok();
             let repo = detect_repo();
@@ -409,11 +429,23 @@ fn main() -> Result<()> {
                     println!("Check: {} ({:?})", check.name, check.status);
                     if let Some(url) = &check.details_url {
                         let provider = ci::parse_ci_provider(url);
-                        let token = std::env::var("GITHUB_TOKEN").unwrap_or_default();
+                        let token = resolve_github_token().unwrap_or_default();
                         let log_client = ci::CiLogClient::new(token);
-                        match log_client.fetch_logs(&provider) {
-                            Ok(logs) => println!("{}", logs),
-                            Err(e) => println!("  Log URL: {}\n  (fetch failed: {})", url, e),
+                        if full_log {
+                            // Write the full raw log to a temp file
+                            match log_client.fetch_raw_log(&provider) {
+                                Ok(raw) => {
+                                    let tmp = std::env::temp_dir().join(format!("fp-log-{}-{}.txt", pr, hint.replace('/', "-")));
+                                    std::fs::write(&tmp, &raw)?;
+                                    println!("full_log_path: {}", tmp.display());
+                                }
+                                Err(e) => println!("  Log URL: {}\n  (fetch failed: {})", url, e),
+                            }
+                        } else {
+                            match log_client.fetch_logs(&provider) {
+                                Ok(logs) => println!("{}", logs),
+                                Err(e) => println!("  Log URL: {}\n  (fetch failed: {})", url, e),
+                            }
                         }
                     } else {
                         println!("  No details URL available");
@@ -421,6 +453,78 @@ fn main() -> Result<()> {
                 } else {
                     println!("Check '{}' not found in PR #{}", hint, pr);
                 }
+            }
+        }
+
+        Commands::Threads { pr, resolved, json } => {
+            let state = store.load()?;
+            let token = resolve_github_token().ok();
+            let repo = detect_repo();
+
+            let tracked = state.prs.get(&pr)
+                .with_context(|| format!("PR #{} is not tracked. Run `fp track {}`", pr, pr))?;
+
+            let pr_state = if let (Some(tok), Some((owner, repo_name))) = (token, repo) {
+                let client = GithubClient::new(tok);
+                client.fetch_pr(&owner, &repo_name, pr).ok()
+            } else {
+                None
+            }.unwrap_or_else(|| model::PrState {
+                number: tracked.number, title: tracked.title.clone(), branch: tracked.branch.clone(),
+                draft: false, approved: false, checks: vec![], threads: vec![],
+            });
+
+            let threads: Vec<&model::Thread> = if resolved {
+                fetch_resolved_threads(&pr_state.threads)
+            } else {
+                pr_state.threads.iter()
+                    .filter(|t| matches!(t.state, model::ThreadState::Open | model::ThreadState::Stale))
+                    .collect()
+            };
+
+            if json {
+                println!("{}", serde_json::to_string_pretty(&threads)?);
+            } else {
+                let label = if resolved { "resolved" } else { "open" };
+                if threads.is_empty() {
+                    println!("No {} threads on PR #{}.", label, pr);
+                } else {
+                    println!("PR #{} — {} {} thread(s):", pr, threads.len(), label);
+                    for t in threads {
+                        print!("  #{} ({:?})", t.id, t.state);
+                        if let (Some(f), Some(l)) = (&t.file, t.line) { print!(" {}:{}", f, l); }
+                        println!("\n    {}", t.body);
+                    }
+                }
+            }
+        }
+
+        Commands::AgentContext { json } => {
+            let manifest = serde_json::json!({
+                "name": "fp",
+                "version": env!("CARGO_PKG_VERSION"),
+                "description": "PR convergence loop — surfaces blocking tasks, manages CI, rebases stacks",
+                "auth_required": "GITHUB_TOKEN env var or gh CLI (gh auth login)",
+                "commands": [
+                    {"name": "ls", "description": "List tracked PRs with status", "json": true},
+                    {"name": "status", "description": "Show blocking tasks for a PR", "json": true},
+                    {"name": "track", "description": "Add a PR to tracking", "flags": ["--branch", "--title"]},
+                    {"name": "untrack", "description": "Remove a PR from tracking"},
+                    {"name": "watch", "description": "Poll for task changes continuously", "flags": ["--once", "--interval"]},
+                    {"name": "reply", "description": "Post a reply to a review thread"},
+                    {"name": "context", "description": "Fetch CI logs or thread body for a task hint", "flags": ["--full-log"]},
+                    {"name": "threads", "description": "List review threads", "flags": ["--resolved", "--json"]},
+                    {"name": "create", "description": "Create a draft PR and track it"},
+                    {"name": "rebase-stack", "description": "Rebase all tracked PRs in stack order"},
+                    {"name": "agent-context", "description": "This manifest", "json": true}
+                ]
+            });
+            if json {
+                println!("{}", serde_json::to_string_pretty(&manifest)?);
+            } else {
+                println!("fp agent-context — run with --json for machine-readable output");
+                println!("auth: GITHUB_TOKEN or gh auth login");
+                println!("commands: ls, status, track, untrack, watch, reply, context, threads, create, rebase-stack");
             }
         }
     }
