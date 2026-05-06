@@ -77,6 +77,14 @@ pub fn rebase_stack(branches: &[String], parent_of: &HashMap<String, Option<Stri
     Ok(RebaseResult { conflicts, rebased })
 }
 
+pub fn resolve_work_dir(_git_dir: &Path) -> Result<std::path::PathBuf> {
+    let out = std::process::Command::new("git")
+        .args(["rev-parse", "--show-toplevel"])
+        .output()?;
+    let path = String::from_utf8(out.stdout)?.trim().to_string();
+    Ok(std::path::PathBuf::from(path))
+}
+
 fn git_rev_parse(branch: &str, dir: &Path) -> Result<String> {
     let out = std::process::Command::new("git")
         .args(["rev-parse", branch])

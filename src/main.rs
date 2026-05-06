@@ -70,6 +70,13 @@ enum Commands {
         #[arg(long, default_value = "30")]
         interval: u64,
     },
+    /// Post a general comment on a PR (not a thread reply)
+    Comment {
+        /// PR number
+        pr: u64,
+        /// Comment body
+        message: String,
+    },
     /// Reply to a PR review thread and mark it as addressed
     Reply {
         /// PR number
@@ -273,6 +280,15 @@ fn main() -> Result<()> {
             println!("Replied to thread #{}: {}", thread_id, posted);
         }
 
+        Commands::Comment { pr, message } => {
+            let token = resolve_github_token()?;
+            let (owner, repo_name) = detect_repo()
+                .context("could not detect GitHub repo from git remote")?;
+            let client = GithubClient::new(token);
+            let url = client.post_pr_comment(&owner, &repo_name, pr, &message)?;
+            println!("Comment posted: {}", url);
+        }
+
         Commands::Watch { once, interval } => {
             let mut prev_tasks: std::collections::HashMap<u64, Vec<tasks::Task>> = std::collections::HashMap::new();
             loop {
@@ -376,9 +392,7 @@ fn main() -> Result<()> {
             let branches: Vec<String> = state.prs.values().map(|p| p.branch.clone()).collect();
 
             // Detect stack topology from git
-            let work_dir = git_dir.parent()
-                .map(|p| p.to_path_buf())
-                .unwrap_or_else(|| std::env::current_dir().unwrap());
+            let work_dir = stack::resolve_work_dir(&git_dir)?;
 
             let parent_of = stack::detect_parent_of(&branches, &work_dir)?;
             let result = stack::rebase_stack(&branches, &parent_of, &work_dir)?;

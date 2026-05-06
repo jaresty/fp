@@ -86,6 +86,22 @@ impl GithubClient {
         Ok(resp["body"].as_str().unwrap_or("").to_string())
     }
 
+    pub fn post_pr_comment(&self, owner: &str, repo: &str, pr_number: u64, body: &str) -> Result<String> {
+        let url = format!("{}/repos/{}/{}/issues/{}/comments", self.base_url, owner, repo, pr_number);
+        let payload = serde_json::json!({ "body": body });
+        let resp = reqwest::blocking::Client::new()
+            .post(&url)
+            .header("Authorization", format!("Bearer {}", self.token))
+            .header("Accept", "application/vnd.github+json")
+            .header("User-Agent", "fp/0.1")
+            .header("X-GitHub-Api-Version", "2022-11-28")
+            .json(&payload)
+            .send()?
+            .error_for_status()?
+            .json::<serde_json::Value>()?;
+        Ok(resp["html_url"].as_str().unwrap_or("").to_string())
+    }
+
     pub fn create_pr(&self, owner: &str, repo: &str, title: &str, head: &str, base: &str, draft: bool) -> Result<PrState> {
         let url = format!("{}/repos/{}/{}/pulls", self.base_url, owner, repo);
         let payload = serde_json::json!({ "title": title, "head": head, "base": base, "draft": draft });
@@ -201,11 +217,16 @@ impl GithubClient {
 
         // 4. Reviews → approval
         let reviews_json = self.get(&format!("/repos/{}/{}/pulls/{}/reviews", owner, repo, pr_number))?;
-        let approved = reviews_json
+        let any_approved = reviews_json
             .as_array()
             .unwrap_or(&vec![])
             .iter()
             .any(|r| r["state"].as_str() == Some("APPROVED"));
+        let rr = self.get(&format!("/repos/{}/{}/pulls/{}/requested_reviewers", owner, repo, pr_number))
+            .unwrap_or_default();
+        let rr_users = rr["users"].as_array().map(|a| a.len()).unwrap_or(0);
+        let rr_teams = rr["teams"].as_array().map(|a| a.len()).unwrap_or(0);
+        let approved = any_approved && rr_users == 0 && rr_teams == 0;
 
         // 5. Review comments → threads grouped by root (in_reply_to_id == null)
         let pr_author = pr_json["user"]["login"].as_str().unwrap_or("").to_string();

@@ -82,6 +82,14 @@ mod tests {
         assert_eq!(parent_of.get("feat/top"), Some(&Some("feat/base".to_string())));
     }
 
+    // RS0: resolve_work_dir returns an absolute, existing directory
+    #[test]
+    fn resolve_work_dir_returns_absolute_path() {
+        let dir = crate::stack::resolve_work_dir(std::path::Path::new(".git")).unwrap();
+        assert!(dir.is_absolute(), "work_dir must be absolute, got: {:?}", dir);
+        assert!(dir.is_dir(), "work_dir must be an existing directory, got: {:?}", dir);
+    }
+
     // RS2: rebase_stack rebases feat/top onto feat/base's current tip
     #[test]
     fn rebase_stack_rebases_in_order() {

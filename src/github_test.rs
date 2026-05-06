@@ -1010,4 +1010,53 @@ mod tests {
         let result = resolve_github_token_with(Some("env-token".to_string()), None);
         assert_eq!(result.unwrap(), "env-token");
     }
+
+    // C1: post_pr_comment posts body to issues comments API and returns the posted URL
+    #[test]
+    fn post_pr_comment_calls_issues_api() {
+        let mut server = mockito::Server::new();
+        server.mock("POST", "/repos/owner/repo/issues/55/comments")
+            .with_status(201)
+            .with_header("content-type", "application/json")
+            .with_body(r#"{"html_url":"https://github.com/owner/repo/issues/55#issuecomment-999","body":"hello"}"#)
+            .create();
+
+        let result = mock_client(&server).post_pr_comment("owner", "repo", 55, "hello").unwrap();
+        assert!(result.contains("issuecomment"), "should return the comment URL, got: {result}");
+    }
+
+    // RR1: approved is false when requested_reviewers has pending teams, even with an APPROVED review
+    #[test]
+    fn approved_false_when_requested_reviewers_teams_pending() {
+        let mut server = mockito::Server::new();
+        server.mock("GET", "/repos/owner/repo/pulls/99")
+            .with_status(200).with_header("content-type","application/json")
+            .with_body(r#"{"number":99,"title":"t","draft":false,"head":{"ref":"b","sha":"sha99"},"base":{"ref":"main"},"user":{"login":"author"}}"#)
+            .create();
+        server.mock("GET", "/repos/owner/repo/commits/b/check-runs")
+            .with_status(200).with_header("content-type","application/json")
+            .with_body(r#"{"check_runs":[]}"#).create();
+        server.mock("GET", "/repos/owner/repo/branches/main/protection")
+            .with_status(200).with_header("content-type","application/json")
+            .with_body(r#"{"required_status_checks":{"contexts":[]}}"#).create();
+        server.mock("GET", "/repos/owner/repo/branches/b/protection")
+            .with_status(404).create();
+        server.mock("GET", "/repos/owner/repo/commits/sha99/statuses")
+            .with_status(200).with_header("content-type","application/json")
+            .with_body(r#"[]"#).create();
+        // One APPROVED review exists
+        server.mock("GET", "/repos/owner/repo/pulls/99/reviews")
+            .with_status(200).with_header("content-type","application/json")
+            .with_body(r#"[{"state":"APPROVED","user":{"login":"reviewer1"}}]"#).create();
+        // But a team review is still pending
+        server.mock("GET", "/repos/owner/repo/pulls/99/requested_reviewers")
+            .with_status(200).with_header("content-type","application/json")
+            .with_body(r#"{"users":[],"teams":[{"slug":"codeowners-team"}]}"#).create();
+        server.mock("GET", "/repos/owner/repo/pulls/99/comments?per_page=100&page=1")
+            .with_status(200).with_header("content-type","application/json")
+            .with_body(r#"[]"#).create();
+
+        let pr = mock_client(&server).fetch_pr("owner", "repo", 99).unwrap();
+        assert!(!pr.approved, "approved must be false when teams are still pending in requested_reviewers");
+    }
 }
