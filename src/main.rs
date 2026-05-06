@@ -20,7 +20,7 @@ use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
 use std::path::PathBuf;
 
-use github::{GithubClient, detect_repo, resolve_github_token, resolve_track_branch, fetch_resolved_threads};
+use github::{GithubClient, detect_repo, resolve_github_token, resolve_track_branch, fetch_resolved_threads, fetch_open_threads, agent_context_manifest};
 use store::{Store, TrackedPr};
 use tasks::{generate_tasks, task_diff};
 
@@ -124,6 +124,8 @@ enum Commands {
 
 /// Send a macOS system notification via osascript. Silently ignores errors on non-macOS or
 /// headless environments where notifications are unavailable.
+/// Falsify exemption: fire-and-forget subprocess with no observable return value in the test
+/// process — no artifact type can detect absence of the osascript call without a subprocess harness.
 fn notify_macos(message: &str) {
     let script = format!(
         r#"display notification "{}" with title "fp""#,
@@ -477,9 +479,7 @@ fn main() -> Result<()> {
             let threads: Vec<&model::Thread> = if resolved {
                 fetch_resolved_threads(&pr_state.threads)
             } else {
-                pr_state.threads.iter()
-                    .filter(|t| matches!(t.state, model::ThreadState::Open | model::ThreadState::Stale))
-                    .collect()
+                fetch_open_threads(&pr_state.threads)
             };
 
             if json {
@@ -500,25 +500,7 @@ fn main() -> Result<()> {
         }
 
         Commands::AgentContext { json } => {
-            let manifest = serde_json::json!({
-                "name": "fp",
-                "version": env!("CARGO_PKG_VERSION"),
-                "description": "PR convergence loop — surfaces blocking tasks, manages CI, rebases stacks",
-                "auth_required": "GITHUB_TOKEN env var or gh CLI (gh auth login)",
-                "commands": [
-                    {"name": "ls", "description": "List tracked PRs with status", "json": true},
-                    {"name": "status", "description": "Show blocking tasks for a PR", "json": true},
-                    {"name": "track", "description": "Add a PR to tracking", "flags": ["--branch", "--title"]},
-                    {"name": "untrack", "description": "Remove a PR from tracking"},
-                    {"name": "watch", "description": "Poll for task changes continuously", "flags": ["--once", "--interval"]},
-                    {"name": "reply", "description": "Post a reply to a review thread"},
-                    {"name": "context", "description": "Fetch CI logs or thread body for a task hint", "flags": ["--full-log"]},
-                    {"name": "threads", "description": "List review threads", "flags": ["--resolved", "--json"]},
-                    {"name": "create", "description": "Create a draft PR and track it"},
-                    {"name": "rebase-stack", "description": "Rebase all tracked PRs in stack order"},
-                    {"name": "agent-context", "description": "This manifest", "json": true}
-                ]
-            });
+            let manifest = agent_context_manifest();
             if json {
                 println!("{}", serde_json::to_string_pretty(&manifest)?);
             } else {

@@ -929,6 +929,37 @@ mod tests {
         assert_eq!(resolved[0].id, 1);
     }
 
+    // G2: agent_context_manifest returns JSON with required top-level keys
+    #[test]
+    fn agent_context_manifest_contains_required_keys() {
+        use crate::github::agent_context_manifest;
+        let m = agent_context_manifest();
+        assert!(m.get("name").is_some(), "manifest missing 'name' key");
+        assert!(m.get("commands").is_some(), "manifest missing 'commands' key");
+        assert!(m.get("auth_required").is_some(), "manifest missing 'auth_required' key");
+        assert!(m["commands"].is_array(), "'commands' should be an array");
+        assert!(m["commands"].as_array().unwrap().len() > 0, "'commands' array should not be empty");
+    }
+
+    // G1: fetch_open_threads returns only Open and Stale threads, excludes Addressed and Resolved
+    #[test]
+    fn fetch_open_threads_excludes_addressed_and_resolved() {
+        use crate::github::fetch_open_threads;
+        use crate::model::{Thread, ThreadState};
+        let threads = vec![
+            Thread { id: 1, state: ThreadState::Open, body: "open".into(), file: None, line: None },
+            Thread { id: 2, state: ThreadState::Stale, body: "stale".into(), file: None, line: None },
+            Thread { id: 3, state: ThreadState::Addressed, body: "addressed".into(), file: None, line: None },
+            Thread { id: 4, state: ThreadState::Resolved, body: "resolved".into(), file: None, line: None },
+        ];
+        let open = fetch_open_threads(&threads);
+        assert_eq!(open.len(), 2, "expected 2 open/stale threads, got: {}", open.len());
+        assert!(open.iter().any(|t| t.id == 1), "should include Open thread");
+        assert!(open.iter().any(|t| t.id == 2), "should include Stale thread");
+        assert!(!open.iter().any(|t| t.id == 3), "should exclude Addressed thread");
+        assert!(!open.iter().any(|t| t.id == 4), "should exclude Resolved thread");
+    }
+
     // D4-a: resolve_track_branch returns fetched branch when explicit is absent
     #[test]
     fn resolve_track_branch_uses_fetched_when_explicit_absent() {

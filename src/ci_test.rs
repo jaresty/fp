@@ -129,4 +129,30 @@ mod tests {
         assert_eq!(result.log_url, "https://buildkite.com/x/y/builds/5");
         assert!(result.error_lines.is_empty());
     }
+
+    // D6-b (fetch_raw_log): GitHub Actions fetch_raw_log returns full untruncated log (not tail)
+    #[test]
+    fn fetch_raw_log_github_actions_returns_full_text() {
+        let mut server = mockito::Server::new();
+        let log_url = format!("{}/full-log-content", server.url());
+        // GitHub returns 302 redirect to actual log
+        server.mock("GET", "/repos/owner/repo/actions/jobs/42/logs")
+            .with_status(302)
+            .with_header("Location", &log_url)
+            .create();
+        // Full log has 200 lines — fetch_raw_log must return all, not just tail-100
+        let full_log: String = (1..=200).map(|i| format!("line {}", i)).collect::<Vec<_>>().join("\n");
+        server.mock("GET", "/full-log-content")
+            .with_status(200)
+            .with_header("content-type", "text/plain")
+            .with_body(&full_log)
+            .create();
+
+        let client = crate::ci::CiLogClient::with_base_url("tok".into(), server.url());
+        let result = client.fetch_raw_log(&CiProvider::GitHubActions {
+            owner: "owner".into(), repo: "repo".into(), job_id: 42,
+        }).unwrap();
+        assert!(result.contains("line 1\n"), "full log should contain line 1 (start), got {} chars", result.len());
+        assert!(result.contains("line 200"), "full log should contain line 200 (end), got {} chars", result.len());
+    }
 }
