@@ -61,6 +61,7 @@ mod tests {
         pr.threads.push(Thread {
             id: 42,
             state: ThreadState::Open,
+            author: "".into(),
             body: "needs fix".into(),
             replies: vec![],
             file: Some("src/main.rs".into()),
@@ -81,6 +82,7 @@ mod tests {
         pr.threads.push(Thread {
             id: 43,
             state: ThreadState::Stale,
+            author: "".into(),
             body: "stale thread".into(),
             replies: vec![],
             file: None,
@@ -101,6 +103,7 @@ mod tests {
         pr.threads.push(Thread {
             id: 44,
             state: ThreadState::Resolved,
+            author: "".into(),
             body: "all good".into(),
             replies: vec![],
             file: None,

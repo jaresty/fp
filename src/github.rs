@@ -261,8 +261,12 @@ impl GithubClient {
             Thread {
                 id: root["id"].as_u64().unwrap_or(0),
                 state,
+                author: root["user"]["login"].as_str().unwrap_or("").to_string(),
                 body: root["body"].as_str().unwrap_or("").to_string(),
-                replies: comments[1..].iter().map(|c| c["body"].as_str().unwrap_or("").to_string()).collect(),
+                replies: comments[1..].iter().map(|c| (
+                    c["user"]["login"].as_str().unwrap_or("").to_string(),
+                    c["body"].as_str().unwrap_or("").to_string(),
+                )).collect(),
                 file: root["path"].as_str().map(String::from),
                 line: root["line"].as_u64().map(|l| l as u32),
             }

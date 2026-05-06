@@ -30,8 +30,9 @@ pub enum ThreadState {
 pub struct Thread {
     pub id: u64,
     pub state: ThreadState,
+    pub author: String,
     pub body: String,
-    pub replies: Vec<String>,
+    pub replies: Vec<(String, String)>,
     pub file: Option<String>,
     pub line: Option<u32>,
 }

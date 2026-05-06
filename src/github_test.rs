@@ -294,6 +294,43 @@ mod tests {
         assert_eq!(pr.threads[0].id, 100, "thread ID should be root comment ID");
     }
 
+    // D3e: thread.author is the root commenter; replies carry (author, body) tuples
+    #[test]
+    fn thread_author_and_reply_authors_populated() {
+        let mut server = mockito::Server::new();
+        server.mock("GET", "/repos/owner/repo/pulls/88")
+            .with_status(200).with_header("content-type","application/json")
+            .with_body(r#"{"number":88,"title":"t","draft":false,"head":{"ref":"b"},"user":{"login":"pr-author"}}"#).create();
+        server.mock("GET", "/repos/owner/repo/commits/b/check-runs")
+            .with_status(200).with_header("content-type","application/json")
+            .with_body(r#"{"check_runs":[]}"#).create();
+        server.mock("GET", "/repos/owner/repo/branches/b/protection")
+            .with_status(404).create();
+        server.mock("GET", "/repos/owner/repo/pulls/88/reviews")
+            .with_status(200).with_header("content-type","application/json")
+            .with_body(r#"[]"#).create();
+        server.mock("GET", "/repos/owner/repo/pulls/88/comments?per_page=100&page=1")
+            .with_status(200).with_header("content-type","application/json")
+            .with_body(r#"[
+                {"id": 300, "body": "root comment", "path": "src/lib.rs", "line": 5,
+                 "user": {"login": "reviewer"}},
+                {"id": 301, "body": "reply one", "path": "src/lib.rs", "line": 5,
+                 "in_reply_to_id": 300, "user": {"login": "pr-author"}},
+                {"id": 302, "body": "reply two", "path": "src/lib.rs", "line": 5,
+                 "in_reply_to_id": 300, "user": {"login": "reviewer"}}
+            ]"#).create();
+
+        let pr = mock_client(&server).fetch_pr("owner", "repo", 88).unwrap();
+        assert_eq!(pr.threads.len(), 1);
+        let t = &pr.threads[0];
+        assert_eq!(t.author, "reviewer", "root author should be 'reviewer'");
+        assert_eq!(t.replies.len(), 2);
+        assert_eq!(t.replies[0].0, "pr-author", "first reply author should be 'pr-author'");
+        assert_eq!(t.replies[0].1, "reply one");
+        assert_eq!(t.replies[1].0, "reviewer");
+        assert_eq!(t.replies[1].1, "reply two");
+    }
+
     // D3d: thread.replies contains bodies of non-root comments in order
     #[test]
     fn thread_replies_populated_from_non_root_comments() {
@@ -325,8 +362,8 @@ mod tests {
         let t = &pr.threads[0];
         assert_eq!(t.body, "root comment");
         assert_eq!(t.replies.len(), 2, "thread should have 2 replies, got: {:?}", t.replies);
-        assert_eq!(t.replies[0], "first reply");
-        assert_eq!(t.replies[1], "second reply");
+        assert_eq!(t.replies[0].1, "first reply");
+        assert_eq!(t.replies[1].1, "second reply");
     }
 
     // D3c: thread state = Addressed when PR author's comment is last
@@ -947,6 +984,7 @@ mod tests {
             crate::model::Thread {
                 id: 1,
                 state: crate::model::ThreadState::Resolved,
+                author: "".to_string(),
                 body: "please fix this".to_string(),
                 replies: vec![],
                 file: Some("src/main.rs".to_string()),
@@ -955,6 +993,7 @@ mod tests {
             crate::model::Thread {
                 id: 2,
                 state: crate::model::ThreadState::Open,
+                author: "".to_string(),
                 body: "another issue".to_string(),
                 replies: vec![],
                 file: None,
@@ -984,10 +1023,10 @@ mod tests {
         use crate::github::fetch_open_threads;
         use crate::model::{Thread, ThreadState};
         let threads = vec![
-            Thread { id: 1, state: ThreadState::Open, body: "open".into(), replies: vec![], file: None, line: None },
-            Thread { id: 2, state: ThreadState::Stale, body: "stale".into(), replies: vec![], file: None, line: None },
-            Thread { id: 3, state: ThreadState::Addressed, body: "addressed".into(), replies: vec![], file: None, line: None },
-            Thread { id: 4, state: ThreadState::Resolved, body: "resolved".into(), replies: vec![], file: None, line: None },
+            Thread { id: 1, state: ThreadState::Open, author: "".into(), body: "open".into(), replies: vec![], file: None, line: None },
+            Thread { id: 2, state: ThreadState::Stale, author: "".into(), body: "stale".into(), replies: vec![], file: None, line: None },
+            Thread { id: 3, state: ThreadState::Addressed, author: "".into(), body: "addressed".into(), replies: vec![], file: None, line: None },
+            Thread { id: 4, state: ThreadState::Resolved, author: "".into(), body: "resolved".into(), replies: vec![], file: None, line: None },
         ];
         let open = fetch_open_threads(&threads);
         assert_eq!(open.len(), 2, "expected 2 open/stale threads, got: {}", open.len());

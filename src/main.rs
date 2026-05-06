@@ -436,9 +436,9 @@ fn main() -> Result<()> {
                     if let (Some(file), Some(line)) = (&thread.file, thread.line) {
                         println!("  {}:{}", file, line);
                     }
-                    println!("  {}", thread.body);
-                    for reply in &thread.replies {
-                        println!("  > {}", reply);
+                    println!("  @{}: {}", thread.author, thread.body);
+                    for (author, body) in &thread.replies {
+                        println!("  > @{}: {}", author, body);
                     }
                 } else {
                     println!("Thread #{} not found in PR #{}", thread_id, pr);
