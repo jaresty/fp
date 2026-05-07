@@ -801,6 +801,36 @@ mod tests {
         assert!(!bk_lint.required);
     }
 
+    // B1: fetch_pr populates base field from base.ref in API response
+    #[test]
+    fn fetch_pr_populates_base_field() {
+        let mut server = mockito::Server::new();
+        server.mock("GET", "/repos/owner/repo/pulls/55")
+            .with_status(200).with_header("content-type", "application/json")
+            .with_body(r#"{"number":55,"title":"t","draft":false,"head":{"ref":"feat/x","sha":"abc"},"base":{"ref":"develop"},"user":{"login":"author"}}"#)
+            .create();
+        server.mock("GET", "/repos/owner/repo/commits/feat%2Fx/check-runs")
+            .with_status(200).with_header("content-type","application/json")
+            .with_body(r#"{"check_runs":[]}"#).create();
+        server.mock("GET", "/repos/owner/repo/branches/develop/protection")
+            .with_status(404).create();
+        server.mock("GET", "/repos/owner/repo/commits/abc/statuses")
+            .with_status(200).with_header("content-type","application/json")
+            .with_body(r#"[]"#).create();
+        server.mock("GET", "/repos/owner/repo/pulls/55/reviews")
+            .with_status(200).with_header("content-type","application/json")
+            .with_body(r#"[]"#).create();
+        server.mock("GET", "/repos/owner/repo/pulls/55/requested_reviewers")
+            .with_status(200).with_header("content-type","application/json")
+            .with_body(r#"{"users":[],"teams":[]}"#).create();
+        server.mock("GET", "/repos/owner/repo/pulls/55/comments?per_page=100&page=1")
+            .with_status(200).with_header("content-type","application/json")
+            .with_body(r#"[]"#).create();
+
+        let pr = mock_client(&server).fetch_pr("owner", "repo", 55).unwrap();
+        assert_eq!(pr.base, "develop", "expected base to be 'develop', got '{}'", pr.base);
+    }
+
     // D2: fetch_pr_metadata returns error when API call fails
     #[test]
     fn fetch_pr_metadata_errors_on_404() {

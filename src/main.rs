@@ -243,7 +243,7 @@ fn main() -> Result<()> {
                             number: tracked.number,
                             title: tracked.title.clone(),
                             branch: tracked.branch.clone(),
-                            draft: false, approved: false,
+                            base: "".into(), draft: false, approved: false,
                             checks: vec![], threads: vec![],
                         });
                     let tasks = generate_tasks(&pr_state);
@@ -266,7 +266,7 @@ fn main() -> Result<()> {
                         number: tracked.number,
                         title: tracked.title.clone(),
                         branch: tracked.branch.clone(),
-                        draft: false, approved: false,
+                        base: "".into(), draft: false, approved: false,
                         checks: vec![], threads: vec![],
                     });
                 let task_list = generate_tasks(&pr_state);
@@ -364,7 +364,7 @@ fn main() -> Result<()> {
                             number: tracked.number,
                             title: tracked.title.clone(),
                             branch: tracked.branch.clone(),
-                            draft: false, approved: false,
+                            base: "".into(), draft: false, approved: false,
                             checks: vec![], threads: vec![],
                         });
                     let curr = generate_tasks(&pr_state);
@@ -556,7 +556,7 @@ fn main() -> Result<()> {
                 number: tracked.number,
                 title: tracked.title.clone(),
                 branch: tracked.branch.clone(),
-                draft: false, approved: false,
+                base: "".into(), draft: false, approved: false,
                 checks: vec![], threads: vec![],
             });
 
@@ -621,7 +621,7 @@ fn main() -> Result<()> {
                 None
             }.unwrap_or_else(|| model::PrState {
                 number: tracked.number, title: tracked.title.clone(), branch: tracked.branch.clone(),
-                draft: false, approved: false, checks: vec![], threads: vec![],
+                base: "".into(), draft: false, approved: false, checks: vec![], threads: vec![],
             });
 
             let threads: Vec<&model::Thread> = if resolved {

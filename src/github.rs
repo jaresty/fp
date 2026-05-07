@@ -165,6 +165,7 @@ impl GithubClient {
             number: resp["number"].as_u64().unwrap_or(0),
             title: resp["title"].as_str().unwrap_or("").to_string(),
             branch: resp["head"]["ref"].as_str().unwrap_or("").to_string(),
+            base: resp["base"]["ref"].as_str().unwrap_or("").to_string(),
             draft: resp["draft"].as_bool().unwrap_or(false),
             approved: false,
             checks: vec![],
@@ -370,7 +371,7 @@ impl GithubClient {
             }
         }).collect();
 
-        Ok(PrState { number: pr_number, title, branch, draft, approved, checks, threads })
+        Ok(PrState { number: pr_number, title, branch, base: base_branch, draft, approved, checks, threads })
     }
 }
 

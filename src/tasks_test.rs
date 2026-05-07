@@ -8,6 +8,7 @@ mod tests {
             number: 1,
             title: "clean PR".into(),
             branch: "fix/foo".into(),
+            base: "main".into(),
             draft: false,
             approved: true,
             checks: vec![Check {
@@ -244,6 +245,7 @@ mod tests {
             number: 10,
             title: "Draft feature".into(),
             branch: "feat/draft".into(),
+            base: "main".into(),
             draft: true,
             approved: false,
             checks: vec![Check { name: "ci".into(), status: CheckStatus::Pass, required: true, details_url: None }],
@@ -264,6 +266,7 @@ mod tests {
             number: 11,
             title: "Open feature".into(),
             branch: "feat/open".into(),
+            base: "main".into(),
             draft: false,
             approved: false,
             checks: vec![Check { name: "ci".into(), status: CheckStatus::Pass, required: true, details_url: None }],
