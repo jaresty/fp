@@ -6,10 +6,8 @@ fn parse_next_link(link_header: &str) -> Option<String> {
     // Link: <url>; rel="next", <url>; rel="last"
     for part in link_header.split(',') {
         let part = part.trim();
-        if part.contains(r#"rel="next""#) {
-            if let (Some(start), Some(end)) = (part.find('<'), part.find('>')) {
-                return Some(part[start + 1..end].to_string());
-            }
+        if part.contains(r#"rel="next""#) && let (Some(start), Some(end)) = (part.find('<'), part.find('>')) {
+            return Some(part[start + 1..end].to_string());
         }
     }
     None

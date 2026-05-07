@@ -90,13 +90,11 @@ impl CiLogClient {
                 let mut output = String::new();
                 if let Some(jobs) = resp["jobs"].as_array() {
                     for job in jobs {
-                        if job["state"].as_str() == Some("failed") {
-                            if let Some(log_url) = job["raw_log_url"].as_str() {
-                                let text = reqwest::blocking::Client::new()
-                                    .get(log_url).header("Authorization", format!("Bearer {}", token))
-                                    .send()?.text()?;
-                                output.push_str(&format!("=== {} ===\n{}\n", job["name"].as_str().unwrap_or("job"), text));
-                            }
+                        if job["state"].as_str() == Some("failed") && let Some(log_url) = job["raw_log_url"].as_str() {
+                            let text = reqwest::blocking::Client::new()
+                                .get(log_url).header("Authorization", format!("Bearer {}", token))
+                                .send()?.text()?;
+                            output.push_str(&format!("=== {} ===\n{}\n", job["name"].as_str().unwrap_or("job"), text));
                         }
                     }
                 }
