@@ -29,6 +29,12 @@ impl GithubClient {
         GithubClient { token, base_url }
     }
 
+    /// Fetch multiple PRs in parallel and return a map keyed by PR number.
+    pub fn fetch_prs_as_map(&self, owner: &str, repo: &str, pr_numbers: &[u64]) -> std::collections::HashMap<u64, crate::model::PrState> {
+        self.fetch_prs_parallel(owner, repo, pr_numbers)
+            .into_iter().map(|p| (p.number, p)).collect()
+    }
+
     /// Fetch multiple PRs in parallel, capped at 8 concurrent requests.
     /// Returns successfully fetched PrStates (failures silently dropped).
     pub fn fetch_prs_parallel(&self, owner: &str, repo: &str, pr_numbers: &[u64]) -> Vec<crate::model::PrState> {

@@ -1290,6 +1290,21 @@ mod tests {
             .with_status(200).with_header("content-type","application/json").with_body(r#"{"users":[],"teams":[]}"#).create();
     }
 
+    // PAR2: fetch_prs_as_map returns a HashMap keyed by PR number
+    #[test]
+    fn fetch_prs_as_map_returns_map_keyed_by_number() {
+        let mut server = mockito::Server::new();
+        minimal_pr_mocks(&mut server, 201, "feat/x");
+        minimal_pr_mocks(&mut server, 202, "feat/y");
+
+        let client = mock_client(&server);
+        let map = client.fetch_prs_as_map("owner", "repo", &[201, 202]);
+        assert!(map.contains_key(&201), "expected key 201");
+        assert!(map.contains_key(&202), "expected key 202");
+        assert_eq!(map[&201].number, 201);
+        assert_eq!(map[&202].number, 202);
+    }
+
     // PAR1: fetch_prs_parallel returns results for all requested PR numbers
     #[test]
     fn fetch_prs_parallel_returns_all_results() {

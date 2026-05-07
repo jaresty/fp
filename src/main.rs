@@ -232,9 +232,7 @@ fn main() -> Result<()> {
 
                 let fetched: std::collections::HashMap<u64, crate::model::PrState> =
                     if let (Some(tok), Some((owner, repo_name))) = (&token, &repo) {
-                        let client = GithubClient::new(tok.clone());
-                        client.fetch_prs_parallel(owner, repo_name, &pr_numbers)
-                            .into_iter().map(|p| (p.number, p)).collect()
+                        GithubClient::new(tok.clone()).fetch_prs_as_map(owner, repo_name, &pr_numbers)
                     } else {
                         std::collections::HashMap::new()
                     };
@@ -350,19 +348,25 @@ fn main() -> Result<()> {
                 let mut prs: Vec<_> = state.prs.values().collect();
                 prs.sort_by_key(|p| p.number);
 
-                for tracked in &prs {
-                    let pr_state = if let (Some(tok), Some((owner, repo_name))) = (&token, &repo) {
+                let pr_numbers: Vec<u64> = prs.iter().map(|p| p.number).collect();
+                let fetched: std::collections::HashMap<u64, model::PrState> =
+                    if let (Some(tok), Some((owner, repo_name))) = (&token, &repo) {
                         let client = GithubClient::new(tok.clone());
-                        client.fetch_pr(owner, repo_name, tracked.number).ok()
+                        client.fetch_prs_parallel(owner, repo_name, &pr_numbers)
+                            .into_iter().map(|p| (p.number, p)).collect()
                     } else {
-                        None
-                    }.unwrap_or_else(|| model::PrState {
-                        number: tracked.number,
-                        title: tracked.title.clone(),
-                        branch: tracked.branch.clone(),
-                        draft: false, approved: false,
-                        checks: vec![], threads: vec![],
-                    });
+                        std::collections::HashMap::new()
+                    };
+
+                for tracked in &prs {
+                    let pr_state = fetched.get(&tracked.number).cloned()
+                        .unwrap_or_else(|| model::PrState {
+                            number: tracked.number,
+                            title: tracked.title.clone(),
+                            branch: tracked.branch.clone(),
+                            draft: false, approved: false,
+                            checks: vec![], threads: vec![],
+                        });
                     let curr = generate_tasks(&pr_state);
 
                     let prev = prev_tasks.get(&tracked.number).map(|v| v.as_slice()).unwrap_or(&[]);
