@@ -454,18 +454,49 @@ fn main() -> Result<()> {
         }
 
         Commands::RebaseStack => {
-            let state = store.load()?;
+            let mut state = store.load()?;
             if state.prs.is_empty() {
                 println!("No tracked PRs.");
                 return Ok(());
             }
 
-            // Collect tracked branches
-            let branches: Vec<String> = state.prs.values().map(|p| p.branch.clone()).collect();
-
-            // Detect stack topology from git
             let work_dir = stack::resolve_work_dir(&git_dir)?;
 
+            // Handle merged PRs: rebase their children onto the merge target, then untrack
+            if let (Ok(token), Some((owner, repo_name))) = (resolve_github_token(), detect_repo()) {
+                let client = GithubClient::new(token);
+                let all_branches: Vec<String> = state.prs.values().map(|p| p.branch.clone()).collect();
+                let parent_of = stack::detect_parent_of(&all_branches, &work_dir)?;
+
+                // Build branch -> pr_number map
+                let mut merged_pr_numbers: Vec<u64> = Vec::new();
+                for pr in state.prs.values() {
+                    if client.fetch_pr_is_merged(&owner, &repo_name, pr.number).unwrap_or(false) {
+                        let (head_sha, base_ref) = client.fetch_pr_head_sha_and_base(&owner, &repo_name, pr.number)?;
+                        // Find children of this branch and rebase them onto base_ref
+                        for (branch, parent) in &parent_of {
+                            if parent.as_deref() == Some(&pr.branch) {
+                                match stack::rebase_onto_after_merge(branch, &head_sha, &base_ref, &work_dir) {
+                                    Ok(()) => println!("✓ rebased {} onto {} (merged PR #{})", branch, base_ref, pr.number),
+                                    Err(e) => println!("✗ failed to rebase {} after merge: {}", branch, e),
+                                }
+                            }
+                        }
+                        merged_pr_numbers.push(pr.number);
+                    }
+                }
+                for number in merged_pr_numbers {
+                    store.untrack(number)?;
+                    println!("✓ untracked merged PR #{}", number);
+                }
+                state = store.load()?;
+            }
+
+            // Rebase remaining open PRs
+            let branches: Vec<String> = state.prs.values().map(|p| p.branch.clone()).collect();
+            if branches.is_empty() {
+                return Ok(());
+            }
             let parent_of = stack::detect_parent_of(&branches, &work_dir)?;
             let result = stack::rebase_stack(&branches, &parent_of, &work_dir)?;
 

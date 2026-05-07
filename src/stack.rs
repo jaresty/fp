@@ -85,6 +85,25 @@ pub fn rebase_stack(branches: &[String], parent_of: &HashMap<String, Option<Stri
     Ok(RebaseResult { conflicts, rebased })
 }
 
+/// Rebase `branch` onto `new_base`, cutting away commits from `old_base_sha` (the pre-merge tip).
+/// Squash-safe: uses --onto so only commits unique to `branch` are replanted.
+/// Force-pushes after a successful rebase.
+pub fn rebase_onto_after_merge(branch: &str, old_base_sha: &str, new_base: &str, dir: &Path) -> Result<()> {
+    let git = |args: &[&str]| {
+        std::process::Command::new("git").args(args).current_dir(dir).output()
+    };
+    let checkout = git(&["checkout", branch])?;
+    anyhow::ensure!(checkout.status.success(), "checkout {} failed: {}", branch, String::from_utf8_lossy(&checkout.stderr));
+    let rebase = git(&["rebase", "--onto", new_base, old_base_sha, branch])?;
+    if !rebase.status.success() {
+        git(&["rebase", "--abort"]).ok();
+        anyhow::bail!("rebase --onto {} {} {} failed: {}", new_base, old_base_sha, branch, String::from_utf8_lossy(&rebase.stderr));
+    }
+    let push = git(&["push", "--force-with-lease"])?;
+    anyhow::ensure!(push.status.success(), "force-push of {} failed: {}", branch, String::from_utf8_lossy(&push.stderr));
+    Ok(())
+}
+
 pub fn resolve_work_dir(_git_dir: &Path) -> Result<std::path::PathBuf> {
     let out = std::process::Command::new("git")
         .args(["rev-parse", "--show-toplevel"])

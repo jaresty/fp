@@ -1198,4 +1198,35 @@ mod tests {
         let base = mock_client(&server).fetch_pr_base("owner", "repo", 77).unwrap();
         assert_eq!(base, "feat/parent");
     }
+
+    // MG1: fetch_pr_head_sha_and_base returns head.sha and base.ref for a merged PR
+    #[test]
+    fn fetch_pr_head_sha_and_base_returns_correct_fields() {
+        let mut server = mockito::Server::new();
+        server.mock("GET", "/repos/owner/repo/pulls/99")
+            .with_status(200).with_header("content-type", "application/json")
+            .with_body(r#"{"number":99,"state":"closed","merged":true,"head":{"sha":"abc123def","ref":"feat/merged"},"base":{"ref":"main"},"title":"merged PR"}"#)
+            .create();
+
+        let (sha, base) = mock_client(&server).fetch_pr_head_sha_and_base("owner", "repo", 99).unwrap();
+        assert_eq!(sha, "abc123def");
+        assert_eq!(base, "main");
+    }
+
+    // MG2: fetch_pr_is_merged returns true for merged PR, false for open PR
+    #[test]
+    fn fetch_pr_is_merged_returns_correct_state() {
+        let mut server = mockito::Server::new();
+        server.mock("GET", "/repos/owner/repo/pulls/10")
+            .with_status(200).with_header("content-type", "application/json")
+            .with_body(r#"{"number":10,"state":"open","merged":false,"head":{"sha":"aaa"},"base":{"ref":"main"},"title":"open PR"}"#)
+            .create();
+        server.mock("GET", "/repos/owner/repo/pulls/11")
+            .with_status(200).with_header("content-type", "application/json")
+            .with_body(r#"{"number":11,"state":"closed","merged":true,"head":{"sha":"bbb"},"base":{"ref":"main"},"title":"merged PR"}"#)
+            .create();
+
+        assert!(!mock_client(&server).fetch_pr_is_merged("owner", "repo", 10).unwrap());
+        assert!(mock_client(&server).fetch_pr_is_merged("owner", "repo", 11).unwrap());
+    }
 }

@@ -147,6 +147,18 @@ impl GithubClient {
         Ok(())
     }
 
+    pub fn fetch_pr_head_sha_and_base(&self, owner: &str, repo: &str, pr_number: u64) -> Result<(String, String)> {
+        let resp = self.get(&format!("/repos/{}/{}/pulls/{}", owner, repo, pr_number))?;
+        let sha = resp["head"]["sha"].as_str().unwrap_or("").to_string();
+        let base = resp["base"]["ref"].as_str().unwrap_or("").to_string();
+        Ok((sha, base))
+    }
+
+    pub fn fetch_pr_is_merged(&self, owner: &str, repo: &str, pr_number: u64) -> Result<bool> {
+        let resp = self.get(&format!("/repos/{}/{}/pulls/{}", owner, repo, pr_number))?;
+        Ok(resp["merged"].as_bool().unwrap_or(false))
+    }
+
     pub fn update_pr_base(&self, owner: &str, repo: &str, pr_number: u64, new_base: &str) -> Result<()> {
         let url = format!("{}/repos/{}/{}/pulls/{}", self.base_url, owner, repo, pr_number);
         let payload = serde_json::json!({ "base": new_base });

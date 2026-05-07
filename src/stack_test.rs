@@ -90,6 +90,69 @@ mod tests {
         assert!(dir.is_dir(), "work_dir must be an existing directory, got: {:?}", dir);
     }
 
+    // MG1: rebase_onto_after_merge rebases child onto base using head_sha as cut point (squash-safe)
+    #[test]
+    fn rebase_onto_after_merge_rebases_child_onto_base() {
+        use std::process::Command;
+        use tempfile::TempDir;
+
+        let remote_dir = TempDir::new().unwrap();
+        Command::new("git").args(["init", "--bare", "-b", "main"])
+            .current_dir(remote_dir.path()).output().unwrap();
+
+        let dir = TempDir::new().unwrap();
+        let path = dir.path();
+
+        let git = |args: &[&str]| {
+            Command::new("git").args(args).current_dir(path).output().unwrap()
+        };
+
+        git(&["init", "-b", "main"]);
+        git(&["config", "user.email", "test@test.com"]);
+        git(&["config", "user.name", "Test"]);
+        git(&["remote", "add", "origin", remote_dir.path().to_str().unwrap()]);
+
+        // main: commit A
+        std::fs::write(path.join("a.txt"), "a").unwrap();
+        git(&["add", "."]);
+        git(&["commit", "-m", "A"]);
+        git(&["push", "origin", "main"]);
+
+        // feat/parent: commit B (will be "squash merged" into main)
+        git(&["checkout", "-b", "feat/parent"]);
+        std::fs::write(path.join("b.txt"), "b").unwrap();
+        git(&["add", "."]);
+        git(&["commit", "-m", "B"]);
+        let parent_sha = String::from_utf8(
+            Command::new("git").args(["rev-parse", "feat/parent"]).current_dir(path).output().unwrap().stdout
+        ).unwrap().trim().to_string();
+
+        // feat/child: branch from feat/parent, commit C
+        git(&["checkout", "-b", "feat/child"]);
+        std::fs::write(path.join("c.txt"), "c").unwrap();
+        git(&["add", "."]);
+        git(&["commit", "-m", "C"]);
+        git(&["push", "--set-upstream", "origin", "feat/child"]);
+
+        // Simulate squash merge: merge feat/parent into main as a squash commit
+        git(&["checkout", "main"]);
+        git(&["merge", "--squash", "feat/parent"]);
+        git(&["commit", "-m", "squash merge B"]);
+        git(&["push", "origin", "main"]);
+
+        // Now rebase_onto_after_merge should rebase feat/child onto main, cutting at parent_sha
+        crate::stack::rebase_onto_after_merge("feat/child", &parent_sha, "main", path).unwrap();
+
+        // feat/child should now be on top of main
+        let child_parent = String::from_utf8(
+            Command::new("git").args(["rev-parse", "feat/child~1"]).current_dir(path).output().unwrap().stdout
+        ).unwrap().trim().to_string();
+        let main_tip = String::from_utf8(
+            Command::new("git").args(["rev-parse", "main"]).current_dir(path).output().unwrap().stdout
+        ).unwrap().trim().to_string();
+        assert_eq!(child_parent, main_tip, "feat/child should be rebased onto main tip");
+    }
+
     // RS3: rebase_stack force-pushes each rebased branch after successful rebase
     #[test]
     fn rebase_stack_pushes_after_rebase() {
