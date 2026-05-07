@@ -218,6 +218,95 @@ mod tests {
         assert_eq!(local, remote, "remote feat/top should match local after force-push");
     }
 
+    // RS8: rebase_stack returns error if a rebase is already in progress
+    #[test]
+    fn rebase_stack_errors_if_rebase_in_progress() {
+        use std::process::Command;
+        use tempfile::TempDir;
+
+        let remote_dir = TempDir::new().unwrap();
+        Command::new("git").args(["init", "--bare", "-b", "main"])
+            .current_dir(remote_dir.path()).output().unwrap();
+
+        let dir = TempDir::new().unwrap();
+        let path = dir.path();
+        let git = |args: &[&str]| Command::new("git").args(args).current_dir(path).output().unwrap();
+
+        git(&["init", "-b", "main"]);
+        git(&["config", "user.email", "test@test.com"]);
+        git(&["config", "user.name", "Test"]);
+        git(&["remote", "add", "origin", remote_dir.path().to_str().unwrap()]);
+        std::fs::write(path.join("a.txt"), "a").unwrap();
+        git(&["add", "."]);
+        git(&["commit", "-m", "A"]);
+        git(&["push", "origin", "main"]);
+
+        // Simulate an in-progress rebase by creating the REBASE_HEAD file
+        std::fs::write(path.join(".git").join("REBASE_HEAD"), "fakasha").unwrap();
+
+        let branches = vec!["main".to_string()];
+        let parent_of = std::collections::HashMap::new();
+        let base_of = std::collections::HashMap::new();
+        let result = rebase_stack(&branches, &parent_of, &base_of, path);
+        assert!(result.is_err(), "expected error when rebase in progress");
+        let msg = format!("{}", result.unwrap_err());
+        assert!(msg.contains("rebase in progress"), "expected 'rebase in progress' in error, got: {}", msg);
+    }
+
+    // RS9: rebase_stack leaves repo in conflict state (no abort) when conflict occurs
+    #[test]
+    fn rebase_stack_does_not_abort_on_conflict() {
+        use std::process::Command;
+        use tempfile::TempDir;
+
+        let remote_dir = TempDir::new().unwrap();
+        Command::new("git").args(["init", "--bare", "-b", "main"])
+            .current_dir(remote_dir.path()).output().unwrap();
+
+        let dir = TempDir::new().unwrap();
+        let path = dir.path();
+        let git = |args: &[&str]| Command::new("git").args(args).current_dir(path).output().unwrap();
+
+        git(&["init", "-b", "main"]);
+        git(&["config", "user.email", "test@test.com"]);
+        git(&["config", "user.name", "Test"]);
+        git(&["remote", "add", "origin", remote_dir.path().to_str().unwrap()]);
+
+        // main: commit A with conflict.txt = "main"
+        std::fs::write(path.join("conflict.txt"), "main").unwrap();
+        git(&["add", "."]);
+        git(&["commit", "-m", "A"]);
+        git(&["push", "origin", "main"]);
+
+        // feat/base: branch, change conflict.txt = "base", push
+        git(&["checkout", "-b", "feat/base"]);
+        std::fs::write(path.join("conflict.txt"), "base").unwrap();
+        git(&["add", "."]);
+        git(&["commit", "-m", "B"]);
+        git(&["push", "--set-upstream", "origin", "feat/base"]);
+
+        // Add conflicting commit to origin/main: conflict.txt = "upstream"
+        git(&["checkout", "main"]);
+        std::fs::write(path.join("conflict.txt"), "upstream").unwrap();
+        git(&["add", "."]);
+        git(&["commit", "-m", "X"]);
+        git(&["push", "origin", "main"]);
+        git(&["checkout", "feat/base"]);
+
+        let branches = vec!["feat/base".to_string()];
+        let mut parent_of = std::collections::HashMap::new();
+        parent_of.insert("feat/base".to_string(), None);
+        let mut base_of = std::collections::HashMap::new();
+        base_of.insert("feat/base".to_string(), "main".to_string());
+
+        let result = rebase_stack(&branches, &parent_of, &base_of, path).unwrap();
+        assert_eq!(result.conflicts, vec!["feat/base"], "expected feat/base in conflicts");
+
+        // REBASE_HEAD must exist — rebase was NOT aborted
+        assert!(path.join(".git").join("REBASE_HEAD").exists(),
+            "expected REBASE_HEAD to exist (rebase left in progress, not aborted)");
+    }
+
     // RS6: rebase_stack fetches origin before rebasing so remote-only commits are picked up
     #[test]
     fn rebase_stack_fetches_before_rebasing() {

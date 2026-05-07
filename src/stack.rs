@@ -28,6 +28,7 @@ pub fn stack_order(branches: &[String], parent_of: &HashMap<String, Option<Strin
     result
 }
 
+#[derive(Debug)]
 pub struct RebaseResult {
     pub conflicts: Vec<String>,
     pub rebased: Vec<String>,
@@ -37,6 +38,11 @@ pub struct RebaseResult {
 /// Root branches (no parent) rebase onto origin/<base_of[branch]>.
 /// Fetches origin before rebasing to ensure remote refs are current.
 pub fn rebase_stack(branches: &[String], parent_of: &HashMap<String, Option<String>>, base_of: &HashMap<String, String>, dir: &Path) -> Result<RebaseResult> {
+    // Bail if a rebase is already in progress — user must resolve first
+    if dir.join(".git").join("REBASE_HEAD").exists() {
+        anyhow::bail!("rebase in progress — resolve conflicts then run: git rebase --continue && fp rebase-stack");
+    }
+
     // Fetch to get latest remote state before rebasing
     std::process::Command::new("git")
         .args(["fetch", "origin"])
@@ -85,12 +91,11 @@ pub fn rebase_stack(branches: &[String], parent_of: &HashMap<String, Option<Stri
                 conflicts.push(format!("{}: push failed", branch));
             }
         } else {
-            // Abort the rebase so repo stays usable
-            std::process::Command::new("git")
-                .args(["rebase", "--abort"])
-                .current_dir(dir)
-                .output().ok();
             conflicts.push(branch.clone());
+            eprintln!("Conflict on {} — resolve with:", branch);
+            eprintln!("  git add <resolved files> && git rebase --continue");
+            eprintln!("  fp rebase-stack");
+            break;
         }
     }
 
