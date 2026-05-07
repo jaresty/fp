@@ -513,7 +513,20 @@ fn main() -> Result<()> {
                 return Ok(());
             }
             let parent_of = stack::detect_parent_of(&branches, &work_dir)?;
-            let result = stack::rebase_stack(&branches, &parent_of, &work_dir)?;
+
+            // Build base_of: branch → upstream base branch name (from API when available)
+            let base_of: std::collections::HashMap<String, String> =
+                if let (Ok(token), Some((owner, repo_name))) = (resolve_github_token(), detect_repo()) {
+                    let client = GithubClient::new(token);
+                    state.prs.values().filter_map(|p| {
+                        client.fetch_pr_base(&owner, &repo_name, p.number).ok()
+                            .map(|base| (p.branch.clone(), base))
+                    }).collect()
+                } else {
+                    std::collections::HashMap::new()
+                };
+
+            let result = stack::rebase_stack(&branches, &parent_of, &base_of, &work_dir)?;
 
             for branch in &result.rebased {
                 println!("✓ rebased {}", branch);

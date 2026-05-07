@@ -34,8 +34,15 @@ pub struct RebaseResult {
 }
 
 /// Rebase each branch onto its parent's current tip, in stack_order.
-/// Leaves git repo on the last branch processed. Returns conflict list.
-pub fn rebase_stack(branches: &[String], parent_of: &HashMap<String, Option<String>>, dir: &Path) -> Result<RebaseResult> {
+/// Root branches (no parent) rebase onto origin/<base_of[branch]>.
+/// Fetches origin before rebasing to ensure remote refs are current.
+pub fn rebase_stack(branches: &[String], parent_of: &HashMap<String, Option<String>>, base_of: &HashMap<String, String>, dir: &Path) -> Result<RebaseResult> {
+    // Fetch to get latest remote state before rebasing
+    std::process::Command::new("git")
+        .args(["fetch", "origin"])
+        .current_dir(dir)
+        .output()?;
+
     let ordered = stack_order(branches, parent_of);
     let mut conflicts = Vec::new();
     let mut rebased = Vec::new();
@@ -45,7 +52,8 @@ pub fn rebase_stack(branches: &[String], parent_of: &HashMap<String, Option<Stri
         let parent = match parent_of.get(branch).and_then(|p| p.as_ref()) {
             Some(p) => p.as_str(),
             None => {
-                parent_owned = "origin/main".to_string();
+                let base = base_of.get(branch).map(String::as_str).unwrap_or("main");
+                parent_owned = format!("origin/{}", base);
                 &parent_owned
             }
         };

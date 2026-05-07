@@ -202,7 +202,7 @@ mod tests {
         parent_of.insert("feat/base".to_string(), None);
         parent_of.insert("feat/top".to_string(), Some("feat/base".to_string()));
 
-        let result = rebase_stack(&branches, &parent_of, path).unwrap();
+        let result = rebase_stack(&branches, &parent_of, &std::collections::HashMap::new(), path).unwrap();
         assert!(result.conflicts.is_empty(), "expected no conflicts: {:?}", result.conflicts);
 
         // Verify feat/top was pushed to remote by checking remote tip matches local tip
@@ -216,6 +216,137 @@ mod tests {
         let local = String::from_utf8(local_tip.stdout).unwrap().trim().to_string();
         let remote = String::from_utf8(remote_tip.stdout).unwrap().trim().to_string();
         assert_eq!(local, remote, "remote feat/top should match local after force-push");
+    }
+
+    // RS6: rebase_stack fetches origin before rebasing so remote-only commits are picked up
+    #[test]
+    fn rebase_stack_fetches_before_rebasing() {
+        use std::process::Command;
+        use tempfile::TempDir;
+
+        let remote_dir = TempDir::new().unwrap();
+        Command::new("git").args(["init", "--bare", "-b", "main"])
+            .current_dir(remote_dir.path()).output().unwrap();
+
+        let dir = TempDir::new().unwrap();
+        let path = dir.path();
+
+        let git = |args: &[&str]| {
+            Command::new("git").args(args).current_dir(path).output().unwrap()
+        };
+
+        git(&["init", "-b", "main"]);
+        git(&["config", "user.email", "test@test.com"]);
+        git(&["config", "user.name", "Test"]);
+        git(&["remote", "add", "origin", remote_dir.path().to_str().unwrap()]);
+
+        // main: commit A, push
+        std::fs::write(path.join("a.txt"), "a").unwrap();
+        git(&["add", "."]);
+        git(&["commit", "-m", "A"]);
+        git(&["push", "origin", "main"]);
+
+        // feat/base: branch from main, commit B, push
+        git(&["checkout", "-b", "feat/base"]);
+        std::fs::write(path.join("b.txt"), "b").unwrap();
+        git(&["add", "."]);
+        git(&["commit", "-m", "B"]);
+        git(&["push", "--set-upstream", "origin", "feat/base"]);
+
+        // Clone a second local repo to push a new commit to origin/main
+        // without the first repo knowing about it (simulating remote-only progress)
+        let dir2 = TempDir::new().unwrap();
+        let path2 = dir2.path();
+        Command::new("git").args(["clone", remote_dir.path().to_str().unwrap(), "."])
+            .current_dir(path2).output().unwrap();
+        Command::new("git").args(["config", "user.email", "test@test.com"]).current_dir(path2).output().unwrap();
+        Command::new("git").args(["config", "user.name", "Test"]).current_dir(path2).output().unwrap();
+        std::fs::write(path2.join("x.txt"), "x").unwrap();
+        Command::new("git").args(["add", "."]).current_dir(path2).output().unwrap();
+        Command::new("git").args(["commit", "-m", "X"]).current_dir(path2).output().unwrap();
+        Command::new("git").args(["push", "origin", "main"]).current_dir(path2).output().unwrap();
+
+        // Back in original repo: origin/main is stale (doesn't have commit X yet)
+        git(&["checkout", "feat/base"]);
+
+        let branches = vec!["feat/base".to_string()];
+        let mut parent_of = std::collections::HashMap::new();
+        parent_of.insert("feat/base".to_string(), None);
+        let mut base_of = std::collections::HashMap::new();
+        base_of.insert("feat/base".to_string(), "main".to_string());
+
+        let result = rebase_stack(&branches, &parent_of, &base_of, path).unwrap();
+        assert!(result.conflicts.is_empty(), "expected no conflicts: {:?}", result.conflicts);
+
+        // feat/base should be on top of the remote commit X (only reachable via fetch)
+        let base_parent = String::from_utf8(
+            Command::new("git").args(["rev-parse", "feat/base~1"]).current_dir(path).output().unwrap().stdout
+        ).unwrap().trim().to_string();
+        let origin_main_tip = String::from_utf8(
+            Command::new("git").args(["rev-parse", "origin/main"]).current_dir(path).output().unwrap().stdout
+        ).unwrap().trim().to_string();
+        assert_eq!(base_parent, origin_main_tip, "feat/base should be rebased onto fetched origin/main (commit X)");
+    }
+
+    // RS7: rebase_stack uses API-provided base branch (base_of) not hardcoded main
+    #[test]
+    fn rebase_stack_uses_base_of_for_root_branch() {
+        use std::process::Command;
+        use tempfile::TempDir;
+
+        let remote_dir = TempDir::new().unwrap();
+        Command::new("git").args(["init", "--bare", "-b", "develop"])
+            .current_dir(remote_dir.path()).output().unwrap();
+
+        let dir = TempDir::new().unwrap();
+        let path = dir.path();
+
+        let git = |args: &[&str]| {
+            Command::new("git").args(args).current_dir(path).output().unwrap()
+        };
+
+        git(&["init", "-b", "develop"]);
+        git(&["config", "user.email", "test@test.com"]);
+        git(&["config", "user.name", "Test"]);
+        git(&["remote", "add", "origin", remote_dir.path().to_str().unwrap()]);
+
+        // develop: commit A, push
+        std::fs::write(path.join("a.txt"), "a").unwrap();
+        git(&["add", "."]);
+        git(&["commit", "-m", "A"]);
+        git(&["push", "origin", "develop"]);
+
+        // feat/base: branch from develop, commit B, push
+        git(&["checkout", "-b", "feat/base"]);
+        std::fs::write(path.join("b.txt"), "b").unwrap();
+        git(&["add", "."]);
+        git(&["commit", "-m", "B"]);
+        git(&["push", "--set-upstream", "origin", "feat/base"]);
+
+        // Add commit X to origin/develop
+        git(&["checkout", "develop"]);
+        std::fs::write(path.join("x.txt"), "x").unwrap();
+        git(&["add", "."]);
+        git(&["commit", "-m", "X"]);
+        git(&["push", "origin", "develop"]);
+        git(&["checkout", "feat/base"]);
+
+        let branches = vec!["feat/base".to_string()];
+        let mut parent_of = std::collections::HashMap::new();
+        parent_of.insert("feat/base".to_string(), None);
+        let mut base_of = std::collections::HashMap::new();
+        base_of.insert("feat/base".to_string(), "develop".to_string());
+
+        let result = rebase_stack(&branches, &parent_of, &base_of, path).unwrap();
+        assert!(result.conflicts.is_empty(), "expected no conflicts: {:?}", result.conflicts);
+
+        let base_parent = String::from_utf8(
+            Command::new("git").args(["rev-parse", "feat/base~1"]).current_dir(path).output().unwrap().stdout
+        ).unwrap().trim().to_string();
+        let origin_develop_tip = String::from_utf8(
+            Command::new("git").args(["rev-parse", "origin/develop"]).current_dir(path).output().unwrap().stdout
+        ).unwrap().trim().to_string();
+        assert_eq!(base_parent, origin_develop_tip, "feat/base should be rebased onto origin/develop not origin/main");
     }
 
     // RS5: rebase_stack rebases root branches onto origin/main when main has new commits
@@ -267,7 +398,7 @@ mod tests {
         let mut parent_of = std::collections::HashMap::new();
         parent_of.insert("feat/base".to_string(), None);
 
-        let result = rebase_stack(&branches, &parent_of, path).unwrap();
+        let result = rebase_stack(&branches, &parent_of, &std::collections::HashMap::new(), path).unwrap();
         assert!(result.conflicts.is_empty(), "expected no conflicts: {:?}", result.conflicts);
 
         // feat/base should now be on top of origin/main (commit X)
@@ -330,7 +461,7 @@ mod tests {
         parent_of.insert("feat/base".to_string(), None);
         parent_of.insert("feat/top".to_string(), Some("feat/base".to_string()));
 
-        let result = rebase_stack(&branches, &parent_of, path).unwrap();
+        let result = rebase_stack(&branches, &parent_of, &std::collections::HashMap::new(), path).unwrap();
         assert!(result.conflicts.is_empty(), "expected no conflicts, got: {:?}", result.conflicts);
 
         // feat/top should now be on top of feat/base
