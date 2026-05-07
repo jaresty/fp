@@ -13,6 +13,7 @@ fn parse_next_link(link_header: &str) -> Option<String> {
     None
 }
 
+#[derive(Clone)]
 pub struct GithubClient {
     token: String,
     base_url: String,
@@ -26,6 +27,43 @@ impl GithubClient {
     #[cfg(test)]
     pub fn with_base_url(token: String, base_url: String) -> Self {
         GithubClient { token, base_url }
+    }
+
+    /// Fetch multiple PRs in parallel, capped at 8 concurrent requests.
+    /// Returns successfully fetched PrStates (failures silently dropped).
+    pub fn fetch_prs_parallel(&self, owner: &str, repo: &str, pr_numbers: &[u64]) -> Vec<crate::model::PrState> {
+        use std::sync::{Arc, Mutex};
+        const MAX_CONCURRENT: usize = 8;
+        let semaphore = Arc::new(Mutex::new(MAX_CONCURRENT));
+        let owner = owner.to_string();
+        let repo = repo.to_string();
+
+        let handles: Vec<_> = pr_numbers.iter().map(|&number| {
+            let client = self.clone();
+            let owner = owner.clone();
+            let repo = repo.clone();
+            let sem = Arc::clone(&semaphore);
+            std::thread::spawn(move || {
+                // Acquire slot
+                loop {
+                    let mut count = sem.lock().unwrap();
+                    if *count > 0 {
+                        *count -= 1;
+                        break;
+                    }
+                    drop(count);
+                    std::thread::sleep(std::time::Duration::from_millis(10));
+                }
+                let result = client.fetch_pr(&owner, &repo, number).ok();
+                // Release slot
+                *sem.lock().unwrap() += 1;
+                result
+            })
+        }).collect();
+
+        handles.into_iter()
+            .filter_map(|h| h.join().ok().flatten())
+            .collect()
     }
 
     fn get(&self, path: &str) -> Result<serde_json::Value> {

@@ -1263,4 +1263,49 @@ mod tests {
         assert!(!mock_client(&server).fetch_pr_is_merged("owner", "repo", 10).unwrap());
         assert!(mock_client(&server).fetch_pr_is_merged("owner", "repo", 11).unwrap());
     }
+
+    fn minimal_pr_mocks(server: &mut mockito::Server, pr_number: u64, branch: &str) {
+        let pr_body = format!(
+            r#"{{"number":{pr},"title":"t","draft":false,"head":{{"ref":"{br}","sha":""}},"base":{{"ref":"main"}}}}"#,
+            pr = pr_number, br = branch
+        );
+        let encoded_branch = branch.replace('/', "%2F");
+        server.mock("GET", format!("/repos/owner/repo/pulls/{}", pr_number).as_str())
+            .with_status(200).with_header("content-type","application/json").with_body(pr_body).create();
+        server.mock("GET", format!("/repos/owner/repo/commits/{}/check-runs", encoded_branch).as_str())
+            .with_status(200).with_header("content-type","application/json").with_body(r#"{"check_runs":[]}"#).create();
+        server.mock("GET", format!("/repos/owner/repo/branches/{}/protection", encoded_branch).as_str())
+            .with_status(404).create();
+        // Shared mocks set to expect multiple hits
+        server.mock("GET", format!("/repos/owner/repo/branches/main/protection").as_str())
+            .with_status(404).expect_at_least(1).create();
+        server.mock("GET", format!("/repos/owner/repo/commits//statuses").as_str())
+            .with_status(200).with_header("content-type","application/json").with_body(r#"[]"#)
+            .expect_at_least(1).create();
+        server.mock("GET", format!("/repos/owner/repo/pulls/{}/reviews", pr_number).as_str())
+            .with_status(200).with_header("content-type","application/json").with_body(r#"[]"#).create();
+        server.mock("GET", format!("/repos/owner/repo/pulls/{}/comments?per_page=100&page=1", pr_number).as_str())
+            .with_status(200).with_header("content-type","application/json").with_body(r#"[]"#).create();
+        server.mock("GET", format!("/repos/owner/repo/pulls/{}/requested_reviewers", pr_number).as_str())
+            .with_status(200).with_header("content-type","application/json").with_body(r#"{"users":[],"teams":[]}"#).create();
+    }
+
+    // PAR1: fetch_prs_parallel returns results for all requested PR numbers
+    #[test]
+    fn fetch_prs_parallel_returns_all_results() {
+        let mut server = mockito::Server::new();
+        minimal_pr_mocks(&mut server, 101, "feat/a");
+        minimal_pr_mocks(&mut server, 102, "feat/b");
+        minimal_pr_mocks(&mut server, 103, "feat/c");
+
+        let client = mock_client(&server);
+        let results = client.fetch_prs_parallel("owner", "repo", &[101, 102, 103]);
+        assert_eq!(results.len(), 3, "expected 3 results");
+        let numbers: Vec<u64> = {
+            let mut v: Vec<u64> = results.iter().map(|r| r.number).collect();
+            v.sort();
+            v
+        };
+        assert_eq!(numbers, vec![101, 102, 103]);
+    }
 }
