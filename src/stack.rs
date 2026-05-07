@@ -63,7 +63,15 @@ pub fn rebase_stack(branches: &[String], parent_of: &HashMap<String, Option<Stri
             .output()?;
 
         if rebase.status.success() {
-            rebased.push(branch.clone());
+            let push = std::process::Command::new("git")
+                .args(["push", "--force-with-lease"])
+                .current_dir(dir)
+                .output()?;
+            if push.status.success() {
+                rebased.push(branch.clone());
+            } else {
+                conflicts.push(format!("{}: push failed", branch));
+            }
         } else {
             // Abort the rebase so repo stays usable
             std::process::Command::new("git")

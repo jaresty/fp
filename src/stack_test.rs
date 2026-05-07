@@ -90,11 +90,80 @@ mod tests {
         assert!(dir.is_dir(), "work_dir must be an existing directory, got: {:?}", dir);
     }
 
+    // RS3: rebase_stack force-pushes each rebased branch after successful rebase
+    #[test]
+    fn rebase_stack_pushes_after_rebase() {
+        use std::process::Command;
+        use tempfile::TempDir;
+
+        // Set up a bare remote so push has somewhere to go
+        let remote_dir = TempDir::new().unwrap();
+        Command::new("git").args(["init", "--bare", "-b", "main"])
+            .current_dir(remote_dir.path()).output().unwrap();
+
+        let dir = TempDir::new().unwrap();
+        let path = dir.path();
+
+        let git = |args: &[&str]| {
+            Command::new("git").args(args).current_dir(path).output().unwrap()
+        };
+
+        git(&["init", "-b", "main"]);
+        git(&["config", "user.email", "test@test.com"]);
+        git(&["config", "user.name", "Test"]);
+        git(&["remote", "add", "origin", remote_dir.path().to_str().unwrap()]);
+
+        // main: commit A
+        std::fs::write(path.join("a.txt"), "a").unwrap();
+        git(&["add", "."]);
+        git(&["commit", "-m", "A"]);
+        git(&["push", "origin", "main"]);
+
+        // feat/base: branch from main, commit B, push
+        git(&["checkout", "-b", "feat/base"]);
+        std::fs::write(path.join("b.txt"), "b").unwrap();
+        git(&["add", "."]);
+        git(&["commit", "-m", "B"]);
+        git(&["push", "--set-upstream", "origin", "feat/base"]);
+
+        // feat/top: branch from main (not feat/base!), commit C, push
+        git(&["checkout", "main"]);
+        git(&["checkout", "-b", "feat/top"]);
+        std::fs::write(path.join("c.txt"), "c").unwrap();
+        git(&["add", "."]);
+        git(&["commit", "-m", "C"]);
+        git(&["push", "--set-upstream", "origin", "feat/top"]);
+
+        let branches = vec!["feat/base".to_string(), "feat/top".to_string()];
+        let mut parent_of = std::collections::HashMap::new();
+        parent_of.insert("feat/base".to_string(), None);
+        parent_of.insert("feat/top".to_string(), Some("feat/base".to_string()));
+
+        let result = rebase_stack(&branches, &parent_of, path).unwrap();
+        assert!(result.conflicts.is_empty(), "expected no conflicts: {:?}", result.conflicts);
+
+        // Verify feat/top was pushed to remote by checking remote tip matches local tip
+        let local_tip = Command::new("git")
+            .args(["rev-parse", "feat/top"])
+            .current_dir(path).output().unwrap();
+        let remote_tip = Command::new("git")
+            .args(["rev-parse", "refs/heads/feat/top"])
+            .current_dir(remote_dir.path()).output().unwrap();
+
+        let local = String::from_utf8(local_tip.stdout).unwrap().trim().to_string();
+        let remote = String::from_utf8(remote_tip.stdout).unwrap().trim().to_string();
+        assert_eq!(local, remote, "remote feat/top should match local after force-push");
+    }
+
     // RS2: rebase_stack rebases feat/top onto feat/base's current tip
     #[test]
     fn rebase_stack_rebases_in_order() {
         use std::process::Command;
         use tempfile::TempDir;
+
+        let remote_dir = TempDir::new().unwrap();
+        Command::new("git").args(["init", "--bare", "-b", "main"])
+            .current_dir(remote_dir.path()).output().unwrap();
 
         let dir = TempDir::new().unwrap();
         let path = dir.path();
@@ -107,17 +176,20 @@ mod tests {
         git(&["init", "-b", "main"]);
         git(&["config", "user.email", "test@test.com"]);
         git(&["config", "user.name", "Test"]);
+        git(&["remote", "add", "origin", remote_dir.path().to_str().unwrap()]);
 
         // main: commit A
         std::fs::write(path.join("a.txt"), "a").unwrap();
         git(&["add", "."]);
         git(&["commit", "-m", "A"]);
+        git(&["push", "origin", "main"]);
 
         // feat/base: branch from main, commit B
         git(&["checkout", "-b", "feat/base"]);
         std::fs::write(path.join("b.txt"), "b").unwrap();
         git(&["add", "."]);
         git(&["commit", "-m", "B"]);
+        git(&["push", "--set-upstream", "origin", "feat/base"]);
 
         // feat/top: branch from main (not feat/base!), commit C
         git(&["checkout", "main"]);
@@ -125,6 +197,7 @@ mod tests {
         std::fs::write(path.join("c.txt"), "c").unwrap();
         git(&["add", "."]);
         git(&["commit", "-m", "C"]);
+        git(&["push", "--set-upstream", "origin", "feat/top"]);
 
         // After rebase_stack, feat/top should be rebased onto feat/base
         let branches = vec!["feat/base".to_string(), "feat/top".to_string()];
