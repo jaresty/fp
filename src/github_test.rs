@@ -1475,6 +1475,87 @@ mod tests {
         assert!(issue_threads[0].line.is_none(), "expected line to be None");
     }
 
+    fn full_pr_mocks_with_reviews(server: &mut mockito::Server, pr_number: u64, author: &str, sha: &str, reviews_body: &str) {
+        let pr_body = format!(
+            r#"{{"number":{pr},"title":"t","draft":false,"head":{{"ref":"b","sha":"{sha}"}},"base":{{"ref":"main"}},"user":{{"login":"{author}"}}}}"#,
+            pr = pr_number, sha = sha, author = author
+        );
+        server.mock("GET", format!("/repos/owner/repo/pulls/{}", pr_number).as_str())
+            .with_status(200).with_header("content-type","application/json").with_body(pr_body).create();
+        server.mock("GET", "/repos/owner/repo/commits/b/check-runs")
+            .with_status(200).with_header("content-type","application/json").with_body(r#"{"check_runs":[]}"#).create();
+        server.mock("GET", "/repos/owner/repo/branches/main/protection")
+            .with_status(404).create();
+        server.mock("GET", format!("/repos/owner/repo/commits/{}/statuses", sha).as_str())
+            .with_status(200).with_header("content-type","application/json").with_body(r#"[]"#).create();
+        server.mock("GET", format!("/repos/owner/repo/pulls/{}/reviews", pr_number).as_str())
+            .with_status(200).with_header("content-type","application/json").with_body(reviews_body).create();
+        server.mock("GET", format!("/repos/owner/repo/pulls/{}/requested_reviewers", pr_number).as_str())
+            .with_status(200).with_header("content-type","application/json").with_body(r#"{"users":[],"teams":[]}"#).create();
+        server.mock("GET", format!("/repos/owner/repo/pulls/{}/comments?per_page=100&page=1", pr_number).as_str())
+            .with_status(200).with_header("content-type","application/json").with_body(r#"[]"#).create();
+        server.mock("GET", format!("/repos/owner/repo/issues/{}/comments?per_page=100&page=1", pr_number).as_str())
+            .with_status(200).with_header("content-type","application/json").with_body(r#"[]"#).create();
+    }
+
+    // RV1: review with CHANGES_REQUESTED and body surfaces as Open thread
+    #[test]
+    fn review_changes_requested_with_body_is_open_thread() {
+        let mut server = mockito::Server::new();
+        let reviews = r#"[{"id":100,"state":"CHANGES_REQUESTED","body":"Please fix the naming","user":{"login":"reviewer","type":"User"},"submitted_at":"2024-01-01T00:00:00Z"}]"#;
+        full_pr_mocks_with_reviews(&mut server, 90, "author", "sha90", reviews);
+        let pr = mock_client(&server).fetch_pr("owner", "repo", 90).unwrap();
+        let review_threads: Vec<_> = pr.threads.iter().filter(|t| t.file.is_none()).collect();
+        assert_eq!(review_threads.len(), 1, "expected 1 review thread, got {}", review_threads.len());
+        assert_eq!(review_threads[0].state, crate::model::ThreadState::Open, "expected Open");
+    }
+
+    // RV2: review with APPROVED state is excluded even with body
+    #[test]
+    fn review_approved_is_excluded() {
+        let mut server = mockito::Server::new();
+        let reviews = r#"[{"id":101,"state":"APPROVED","body":"LGTM","user":{"login":"reviewer","type":"User"},"submitted_at":"2024-01-01T00:00:00Z"}]"#;
+        full_pr_mocks_with_reviews(&mut server, 91, "author", "sha91", reviews);
+        let pr = mock_client(&server).fetch_pr("owner", "repo", 91).unwrap();
+        let review_threads: Vec<_> = pr.threads.iter().filter(|t| t.file.is_none()).collect();
+        assert_eq!(review_threads.len(), 0, "expected APPROVED review to be excluded, got {}", review_threads.len());
+    }
+
+    // RV3: review with empty body is excluded
+    #[test]
+    fn review_with_empty_body_is_excluded() {
+        let mut server = mockito::Server::new();
+        let reviews = r#"[{"id":102,"state":"COMMENTED","body":"","user":{"login":"reviewer","type":"User"},"submitted_at":"2024-01-01T00:00:00Z"}]"#;
+        full_pr_mocks_with_reviews(&mut server, 92, "author", "sha92", reviews);
+        let pr = mock_client(&server).fetch_pr("owner", "repo", 92).unwrap();
+        let review_threads: Vec<_> = pr.threads.iter().filter(|t| t.file.is_none()).collect();
+        assert_eq!(review_threads.len(), 0, "expected empty-body review to be excluded, got {}", review_threads.len());
+    }
+
+    // RV4: review thread has file=None and line=None
+    #[test]
+    fn review_thread_has_no_file_or_line() {
+        let mut server = mockito::Server::new();
+        let reviews = r#"[{"id":103,"state":"CHANGES_REQUESTED","body":"Fix this","user":{"login":"reviewer","type":"User"},"submitted_at":"2024-01-01T00:00:00Z"}]"#;
+        full_pr_mocks_with_reviews(&mut server, 93, "author", "sha93", reviews);
+        let pr = mock_client(&server).fetch_pr("owner", "repo", 93).unwrap();
+        let review_threads: Vec<_> = pr.threads.iter().filter(|t| t.file.is_none()).collect();
+        assert_eq!(review_threads.len(), 1, "expected 1 review thread");
+        assert!(review_threads[0].file.is_none(), "expected file to be None");
+        assert!(review_threads[0].line.is_none(), "expected line to be None");
+    }
+
+    // RV5: review from author is excluded
+    #[test]
+    fn review_from_author_is_excluded() {
+        let mut server = mockito::Server::new();
+        let reviews = r#"[{"id":104,"state":"COMMENTED","body":"I updated this","user":{"login":"author","type":"User"},"submitted_at":"2024-01-01T00:00:00Z"}]"#;
+        full_pr_mocks_with_reviews(&mut server, 94, "author", "sha94", reviews);
+        let pr = mock_client(&server).fetch_pr("owner", "repo", 94).unwrap();
+        let review_threads: Vec<_> = pr.threads.iter().filter(|t| t.file.is_none()).collect();
+        assert_eq!(review_threads.len(), 0, "expected author review to be excluded, got {}", review_threads.len());
+    }
+
     // IC5: issue comment from PR author is excluded (only show comments needing a response)
     #[test]
     fn issue_comment_from_author_is_excluded() {

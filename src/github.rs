@@ -327,8 +327,29 @@ impl GithubClient {
         let rr_teams = rr["teams"].as_array().map(|a| a.len()).unwrap_or(0);
         let approved = any_approved && rr_users == 0 && rr_teams == 0;
 
-        // 5. Review comments → threads grouped by root (in_reply_to_id == null)
+        // 4b. Review bodies → threads (CHANGES_REQUESTED/COMMENTED with non-empty body, non-bot, non-author)
         let pr_author = pr_json["user"]["login"].as_str().unwrap_or("").to_string();
+        let mut review_body_threads: Vec<Thread> = Vec::new();
+        for r in reviews_json.as_array().unwrap_or(&vec![]) {
+            let state = r["state"].as_str().unwrap_or("");
+            let body = r["body"].as_str().unwrap_or("");
+            let login = r["user"]["login"].as_str().unwrap_or("");
+            let user_type = r["user"]["type"].as_str().unwrap_or("");
+            let is_bot = user_type == "Bot" || login.contains("[bot]");
+            if (state == "CHANGES_REQUESTED" || state == "COMMENTED") && !body.is_empty() && !is_bot && login != pr_author {
+                review_body_threads.push(Thread {
+                    id: r["id"].as_u64().unwrap_or(0),
+                    state: ThreadState::Open,
+                    author: login.to_string(),
+                    body: body.to_string(),
+                    replies: vec![],
+                    file: None,
+                    line: None,
+                });
+            }
+        }
+
+        // 5. Review comments → threads grouped by root (in_reply_to_id == null)
         let comments_json = self.get_paginated(&format!("/repos/{}/{}/pulls/{}/comments", owner, repo, pr_number))?;
         let all_comments = comments_json.as_array().cloned().unwrap_or_default();
 
@@ -404,7 +425,7 @@ impl GithubClient {
             }
             i += 1;
         }
-        let threads: Vec<Thread> = threads.into_iter().chain(issue_threads).collect();
+        let threads: Vec<Thread> = threads.into_iter().chain(review_body_threads).chain(issue_threads).collect();
 
         Ok(PrState { number: pr_number, title, branch, base: base_branch, draft, approved, checks, threads })
     }
