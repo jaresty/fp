@@ -1165,6 +1165,20 @@ mod tests {
         mock_client(&server).update_pr_base("owner", "repo", 42, "feat/new").unwrap();
     }
 
+    // RD1: mark_pr_ready sends PATCH to correct endpoint with draft:false
+    #[test]
+    fn mark_pr_ready_sends_patch_with_draft_false() {
+        let mut server = mockito::Server::new();
+        server.mock("PATCH", "/repos/owner/repo/pulls/42")
+            .match_body(mockito::Matcher::JsonString(r#"{"draft":false}"#.into()))
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body(r#"{"number":42}"#)
+            .create();
+
+        mock_client(&server).mark_pr_ready("owner", "repo", 42).unwrap();
+    }
+
     // RS4: fetch_pr_base returns the base branch name for a given PR number
     #[test]
     fn fetch_pr_base_returns_base_branch() {

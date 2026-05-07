@@ -128,6 +128,21 @@ impl GithubClient {
         })
     }
 
+    pub fn mark_pr_ready(&self, owner: &str, repo: &str, pr_number: u64) -> Result<()> {
+        let url = format!("{}/repos/{}/{}/pulls/{}", self.base_url, owner, repo, pr_number);
+        let payload = serde_json::json!({ "draft": false });
+        reqwest::blocking::Client::new()
+            .patch(&url)
+            .header("Authorization", format!("Bearer {}", self.token))
+            .header("Accept", "application/vnd.github+json")
+            .header("User-Agent", "fp/0.1")
+            .header("X-GitHub-Api-Version", "2022-11-28")
+            .json(&payload)
+            .send()?
+            .error_for_status()?;
+        Ok(())
+    }
+
     pub fn update_pr_base(&self, owner: &str, repo: &str, pr_number: u64, new_base: &str) -> Result<()> {
         let url = format!("{}/repos/{}/{}/pulls/{}", self.base_url, owner, repo, pr_number);
         let payload = serde_json::json!({ "base": new_base });

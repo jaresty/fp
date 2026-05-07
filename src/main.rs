@@ -70,6 +70,11 @@ enum Commands {
         #[arg(long, default_value = "30")]
         interval: u64,
     },
+    /// Mark a draft PR as ready for review
+    Ready {
+        /// PR number
+        pr: u64,
+    },
     /// Post a general comment on a PR (not a thread reply)
     Comment {
         /// PR number
@@ -305,6 +310,15 @@ fn main() -> Result<()> {
             let client = GithubClient::new(token);
             let posted = client.reply_to_comment(&owner, &repo_name, pr, thread_id, &message)?;
             println!("Replied to thread #{}: {}", thread_id, posted);
+        }
+
+        Commands::Ready { pr } => {
+            let token = resolve_github_token()?;
+            let (owner, repo_name) = detect_repo()
+                .context("could not detect GitHub repo from git remote")?;
+            let client = GithubClient::new(token);
+            client.mark_pr_ready(&owner, &repo_name, pr)?;
+            println!("PR #{} marked as ready for review.", pr);
         }
 
         Commands::Comment { pr, message } => {
