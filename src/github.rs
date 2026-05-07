@@ -100,9 +100,13 @@ impl GithubClient {
         Ok(resp["html_url"].as_str().unwrap_or("").to_string())
     }
 
-    pub fn create_pr(&self, owner: &str, repo: &str, title: &str, head: &str, base: &str, draft: bool) -> Result<PrState> {
+    #[allow(clippy::too_many_arguments)]
+    pub fn create_pr_with_body(&self, owner: &str, repo: &str, title: &str, head: &str, base: &str, draft: bool, body: Option<&str>) -> Result<PrState> {
         let url = format!("{}/repos/{}/{}/pulls", self.base_url, owner, repo);
-        let payload = serde_json::json!({ "title": title, "head": head, "base": base, "draft": draft });
+        let mut payload = serde_json::json!({ "title": title, "head": head, "base": base, "draft": draft });
+        if let Some(b) = body {
+            payload["body"] = serde_json::Value::String(b.to_string());
+        }
         let resp = reqwest::blocking::Client::new()
             .post(&url)
             .header("Authorization", format!("Bearer {}", self.token))
@@ -122,6 +126,27 @@ impl GithubClient {
             checks: vec![],
             threads: vec![],
         })
+    }
+
+    pub fn update_pr_base(&self, owner: &str, repo: &str, pr_number: u64, new_base: &str) -> Result<()> {
+        let url = format!("{}/repos/{}/{}/pulls/{}", self.base_url, owner, repo, pr_number);
+        let payload = serde_json::json!({ "base": new_base });
+        reqwest::blocking::Client::new()
+            .patch(&url)
+            .header("Authorization", format!("Bearer {}", self.token))
+            .header("Accept", "application/vnd.github+json")
+            .header("User-Agent", "fp/0.1")
+            .header("X-GitHub-Api-Version", "2022-11-28")
+            .json(&payload)
+            .send()?
+            .error_for_status()?;
+        Ok(())
+    }
+
+    pub fn fetch_pr_base(&self, owner: &str, repo: &str, pr_number: u64) -> Result<String> {
+        let url = format!("{}/repos/{}/{}/pulls/{}", self.base_url, owner, repo, pr_number);
+        let resp = self.get(&url.replace(&self.base_url, ""))?;
+        Ok(resp["base"]["ref"].as_str().unwrap_or("").to_string())
     }
 
     pub fn fetch_pr_metadata(&self, owner: &str, repo: &str, pr_number: u64) -> Result<(String, String)> {

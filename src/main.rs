@@ -118,6 +118,15 @@ enum Commands {
         /// Base branch (default: main)
         #[arg(long, default_value = "main")]
         base: String,
+        /// PR description body
+        #[arg(long)]
+        body: Option<String>,
+        /// Insert current branch before this PR: rebase that PR onto current branch
+        #[arg(long)]
+        restack_before: Option<u64>,
+        /// Insert current branch after this PR: rebase the PR that follows it onto current branch
+        #[arg(long)]
+        insert_after: Option<u64>,
     },
     /// Rebase all tracked PRs in stack order onto their parent branches
     RebaseStack,
@@ -127,6 +136,24 @@ enum Commands {
         #[arg(long)]
         path: Option<std::path::PathBuf>,
     },
+}
+
+/// Rebase `branch` onto `new_base`, cutting away `old_base`, then force-push.
+/// Equivalent to: git rebase --onto <new_base> <old_base> <branch> && git push --force-with-lease
+fn rebase_branch_onto(branch: &str, old_base: &str, new_base: &str, dir: &std::path::Path) -> anyhow::Result<()> {
+    let git = |args: &[&str]| {
+        std::process::Command::new("git").args(args).current_dir(dir).output()
+    };
+    let checkout = git(&["checkout", branch])?;
+    anyhow::ensure!(checkout.status.success(), "failed to checkout {}: {}", branch, String::from_utf8_lossy(&checkout.stderr));
+    let rebase = git(&["rebase", "--onto", new_base, old_base, branch])?;
+    if !rebase.status.success() {
+        git(&["rebase", "--abort"]).ok();
+        anyhow::bail!("rebase --onto {} {} {} failed: {}", new_base, old_base, branch, String::from_utf8_lossy(&rebase.stderr));
+    }
+    let push = git(&["push", "--force-with-lease"])?;
+    anyhow::ensure!(push.status.success(), "force-push of {} failed: {}", branch, String::from_utf8_lossy(&push.stderr));
+    Ok(())
 }
 
 /// Send a macOS system notification via osascript. Silently ignores errors on non-macOS or
@@ -344,7 +371,7 @@ fn main() -> Result<()> {
             }
         }
 
-        Commands::Create { title, base } => {
+        Commands::Create { title, base, body, restack_before, insert_after } => {
             let token = resolve_github_token()?;
             let (owner, repo_name) = detect_repo()
                 .context("could not detect GitHub repo from git remote")?;
@@ -355,15 +382,46 @@ fn main() -> Result<()> {
                 .output()
                 .context("failed to run git")?;
             let head_branch = String::from_utf8(out.stdout)?.trim().to_string();
+            let work_dir = stack::resolve_work_dir(std::path::Path::new(".git"))?;
 
             let client = GithubClient::new(token);
-            let pr_state = client.create_pr(&owner, &repo_name, &title, &head_branch, &base, true)?;
+            let pr_state = client.create_pr_with_body(&owner, &repo_name, &title, &head_branch, &base, true, body.as_deref())?;
             store.track(TrackedPr {
                 number: pr_state.number,
                 title: pr_state.title.clone(),
                 branch: pr_state.branch.clone(),
             })?;
             println!("Created PR #{}: {} ({})", pr_state.number, pr_state.title, pr_state.branch);
+
+            // --restack-before <pr>: rebase that PR's branch onto current branch
+            if let Some(target_pr) = restack_before {
+                let target_branch = client.fetch_pr_metadata(&owner, &repo_name, target_pr)?.1;
+                let old_base = client.fetch_pr_base(&owner, &repo_name, target_pr)?;
+                rebase_branch_onto(&target_branch, &old_base, &head_branch, &work_dir)?;
+                client.update_pr_base(&owner, &repo_name, target_pr, &head_branch)?;
+                println!("Restacked PR #{} onto {} (rebased {} --onto {})", target_pr, head_branch, target_branch, head_branch);
+            }
+
+            // --insert-after <pr>: find the PR whose base is <pr>'s branch, rebase it onto current branch
+            if let Some(anchor_pr) = insert_after {
+                let anchor_branch = client.fetch_pr_metadata(&owner, &repo_name, anchor_pr)?.1;
+                let state = store.load()?;
+                // Find tracked PR whose base is anchor_branch
+                let next_pr = state.prs.values()
+                    .find(|p| {
+                        client.fetch_pr_base(&owner, &repo_name, p.number)
+                            .ok().as_deref() == Some(&anchor_branch)
+                    });
+                if let Some(next) = next_pr {
+                    let next_branch = next.branch.clone();
+                    let next_pr_num = next.number;
+                    rebase_branch_onto(&next_branch, &anchor_branch, &head_branch, &work_dir)?;
+                    client.update_pr_base(&owner, &repo_name, next_pr_num, &head_branch)?;
+                    println!("Inserted {} between PR #{} and PR #{}", head_branch, anchor_pr, next_pr_num);
+                } else {
+                    println!("No tracked PR found with base {}; nothing to restack", anchor_branch);
+                }
+            }
         }
 
         Commands::InstallSkills { path } => {

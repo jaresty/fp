@@ -560,7 +560,7 @@ mod tests {
 
         let client = mock_client(&server);
         let pr = client
-            .create_pr("owner", "repo", "my feature", "feat/thing", "main", true)
+            .create_pr_with_body("owner", "repo", "my feature", "feat/thing", "main", true, None)
             .unwrap();
         assert_eq!(pr.number, 42);
         assert_eq!(pr.title, "my feature");
@@ -580,7 +580,7 @@ mod tests {
 
         let client = mock_client(&server);
         assert!(client
-            .create_pr("owner", "repo", "title", "branch", "main", true)
+            .create_pr_with_body("owner", "repo", "title", "branch", "main", true, None)
             .is_err());
     }
 
@@ -1134,5 +1134,47 @@ mod tests {
 
         let pr = mock_client(&server).fetch_pr("owner", "repo", 99).unwrap();
         assert!(!pr.approved, "approved must be false when teams are still pending in requested_reviewers");
+    }
+
+    // CR2: create_pr sends body field in POST payload when provided
+    #[test]
+    fn create_pr_sends_body_to_api() {
+        let mut server = mockito::Server::new();
+        server.mock("POST", "/repos/owner/repo/pulls")
+            .match_body(mockito::Matcher::PartialJson(serde_json::json!({"body": "my description"})))
+            .with_status(201)
+            .with_header("content-type", "application/json")
+            .with_body(r#"{"number":10,"html_url":"https://github.com/owner/repo/pull/10","head":{"ref":"feat/x"},"title":"my PR"}"#)
+            .create();
+
+        let result = mock_client(&server).create_pr_with_body("owner", "repo", "my PR", "feat/x", "main", false, Some("my description")).unwrap();
+        assert_eq!(result.number, 10);
+    }
+
+    // RS3: update_pr_base sends PATCH to update base branch
+    #[test]
+    fn update_pr_base_calls_patch_endpoint() {
+        let mut server = mockito::Server::new();
+        server.mock("PATCH", "/repos/owner/repo/pulls/42")
+            .match_body(mockito::Matcher::PartialJson(serde_json::json!({"base": "feat/new"})))
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body(r#"{"number":42,"head":{"ref":"feat/old"},"base":{"ref":"feat/new"},"title":"old PR"}"#)
+            .create();
+
+        mock_client(&server).update_pr_base("owner", "repo", 42, "feat/new").unwrap();
+    }
+
+    // RS4: fetch_pr_base returns the base branch name for a given PR number
+    #[test]
+    fn fetch_pr_base_returns_base_branch() {
+        let mut server = mockito::Server::new();
+        server.mock("GET", "/repos/owner/repo/pulls/77")
+            .with_status(200).with_header("content-type","application/json")
+            .with_body(r#"{"number":77,"head":{"ref":"feat/child"},"base":{"ref":"feat/parent"},"title":"child PR"}"#)
+            .create();
+
+        let base = mock_client(&server).fetch_pr_base("owner", "repo", 77).unwrap();
+        assert_eq!(base, "feat/parent");
     }
 }
