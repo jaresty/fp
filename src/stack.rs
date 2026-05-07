@@ -41,9 +41,13 @@ pub fn rebase_stack(branches: &[String], parent_of: &HashMap<String, Option<Stri
     let mut rebased = Vec::new();
 
     for branch in &ordered {
+        let parent_owned: String;
         let parent = match parent_of.get(branch).and_then(|p| p.as_ref()) {
-            Some(p) => p,
-            None => continue, // root branch — nothing to rebase onto
+            Some(p) => p.as_str(),
+            None => {
+                parent_owned = "origin/main".to_string();
+                &parent_owned
+            }
         };
 
         // Checkout the branch
