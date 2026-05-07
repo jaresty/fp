@@ -371,6 +371,41 @@ impl GithubClient {
             }
         }).collect();
 
+        // 6. Issue-level comments (PR conversation, not inline review comments)
+        // Surfaced as threads: Open if no author reply, Addressed if author replied. Bots and author-only threads excluded.
+        let issue_comments_json = self.get_paginated(&format!("/repos/{}/{}/issues/{}/comments", owner, repo, pr_number))?;
+        let issue_comments = issue_comments_json.as_array().cloned().unwrap_or_default();
+        let mut issue_threads: Vec<Thread> = Vec::new();
+        // Each top-level issue comment is its own thread (no threading in issue comments API)
+        // Group consecutive comments: first non-author comment starts a thread, replies follow until next non-author comment
+        // Simpler model: each non-bot, non-author comment is a thread root; state = Addressed if author has replied after it
+        let mut i = 0;
+        while i < issue_comments.len() {
+            let c = &issue_comments[i];
+            let login = c["user"]["login"].as_str().unwrap_or("");
+            let user_type = c["user"]["type"].as_str().unwrap_or("");
+            let is_bot = user_type == "Bot" || login.contains("[bot]");
+            let is_author = login == pr_author;
+            if !is_bot && !is_author {
+                // Check if author replied in any subsequent comment
+                let author_replied = issue_comments[i+1..].iter().any(|r| {
+                    r["user"]["login"].as_str().unwrap_or("") == pr_author
+                });
+                let state = if author_replied { ThreadState::Addressed } else { ThreadState::Open };
+                issue_threads.push(Thread {
+                    id: c["id"].as_u64().unwrap_or(0),
+                    state,
+                    author: login.to_string(),
+                    body: c["body"].as_str().unwrap_or("").to_string(),
+                    replies: vec![],
+                    file: None,
+                    line: None,
+                });
+            }
+            i += 1;
+        }
+        let threads: Vec<Thread> = threads.into_iter().chain(issue_threads).collect();
+
         Ok(PrState { number: pr_number, title, branch, base: base_branch, draft, approved, checks, threads })
     }
 }

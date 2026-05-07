@@ -53,6 +53,8 @@ mod tests {
             .with_header("content-type", "application/json")
             .with_body(r#"[]"#)
             .create();
+        server.mock("GET", "/repos/owner/repo/issues/42/comments?per_page=100&page=1")
+            .with_status(200).with_header("content-type","application/json").with_body(r#"[]"#).create();
 
         let client = mock_client(&server);
         let pr = client.fetch_pr("owner", "repo", 42).unwrap();
@@ -94,6 +96,8 @@ mod tests {
             .with_header("content-type", "application/json")
             .with_body(r#"[]"#)
             .create();
+        server.mock("GET", "/repos/owner/repo/issues/1/comments?per_page=100&page=1")
+            .with_status(200).with_header("content-type","application/json").with_body(r#"[]"#).create();
 
         let pr = mock_client(&server).fetch_pr("owner", "repo", 1).unwrap();
         assert!(pr.draft);
@@ -146,6 +150,8 @@ mod tests {
             .with_header("content-type", "application/json")
             .with_body(r#"[]"#)
             .create();
+        server.mock("GET", "/repos/owner/repo/issues/5/comments?per_page=100&page=1")
+            .with_status(200).with_header("content-type","application/json").with_body(r#"[]"#).create();
 
         let pr = mock_client(&server).fetch_pr("owner", "repo", 5).unwrap();
         let test_check = pr.checks.iter().find(|c| c.name == "ci/test").unwrap();
@@ -178,6 +184,8 @@ mod tests {
         server.mock("GET", "/repos/owner/repo/pulls/55/reviews")
             .with_status(200).with_header("content-type","application/json").with_body(r#"[]"#).create();
         server.mock("GET", "/repos/owner/repo/pulls/55/comments?per_page=100&page=1")
+            .with_status(200).with_header("content-type","application/json").with_body(r#"[]"#).create();
+        server.mock("GET", "/repos/owner/repo/issues/55/comments?per_page=100&page=1")
             .with_status(200).with_header("content-type","application/json").with_body(r#"[]"#).create();
         server.mock("GET", "/repos/owner/repo/pulls/55/requested_reviewers")
             .with_status(200).with_header("content-type","application/json")
@@ -226,6 +234,8 @@ mod tests {
             .with_header("content-type", "application/json")
             .with_body(r#"[]"#)
             .create();
+        server.mock("GET", "/repos/owner/repo/issues/6/comments?per_page=100&page=1")
+            .with_status(200).with_header("content-type","application/json").with_body(r#"[]"#).create();
 
         let pr = mock_client(&server).fetch_pr("owner", "repo", 6).unwrap();
         let check = pr.checks.iter().find(|c| c.name == "ci/test").unwrap();
@@ -270,6 +280,8 @@ mod tests {
             }]"#,
             )
             .create();
+        server.mock("GET", "/repos/owner/repo/issues/7/comments?per_page=100&page=1")
+            .with_status(200).with_header("content-type","application/json").with_body(r#"[]"#).create();
 
         let pr = mock_client(&server).fetch_pr("owner", "repo", 7).unwrap();
         assert_eq!(pr.threads.len(), 1);
@@ -318,6 +330,8 @@ mod tests {
             ]"#,
             )
             .create();
+        server.mock("GET", "/repos/owner/repo/issues/11/comments?per_page=100&page=1")
+            .with_status(200).with_header("content-type","application/json").with_body(r#"[]"#).create();
 
         let pr = mock_client(&server).fetch_pr("owner", "repo", 11).unwrap();
         assert_eq!(
@@ -353,6 +367,8 @@ mod tests {
                 {"id": 302, "body": "reply two", "path": "src/lib.rs", "line": 5,
                  "in_reply_to_id": 300, "user": {"login": "reviewer"}}
             ]"#).create();
+        server.mock("GET", "/repos/owner/repo/issues/88/comments?per_page=100&page=1")
+            .with_status(200).with_header("content-type","application/json").with_body(r#"[]"#).create();
 
         let pr = mock_client(&server).fetch_pr("owner", "repo", 88).unwrap();
         assert_eq!(pr.threads.len(), 1);
@@ -390,6 +406,8 @@ mod tests {
                 {"id": 202, "body": "second reply", "path": "src/lib.rs", "line": 5,
                  "in_reply_to_id": 200, "user": {"login": "reviewer"}}
             ]"#).create();
+        server.mock("GET", "/repos/owner/repo/issues/77/comments?per_page=100&page=1")
+            .with_status(200).with_header("content-type","application/json").with_body(r#"[]"#).create();
 
         let pr = mock_client(&server).fetch_pr("owner", "repo", 77).unwrap();
         assert_eq!(pr.threads.len(), 1);
@@ -437,6 +455,8 @@ mod tests {
             ]"#,
             )
             .create();
+        server.mock("GET", "/repos/owner/repo/issues/12/comments?per_page=100&page=1")
+            .with_status(200).with_header("content-type","application/json").with_body(r#"[]"#).create();
 
         let pr = mock_client(&server).fetch_pr("owner", "repo", 12).unwrap();
         assert_eq!(pr.threads.len(), 1);
@@ -479,6 +499,8 @@ mod tests {
             .with_header("content-type", "application/json")
             .with_body(r#"[]"#)
             .create();
+        server.mock("GET", "/repos/owner/repo/issues/8/comments?per_page=100&page=1")
+            .with_status(200).with_header("content-type","application/json").with_body(r#"[]"#).create();
 
         let pr = mock_client(&server).fetch_pr("owner", "repo", 8).unwrap();
         assert!(pr.approved);
@@ -516,6 +538,8 @@ mod tests {
             .with_header("content-type", "application/json")
             .with_body(r#"[]"#)
             .create();
+        server.mock("GET", "/repos/owner/repo/issues/9/comments?per_page=100&page=1")
+            .with_status(200).with_header("content-type","application/json").with_body(r#"[]"#).create();
 
         let pr = mock_client(&server).fetch_pr("owner", "repo", 9).unwrap();
         assert!(!pr.approved);
@@ -573,6 +597,8 @@ mod tests {
             .with_header("content-type", "application/json")
             .with_body(r#"[]"#)
             .create();
+        server.mock("GET", "/repos/owner/repo/issues/10/comments?per_page=100&page=1")
+            .with_status(200).with_header("content-type","application/json").with_body(r#"[]"#).create();
 
         let pr = mock_client(&server).fetch_pr("owner", "repo", 10).unwrap();
         let check = pr.checks.iter().find(|c| c.name == "ci/test").unwrap();
@@ -712,6 +738,8 @@ mod tests {
             .with_header("content-type", "application/json")
             .with_body(r#"[]"#)
             .create();
+        server.mock("GET", "/repos/owner/repo/issues/30/comments?per_page=100&page=1")
+            .with_status(200).with_header("content-type","application/json").with_body(r#"[]"#).create();
 
         let pr = mock_client(&server).fetch_pr("owner", "repo", 30).unwrap();
         let check = pr.checks.iter().find(|c| c.name == "ci/test").unwrap();
@@ -766,6 +794,8 @@ mod tests {
             .with_header("content-type", "application/json")
             .with_body(r#"[]"#)
             .create();
+        server.mock("GET", "/repos/owner/repo/issues/20/comments?per_page=100&page=1")
+            .with_status(200).with_header("content-type","application/json").with_body(r#"[]"#).create();
 
         let pr = mock_client(&server).fetch_pr("owner", "repo", 20).unwrap();
         // check-run still present
@@ -826,6 +856,8 @@ mod tests {
         server.mock("GET", "/repos/owner/repo/pulls/55/comments?per_page=100&page=1")
             .with_status(200).with_header("content-type","application/json")
             .with_body(r#"[]"#).create();
+        server.mock("GET", "/repos/owner/repo/issues/55/comments?per_page=100&page=1")
+            .with_status(200).with_header("content-type","application/json").with_body(r#"[]"#).create();
 
         let pr = mock_client(&server).fetch_pr("owner", "repo", 55).unwrap();
         assert_eq!(pr.base, "develop", "expected base to be 'develop', got '{}'", pr.base);
@@ -875,6 +907,8 @@ mod tests {
             .with_header("content-type", "application/json")
             .with_body(r#"[]"#)
             .create();
+        server.mock("GET", "/repos/owner/repo/issues/42/comments?per_page=100&page=1")
+            .with_status(200).with_header("content-type","application/json").with_body(r#"[]"#).create();
 
         let pr = mock_client(&server).fetch_pr("owner", "repo", 42).unwrap();
         assert_eq!(pr.threads.len(), 0);
@@ -932,6 +966,8 @@ mod tests {
             .with_header("content-type", "application/json")
             .with_body(r#"[{"id":2,"path":"b.rs","line":2,"body":"comment2","user":{"login":"reviewer"},"in_reply_to_id":null}]"#)
             .create();
+        server.mock("GET", "/repos/owner/repo/issues/43/comments?per_page=100&page=1")
+            .with_status(200).with_header("content-type","application/json").with_body(r#"[]"#).create();
 
         let pr = mock_client(&server).fetch_pr("owner", "repo", 43).unwrap();
         // Both comments from both pages must be present
@@ -962,6 +998,8 @@ mod tests {
             .with_header("content-type", "application/json")
             .with_body(r#"[]"#)
             .create();
+        server.mock("GET", "/repos/owner/repo/issues/44/comments?per_page=100&page=1")
+            .with_status(200).with_header("content-type","application/json").with_body(r#"[]"#).create();
 
         // If fetch_pr still uses ?per_page=100 (no page=), this will 404 and the test will fail
         let pr = mock_client(&server).fetch_pr("owner", "repo", 44).unwrap();
@@ -995,6 +1033,8 @@ mod tests {
         server.mock("GET", "/repos/owner/repo/pulls/50/comments?per_page=100&page=1")
             .with_status(200).with_header("content-type", "application/json")
             .with_body(r#"[]"#).create();
+        server.mock("GET", "/repos/owner/repo/issues/50/comments?per_page=100&page=1")
+            .with_status(200).with_header("content-type","application/json").with_body(r#"[]"#).create();
 
         let pr = mock_client(&server).fetch_pr("owner", "repo", 50).unwrap();
         let rspec_checks: Vec<_> = pr.checks.iter().filter(|c| c.name == "rspec").collect();
@@ -1030,6 +1070,8 @@ mod tests {
         server.mock("GET", "/repos/owner/repo/pulls/51/comments?per_page=100&page=1")
             .with_status(200).with_header("content-type", "application/json")
             .with_body(r#"[]"#).create();
+        server.mock("GET", "/repos/owner/repo/issues/51/comments?per_page=100&page=1")
+            .with_status(200).with_header("content-type","application/json").with_body(r#"[]"#).create();
 
         let pr = mock_client(&server).fetch_pr("owner", "repo", 51).unwrap();
         let bk: Vec<_> = pr.checks.iter().filter(|c| c.name == "buildkite/primary").collect();
@@ -1195,6 +1237,8 @@ mod tests {
         server.mock("GET", "/repos/owner/repo/pulls/99/comments?per_page=100&page=1")
             .with_status(200).with_header("content-type","application/json")
             .with_body(r#"[]"#).create();
+        server.mock("GET", "/repos/owner/repo/issues/99/comments?per_page=100&page=1")
+            .with_status(200).with_header("content-type","application/json").with_body(r#"[]"#).create();
 
         let pr = mock_client(&server).fetch_pr("owner", "repo", 99).unwrap();
         assert!(!pr.approved, "approved must be false when teams are still pending in requested_reviewers");
@@ -1318,6 +1362,8 @@ mod tests {
             .with_status(200).with_header("content-type","application/json").with_body(r#"[]"#).create();
         server.mock("GET", format!("/repos/owner/repo/pulls/{}/requested_reviewers", pr_number).as_str())
             .with_status(200).with_header("content-type","application/json").with_body(r#"{"users":[],"teams":[]}"#).create();
+        server.mock("GET", format!("/repos/owner/repo/issues/{}/comments?per_page=100&page=1", pr_number).as_str())
+            .with_status(200).with_header("content-type","application/json").with_body(r#"[]"#).expect_at_least(1).create();
     }
 
     // PAR2: fetch_prs_as_map returns a HashMap keyed by PR number
@@ -1352,5 +1398,91 @@ mod tests {
             v
         };
         assert_eq!(numbers, vec![101, 102, 103]);
+    }
+
+    fn full_pr_mocks(server: &mut mockito::Server, pr_number: u64, author: &str, sha: &str, issue_comments_body: &str) {
+        let pr_body = format!(
+            r#"{{"number":{pr},"title":"t","draft":false,"head":{{"ref":"b","sha":"{sha}"}},"base":{{"ref":"main"}},"user":{{"login":"{author}"}}}}"#,
+            pr = pr_number, sha = sha, author = author
+        );
+        server.mock("GET", format!("/repos/owner/repo/pulls/{}", pr_number).as_str())
+            .with_status(200).with_header("content-type","application/json").with_body(pr_body).create();
+        server.mock("GET", "/repos/owner/repo/commits/b/check-runs")
+            .with_status(200).with_header("content-type","application/json").with_body(r#"{"check_runs":[]}"#).create();
+        server.mock("GET", "/repos/owner/repo/branches/main/protection")
+            .with_status(404).create();
+        server.mock("GET", format!("/repos/owner/repo/commits/{}/statuses", sha).as_str())
+            .with_status(200).with_header("content-type","application/json").with_body(r#"[]"#).create();
+        server.mock("GET", format!("/repos/owner/repo/pulls/{}/reviews", pr_number).as_str())
+            .with_status(200).with_header("content-type","application/json").with_body(r#"[]"#).create();
+        server.mock("GET", format!("/repos/owner/repo/pulls/{}/requested_reviewers", pr_number).as_str())
+            .with_status(200).with_header("content-type","application/json").with_body(r#"{"users":[],"teams":[]}"#).create();
+        server.mock("GET", format!("/repos/owner/repo/pulls/{}/comments?per_page=100&page=1", pr_number).as_str())
+            .with_status(200).with_header("content-type","application/json").with_body(r#"[]"#).create();
+        server.mock("GET", format!("/repos/owner/repo/issues/{}/comments?per_page=100&page=1", pr_number).as_str())
+            .with_status(200).with_header("content-type","application/json").with_body(issue_comments_body).create();
+    }
+
+    // IC1: issue comment from non-author with no reply is surfaced as Open thread
+    #[test]
+    fn issue_comment_from_reviewer_is_open_thread() {
+        let mut server = mockito::Server::new();
+        let comments = r#"[{"id":1,"body":"please fix this","user":{"login":"reviewer","type":"User"}}]"#;
+        full_pr_mocks(&mut server, 77, "author", "sha1", comments);
+        let pr = mock_client(&server).fetch_pr("owner", "repo", 77).unwrap();
+        let issue_threads: Vec<_> = pr.threads.iter().filter(|t| t.file.is_none()).collect();
+        assert_eq!(issue_threads.len(), 1, "expected 1 issue-level thread, got {}", issue_threads.len());
+        assert_eq!(issue_threads[0].state, crate::model::ThreadState::Open, "expected Open state");
+    }
+
+    // IC2: issue comment from bot is excluded
+    #[test]
+    fn issue_comment_from_bot_is_excluded() {
+        let mut server = mockito::Server::new();
+        let comments = r#"[{"id":2,"body":"CI passed","user":{"login":"github-actions[bot]","type":"Bot"}}]"#;
+        full_pr_mocks(&mut server, 78, "author", "sha2", comments);
+        let pr = mock_client(&server).fetch_pr("owner", "repo", 78).unwrap();
+        let issue_threads: Vec<_> = pr.threads.iter().filter(|t| t.file.is_none()).collect();
+        assert_eq!(issue_threads.len(), 0, "expected bot comment to be excluded, got {}", issue_threads.len());
+    }
+
+    // IC3: issue comment with author reply is Addressed
+    #[test]
+    fn issue_comment_with_author_reply_is_addressed() {
+        let mut server = mockito::Server::new();
+        // Two comments: reviewer asks, author replies
+        let comments = r#"[
+            {"id":3,"body":"please clarify","user":{"login":"reviewer","type":"User"}},
+            {"id":4,"body":"done","user":{"login":"author","type":"User"}}
+        ]"#;
+        full_pr_mocks(&mut server, 79, "author", "sha3", comments);
+        let pr = mock_client(&server).fetch_pr("owner", "repo", 79).unwrap();
+        let issue_threads: Vec<_> = pr.threads.iter().filter(|t| t.file.is_none()).collect();
+        assert_eq!(issue_threads.len(), 1, "expected 1 issue-level thread");
+        assert_eq!(issue_threads[0].state, crate::model::ThreadState::Addressed, "expected Addressed state");
+    }
+
+    // IC4: issue comment thread has file=None and line=None
+    #[test]
+    fn issue_comment_thread_has_no_file_or_line() {
+        let mut server = mockito::Server::new();
+        let comments = r#"[{"id":5,"body":"general comment","user":{"login":"reviewer","type":"User"}}]"#;
+        full_pr_mocks(&mut server, 80, "author", "sha4", comments);
+        let pr = mock_client(&server).fetch_pr("owner", "repo", 80).unwrap();
+        let issue_threads: Vec<_> = pr.threads.iter().filter(|t| t.file.is_none()).collect();
+        assert_eq!(issue_threads.len(), 1, "expected 1 issue-level thread");
+        assert!(issue_threads[0].file.is_none(), "expected file to be None");
+        assert!(issue_threads[0].line.is_none(), "expected line to be None");
+    }
+
+    // IC5: issue comment from PR author is excluded (only show comments needing a response)
+    #[test]
+    fn issue_comment_from_author_is_excluded() {
+        let mut server = mockito::Server::new();
+        let comments = r#"[{"id":6,"body":"I updated the PR","user":{"login":"author","type":"User"}}]"#;
+        full_pr_mocks(&mut server, 81, "author", "sha5", comments);
+        let pr = mock_client(&server).fetch_pr("owner", "repo", 81).unwrap();
+        let issue_threads: Vec<_> = pr.threads.iter().filter(|t| t.file.is_none()).collect();
+        assert_eq!(issue_threads.len(), 0, "expected author's own comment to be excluded, got {}", issue_threads.len());
     }
 }
