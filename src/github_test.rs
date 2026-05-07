@@ -156,6 +156,40 @@ mod tests {
         assert_eq!(lint_check.status, CheckStatus::Pass);
     }
 
+    // D2b: skipped and neutral conclusions map to Pass (not Fail)
+    #[test]
+    fn skipped_and_neutral_conclusion_maps_to_pass() {
+        let mut server = mockito::Server::new();
+        server.mock("GET", "/repos/owner/repo/pulls/55")
+            .with_status(200).with_header("content-type","application/json")
+            .with_body(r#"{"number":55,"title":"t","draft":false,"head":{"ref":"br","sha":""},"base":{"ref":"main"}}"#)
+            .create();
+        server.mock("GET", "/repos/owner/repo/commits/br/check-runs")
+            .with_status(200).with_header("content-type","application/json")
+            .with_body(r#"{"check_runs":[
+                {"name":"skip-check","conclusion":"skipped","status":"completed"},
+                {"name":"neutral-check","conclusion":"neutral","status":"completed"}
+            ]}"#)
+            .create();
+        server.mock("GET", "/repos/owner/repo/branches/br/protection").with_status(404).create();
+        server.mock("GET", "/repos/owner/repo/branches/main/protection").with_status(404).create();
+        server.mock("GET", "/repos/owner/repo/commits//statuses")
+            .with_status(200).with_header("content-type","application/json").with_body(r#"[]"#).create();
+        server.mock("GET", "/repos/owner/repo/pulls/55/reviews")
+            .with_status(200).with_header("content-type","application/json").with_body(r#"[]"#).create();
+        server.mock("GET", "/repos/owner/repo/pulls/55/comments?per_page=100&page=1")
+            .with_status(200).with_header("content-type","application/json").with_body(r#"[]"#).create();
+        server.mock("GET", "/repos/owner/repo/pulls/55/requested_reviewers")
+            .with_status(200).with_header("content-type","application/json")
+            .with_body(r#"{"users":[],"teams":[]}"#).create();
+
+        let pr = mock_client(&server).fetch_pr("owner", "repo", 55).unwrap();
+        let skip_check = pr.checks.iter().find(|c| c.name == "skip-check").unwrap();
+        let neutral_check = pr.checks.iter().find(|c| c.name == "neutral-check").unwrap();
+        assert_eq!(skip_check.status, CheckStatus::Pass, "skipped should map to Pass");
+        assert_eq!(neutral_check.status, CheckStatus::Pass, "neutral should map to Pass");
+    }
+
     // D2: pending check maps to Pending status
     #[test]
     fn pending_check_maps_to_pending_status() {

@@ -240,7 +240,7 @@ impl GithubClient {
             .map(|c| {
                 let name = c["name"].as_str().unwrap_or("").to_string();
                 let status = match (c["status"].as_str(), c["conclusion"].as_str()) {
-                    (_, Some("success")) => CheckStatus::Pass,
+                    (_, Some("success")) | (_, Some("skipped")) | (_, Some("neutral")) => CheckStatus::Pass,
                     (_, Some("failure")) | (_, Some("timed_out")) | (_, Some("cancelled")) => CheckStatus::Fail,
                     (Some("completed"), _) => CheckStatus::Fail,
                     _ => CheckStatus::Pending,

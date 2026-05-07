@@ -9,6 +9,7 @@ pub enum TaskType {
     RespondThread,
     AwaitingReview,
     AwaitingCi,
+    MarkReady,
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
@@ -87,6 +88,20 @@ pub fn generate_tasks(pr: &PrState) -> Vec<Task> {
             blocking: false,
             description: "Waiting for approval".into(),
             context_hint: "approval".into(),
+        });
+    }
+
+    // Draft PR with all checks green and no open threads → suggest marking ready
+    if pr.draft
+        && pr.checks.iter().all(|c| c.status == CheckStatus::Pass)
+        && !pr.threads.iter().any(|t| matches!(t.state, ThreadState::Open | ThreadState::Stale))
+    {
+        tasks.push(Task {
+            pr: pr.number,
+            task_type: TaskType::MarkReady,
+            blocking: false,
+            description: format!("Run `fp ready {}` to mark this PR ready for review", pr.number),
+            context_hint: "mark_ready".into(),
         });
     }
 

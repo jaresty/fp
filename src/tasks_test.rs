@@ -237,6 +237,45 @@ mod tests {
         assert_eq!(resolved.len(), 1);
     }
 
+    // MR1: draft PR with all passing checks and no open threads generates MarkReady task
+    #[test]
+    fn draft_pr_with_all_passing_checks_generates_mark_ready_task() {
+        let pr = PrState {
+            number: 10,
+            title: "Draft feature".into(),
+            branch: "feat/draft".into(),
+            draft: true,
+            approved: false,
+            checks: vec![Check { name: "ci".into(), status: CheckStatus::Pass, required: true, details_url: None }],
+            threads: vec![],
+        };
+        let tasks = generate_tasks(&pr);
+        assert!(
+            tasks.iter().any(|t| t.task_type == TaskType::MarkReady),
+            "expected MarkReady task for draft PR with all green checks, got: {:?}",
+            tasks.iter().map(|t| &t.task_type).collect::<Vec<_>>()
+        );
+    }
+
+    // MR2: non-draft PR does not generate MarkReady task
+    #[test]
+    fn non_draft_pr_does_not_generate_mark_ready_task() {
+        let pr = PrState {
+            number: 11,
+            title: "Open feature".into(),
+            branch: "feat/open".into(),
+            draft: false,
+            approved: false,
+            checks: vec![Check { name: "ci".into(), status: CheckStatus::Pass, required: true, details_url: None }],
+            threads: vec![],
+        };
+        let tasks = generate_tasks(&pr);
+        assert!(
+            !tasks.iter().any(|t| t.task_type == TaskType::MarkReady),
+            "expected no MarkReady task for non-draft PR"
+        );
+    }
+
     // DW3: task_diff returns empty when tasks unchanged
     #[test]
     fn task_diff_returns_empty_when_unchanged() {
