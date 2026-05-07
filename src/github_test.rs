@@ -1165,15 +1165,22 @@ mod tests {
         mock_client(&server).update_pr_base("owner", "repo", 42, "feat/new").unwrap();
     }
 
-    // RD1: mark_pr_ready sends PATCH to correct endpoint with draft:false
+    // RD1: mark_pr_ready fetches node_id then calls GraphQL markPullRequestReadyForReview
     #[test]
-    fn mark_pr_ready_sends_patch_with_draft_false() {
+    fn mark_pr_ready_sends_graphql_mutation() {
         let mut server = mockito::Server::new();
-        server.mock("PATCH", "/repos/owner/repo/pulls/42")
-            .match_body(mockito::Matcher::JsonString(r#"{"draft":false}"#.into()))
+        server.mock("GET", "/repos/owner/repo/pulls/42")
             .with_status(200)
             .with_header("content-type", "application/json")
-            .with_body(r#"{"number":42}"#)
+            .with_body(r#"{"number":42,"node_id":"PR_abc123","head":{"ref":"feat/x"},"base":{"ref":"main"},"title":"t","draft":true}"#)
+            .create();
+        server.mock("POST", "/graphql")
+            .match_body(mockito::Matcher::PartialJsonString(
+                r#"{"query":"mutation { markPullRequestReadyForReview(input: { pullRequestId: \"PR_abc123\" }) { pullRequest { isDraft } } }"}"#.into()
+            ))
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body(r#"{"data":{"markPullRequestReadyForReview":{"pullRequest":{"isDraft":false}}}}"#)
             .create();
 
         mock_client(&server).mark_pr_ready("owner", "repo", 42).unwrap();

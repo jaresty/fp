@@ -129,15 +129,19 @@ impl GithubClient {
     }
 
     pub fn mark_pr_ready(&self, owner: &str, repo: &str, pr_number: u64) -> Result<()> {
-        let url = format!("{}/repos/{}/{}/pulls/{}", self.base_url, owner, repo, pr_number);
-        let payload = serde_json::json!({ "draft": false });
+        let pr = self.get(&format!("/repos/{}/{}/pulls/{}", owner, repo, pr_number))?;
+        let node_id = pr["node_id"].as_str().ok_or_else(|| anyhow::anyhow!("missing node_id"))?;
+        let query = format!(
+            "mutation {{ markPullRequestReadyForReview(input: {{ pullRequestId: \"{}\" }}) {{ pullRequest {{ isDraft }} }} }}",
+            node_id
+        );
+        let url = format!("{}/graphql", self.base_url);
         reqwest::blocking::Client::new()
-            .patch(&url)
+            .post(&url)
             .header("Authorization", format!("Bearer {}", self.token))
             .header("Accept", "application/vnd.github+json")
             .header("User-Agent", "fp/0.1")
-            .header("X-GitHub-Api-Version", "2022-11-28")
-            .json(&payload)
+            .json(&serde_json::json!({ "query": query }))
             .send()?
             .error_for_status()?;
         Ok(())
