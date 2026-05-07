@@ -62,3 +62,15 @@ fn install_skills_respects_path_override() {
     let content = std::fs::read_to_string(&custom_path).unwrap();
     assert!(content.contains("name: fp"));
 }
+
+#[test]
+fn cargo_husky_pre_commit_hook_exists_and_runs_clippy() {
+    let hook = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join(".cargo-husky")
+        .join("hooks")
+        .join("pre-commit");
+    assert!(hook.exists(), ".cargo-husky/hooks/pre-commit not found at {:?}", hook);
+    let content = std::fs::read_to_string(&hook).unwrap();
+    assert!(content.contains("cargo clippy"),
+        "pre-commit hook should run cargo clippy, got: {}", content);
+}

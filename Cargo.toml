@@ -14,3 +14,4 @@ dirs = "5"
 [dev-dependencies]
 tempfile = "3"
 mockito = "1"
+cargo-husky = { version = "1", default-features = false, features = ["user-hooks"] }
