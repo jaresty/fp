@@ -82,13 +82,16 @@ pub fn rebase_stack(branches: &[String], parent_of: &HashMap<String, Option<Stri
 
         if rebase.status.success() {
             let push = std::process::Command::new("git")
-                .args(["push", "--force-with-lease"])
+                .args(["push", "origin", branch, "--force-with-lease"])
                 .current_dir(dir)
                 .output()?;
             if push.status.success() {
                 rebased.push(branch.clone());
             } else {
                 conflicts.push(format!("{}: push failed", branch));
+                eprintln!("Push failed for {} — dependent branches skipped.", branch);
+                eprintln!("Retry with: fp rebase-stack");
+                break;
             }
         } else {
             conflicts.push(branch.clone());

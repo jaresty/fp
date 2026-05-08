@@ -571,4 +571,136 @@ mod tests {
         assert_ne!(top_tip, base_tip, "feat/top should have its own commit");
         assert_eq!(top_parent, base_tip, "feat/top's parent should be feat/base tip");
     }
+
+    // RS10: push uses explicit 'origin <branch>' args (verifiable by pushing branch with no upstream configured)
+    #[test]
+    fn rebase_stack_push_uses_explicit_origin_and_branch() {
+        use std::process::Command;
+        use tempfile::TempDir;
+
+        let remote_dir = TempDir::new().unwrap();
+        Command::new("git").args(["init", "--bare", "-b", "main"])
+            .current_dir(remote_dir.path()).output().unwrap();
+
+        let dir = TempDir::new().unwrap();
+        let path = dir.path();
+        let git = |args: &[&str]| Command::new("git").args(args).current_dir(path).output().unwrap();
+
+        git(&["init", "-b", "main"]);
+        git(&["config", "user.email", "t@t.com"]);
+        git(&["config", "user.name", "T"]);
+        git(&["remote", "add", "origin", remote_dir.path().to_str().unwrap()]);
+
+        std::fs::write(path.join("a.txt"), "a").unwrap();
+        git(&["add", "."]);
+        git(&["commit", "-m", "A"]);
+        git(&["push", "origin", "main"]);
+
+        // feat/x: branch from main — push WITHOUT --set-upstream so no tracking ref is configured
+        git(&["checkout", "-b", "feat/x"]);
+        std::fs::write(path.join("x.txt"), "x").unwrap();
+        git(&["add", "."]);
+        git(&["commit", "-m", "X"]);
+        // Deliberately push without --set-upstream (no upstream configured)
+        git(&["push", "origin", "feat/x"]);
+
+        let branches = vec!["feat/x".to_string()];
+        let mut parent_of = std::collections::HashMap::new();
+        parent_of.insert("feat/x".to_string(), None);
+        let base_of: std::collections::HashMap<String, String> =
+            [("feat/x".to_string(), "main".to_string())].into_iter().collect();
+
+        let result = rebase_stack(&branches, &parent_of, &base_of, path).unwrap();
+        assert!(result.conflicts.is_empty(), "expected push to succeed with explicit origin branch, got: {:?}", result.conflicts);
+
+        // Verify remote has the branch
+        let remote_tip = Command::new("git")
+            .args(["rev-parse", "refs/heads/feat/x"])
+            .current_dir(remote_dir.path()).output().unwrap();
+        assert!(remote_tip.status.success(), "expected feat/x on remote after push with explicit origin");
+    }
+
+    // RS11: push failure stops processing of dependent branches
+    // Uses a bare remote with a pre-receive hook that rejects all pushes,
+    // so fetch works (rebase has valid origin/main) but push always fails.
+    #[test]
+    fn rebase_stack_stops_on_push_failure() {
+        use std::process::Command;
+        use tempfile::TempDir;
+
+        // Bare remote with pre-receive hook rejecting all pushes
+        let remote_dir = TempDir::new().unwrap();
+        Command::new("git").args(["init", "--bare", "-b", "main"])
+            .current_dir(remote_dir.path()).output().unwrap();
+        let hook_path = remote_dir.path().join("hooks").join("pre-receive");
+        std::fs::write(&hook_path, "#!/bin/sh\nexit 1\n").unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&hook_path, std::fs::Permissions::from_mode(0o755)).unwrap();
+        }
+
+        let dir = TempDir::new().unwrap();
+        let path = dir.path();
+        let git = |args: &[&str]| Command::new("git").args(args).current_dir(path).output().unwrap();
+
+        git(&["init", "-b", "main"]);
+        git(&["config", "user.email", "t@t.com"]);
+        git(&["config", "user.name", "T"]);
+        git(&["remote", "add", "origin", remote_dir.path().to_str().unwrap()]);
+
+        std::fs::write(path.join("a.txt"), "a").unwrap();
+        git(&["add", "."]);
+        git(&["commit", "-m", "A"]);
+        // Push main bypassing the hook (push directly to bare repo object)
+        // by writing the ref manually — instead just init the remote with a commit
+        // Workaround: temporarily remove the hook, push, then restore
+        std::fs::remove_file(&hook_path).unwrap();
+        git(&["push", "origin", "main"]);
+        std::fs::write(&hook_path, "#!/bin/sh\nexit 1\n").unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&hook_path, std::fs::Permissions::from_mode(0o755)).unwrap();
+        }
+
+        // feat/base: branch from main with a new commit — NOT pushed to remote before hook is active
+        // so when rebase_stack tries to push it, the hook fires and rejects it
+        git(&["checkout", "-b", "feat/base"]);
+        std::fs::write(path.join("b.txt"), "b").unwrap();
+        git(&["add", "."]);
+        git(&["commit", "-m", "B"]);
+
+        // feat/top: depends on feat/base
+        git(&["checkout", "main"]);
+        git(&["checkout", "-b", "feat/top"]);
+        std::fs::write(path.join("c.txt"), "c").unwrap();
+        git(&["add", "."]);
+        git(&["commit", "-m", "C"]);
+
+        let branches = vec!["feat/base".to_string(), "feat/top".to_string()];
+        let mut parent_of = std::collections::HashMap::new();
+        parent_of.insert("feat/base".to_string(), None);
+        parent_of.insert("feat/top".to_string(), Some("feat/base".to_string()));
+        let base_of: std::collections::HashMap<String, String> =
+            [("feat/base".to_string(), "main".to_string())].into_iter().collect();
+
+        // Record feat/top SHA before rebase_stack runs
+        let top_sha_before = String::from_utf8(
+            Command::new("git").args(["rev-parse", "feat/top"]).current_dir(path).output().unwrap().stdout
+        ).unwrap().trim().to_string();
+
+        // Hook now active — push will be rejected. Rebase of feat/base onto origin/main succeeds
+        // (it's a no-op since feat/base is already based on main), but push fails.
+        let result = rebase_stack(&branches, &parent_of, &base_of, path).unwrap();
+
+        // feat/base push failed → feat/top should not have been touched (SHA unchanged)
+        let top_sha_after = String::from_utf8(
+            Command::new("git").args(["rev-parse", "feat/top"]).current_dir(path).output().unwrap().stdout
+        ).unwrap().trim().to_string();
+        assert_eq!(top_sha_before, top_sha_after,
+            "expected feat/top SHA unchanged after feat/base push failed, result: {:?}", result);
+        assert!(result.conflicts.iter().any(|c| c.contains("feat/base")),
+            "expected feat/base in conflicts after push failure, got: {:?}", result.conflicts);
+    }
 }
