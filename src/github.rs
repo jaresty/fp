@@ -231,6 +231,38 @@ impl GithubClient {
         Ok(())
     }
 
+    pub fn fetch_checks_for_sha(&self, owner: &str, repo: &str, sha: &str) -> Result<Vec<Check>> {
+        let checks_json = self.get(&format!("/repos/{}/{}/commits/{}/check-runs?per_page=100&page=1", owner, repo, sha))?;
+        let mut name_order: Vec<String> = Vec::new();
+        let mut best_run_by_name: std::collections::HashMap<String, serde_json::Value> = std::collections::HashMap::new();
+        for c in checks_json["check_runs"].as_array().unwrap_or(&vec![]) {
+            let name = c["name"].as_str().unwrap_or("").to_string();
+            let started_at = c["started_at"].as_str().unwrap_or("").to_string();
+            if let Some(existing) = best_run_by_name.get(&name) {
+                if started_at.as_str() > existing["started_at"].as_str().unwrap_or("") {
+                    best_run_by_name.insert(name, c.clone());
+                }
+            } else {
+                name_order.push(name.clone());
+                best_run_by_name.insert(name, c.clone());
+            }
+        }
+        Ok(name_order.iter()
+            .filter_map(|name| best_run_by_name.get(name))
+            .map(|c| {
+                let name = c["name"].as_str().unwrap_or("").to_string();
+                let status = match (c["status"].as_str(), c["conclusion"].as_str()) {
+                    (_, Some("success")) | (_, Some("skipped")) | (_, Some("neutral")) => CheckStatus::Pass,
+                    (_, Some("failure")) | (_, Some("timed_out")) | (_, Some("cancelled")) => CheckStatus::Fail,
+                    (Some("completed"), _) => CheckStatus::Fail,
+                    _ => CheckStatus::Pending,
+                };
+                let details_url = c["details_url"].as_str().map(String::from);
+                Check { name, status, required: false, details_url }
+            })
+            .collect())
+    }
+
     pub fn fetch_pr_base(&self, owner: &str, repo: &str, pr_number: u64) -> Result<String> {
         let url = format!("{}/repos/{}/{}/pulls/{}", self.base_url, owner, repo, pr_number);
         let resp = self.get(&url.replace(&self.base_url, ""))?;

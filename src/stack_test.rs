@@ -703,4 +703,55 @@ mod tests {
         assert!(result.conflicts.iter().any(|c| c.contains("feat/base")),
             "expected feat/base in conflicts after push failure, got: {:?}", result.conflicts);
     }
+
+    // RS12: git status output is captured in status_output on rebase conflict
+    #[test]
+    fn rebase_stack_captures_git_status_on_conflict() {
+        use std::process::Command;
+        use tempfile::TempDir;
+
+        let remote_dir = TempDir::new().unwrap();
+        Command::new("git").args(["init", "--bare", "-b", "main"])
+            .current_dir(remote_dir.path()).output().unwrap();
+
+        let dir = TempDir::new().unwrap();
+        let path = dir.path();
+        let git = |args: &[&str]| Command::new("git").args(args).current_dir(path).output().unwrap();
+
+        git(&["init", "-b", "main"]);
+        git(&["config", "user.email", "test@test.com"]);
+        git(&["config", "user.name", "Test"]);
+        git(&["remote", "add", "origin", remote_dir.path().to_str().unwrap()]);
+
+        std::fs::write(path.join("conflict.txt"), "main").unwrap();
+        git(&["add", "."]);
+        git(&["commit", "-m", "A"]);
+        git(&["push", "origin", "main"]);
+
+        git(&["checkout", "-b", "feat/base"]);
+        std::fs::write(path.join("conflict.txt"), "base").unwrap();
+        git(&["add", "."]);
+        git(&["commit", "-m", "B"]);
+        git(&["push", "--set-upstream", "origin", "feat/base"]);
+
+        git(&["checkout", "main"]);
+        std::fs::write(path.join("conflict.txt"), "upstream").unwrap();
+        git(&["add", "."]);
+        git(&["commit", "-m", "X"]);
+        git(&["push", "origin", "main"]);
+        git(&["checkout", "feat/base"]);
+
+        let branches = vec!["feat/base".to_string()];
+        let mut parent_of = std::collections::HashMap::new();
+        parent_of.insert("feat/base".to_string(), None);
+        let mut base_of = std::collections::HashMap::new();
+        base_of.insert("feat/base".to_string(), "main".to_string());
+
+        let result = rebase_stack(&branches, &parent_of, &base_of, path).unwrap();
+        assert_eq!(result.conflicts, vec!["feat/base"]);
+        let status = result.status_output.expect("expected status_output on conflict");
+        assert!(!status.is_empty(), "expected non-empty git status output on conflict");
+        assert!(status.contains("conflict.txt") || status.contains("rebase"),
+            "expected conflict.txt or rebase in git status output, got: {}", status);
+    }
 }

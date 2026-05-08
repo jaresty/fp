@@ -32,6 +32,7 @@ pub fn stack_order(branches: &[String], parent_of: &HashMap<String, Option<Strin
 pub struct RebaseResult {
     pub conflicts: Vec<String>,
     pub rebased: Vec<String>,
+    pub status_output: Option<String>,
 }
 
 /// Rebase each branch onto its parent's current tip, in stack_order.
@@ -52,6 +53,7 @@ pub fn rebase_stack(branches: &[String], parent_of: &HashMap<String, Option<Stri
     let ordered = stack_order(branches, parent_of);
     let mut conflicts = Vec::new();
     let mut rebased = Vec::new();
+    let mut status_output: Option<String> = None;
 
     for branch in &ordered {
         let parent_owned: String;
@@ -98,11 +100,21 @@ pub fn rebase_stack(branches: &[String], parent_of: &HashMap<String, Option<Stri
             eprintln!("Conflict on {} — resolve with:", branch);
             eprintln!("  git add <resolved files> && git rebase --continue");
             eprintln!("  fp rebase-stack");
+            let status = std::process::Command::new("git")
+                .args(["status"])
+                .current_dir(dir)
+                .output()
+                .ok()
+                .map(|o| String::from_utf8_lossy(&o.stdout).to_string());
+            if let Some(ref s) = status {
+                eprintln!("{}", s);
+            }
+            status_output = status;
             break;
         }
     }
 
-    Ok(RebaseResult { conflicts, rebased })
+    Ok(RebaseResult { conflicts, rebased, status_output })
 }
 
 /// Rebase `branch` onto `new_base`, cutting away commits from `old_base_sha` (the pre-merge tip).

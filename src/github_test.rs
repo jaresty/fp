@@ -1703,4 +1703,30 @@ mod tests {
         let issue_threads: Vec<_> = pr.threads.iter().filter(|t| t.file.is_none()).collect();
         assert_eq!(issue_threads.len(), 0, "expected author's own comment to be excluded, got {}", issue_threads.len());
     }
+
+    // CTX1: fetch_checks_for_sha returns checks with correct status and details_url
+    #[test]
+    fn fetch_checks_for_sha_returns_checks_with_status() {
+        use crate::model::CheckStatus;
+        let mut server = mockito::Server::new();
+        let check_runs = r#"{
+            "check_runs": [
+                {"name": "build", "conclusion": "failure", "details_url": "https://ci.example.com/runs/1", "status": "completed"},
+                {"name": "lint", "conclusion": "success", "details_url": "https://ci.example.com/runs/2", "status": "completed"},
+                {"name": "test", "conclusion": "failure", "details_url": "https://ci.example.com/runs/3", "status": "completed"}
+            ]
+        }"#;
+        server.mock("GET", "/repos/owner/repo/commits/abc123/check-runs?per_page=100&page=1")
+            .with_status(200).with_header("content-type", "application/json")
+            .with_body(check_runs).create();
+
+        let client = mock_client(&server);
+        let checks = client.fetch_checks_for_sha("owner", "repo", "abc123").unwrap();
+        assert_eq!(checks.len(), 3, "expected 3 checks total");
+        let failed: Vec<_> = checks.iter().filter(|c| c.status == CheckStatus::Fail).collect();
+        assert_eq!(failed.len(), 2, "expected 2 failed checks");
+        assert!(failed.iter().any(|c| c.name == "build"), "expected 'build' in failures");
+        assert!(failed.iter().any(|c| c.name == "test"), "expected 'test' in failures");
+        assert!(failed[0].details_url.is_some(), "expected details_url on failed check");
+    }
 }

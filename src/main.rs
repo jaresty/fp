@@ -116,6 +116,11 @@ enum Commands {
         #[arg(long)]
         json: bool,
     },
+    /// Show check run results for a specific commit SHA (useful for reviewing failures after pushing a new commit)
+    Checks {
+        /// Commit SHA to fetch check runs for
+        sha: String,
+    },
     /// Create a draft PR for the current branch and start tracking it
     Create {
         /// PR title
@@ -540,6 +545,9 @@ fn main() -> Result<()> {
             for branch in &result.conflicts {
                 println!("✗ conflict on {} — resolve manually", branch);
             }
+            if let Some(status) = &result.status_output {
+                println!("\ngit status:\n{}", status);
+            }
             if result.rebased.is_empty() && result.conflicts.is_empty() {
                 println!("Stack is already up to date.");
             }
@@ -608,6 +616,26 @@ fn main() -> Result<()> {
                     }
                 } else {
                     println!("Check '{}' not found in PR #{}", hint, pr);
+                }
+            }
+        }
+
+        Commands::Checks { sha } => {
+            let token = resolve_github_token()?;
+            let (owner, repo_name) = detect_repo().context("could not detect GitHub repo")?;
+            let client = GithubClient::new(token);
+            let checks = client.fetch_checks_for_sha(&owner, &repo_name, &sha)?;
+            if checks.is_empty() {
+                println!("No check runs found for {}", sha);
+            } else {
+                for check in &checks {
+                    let status = match check.status {
+                        model::CheckStatus::Pass => "✓",
+                        model::CheckStatus::Fail => "✗",
+                        model::CheckStatus::Pending => "⏳",
+                    };
+                    let url = check.details_url.as_deref().unwrap_or("(no url)");
+                    println!("{} {} — {}", status, check.name, url);
                 }
             }
         }
