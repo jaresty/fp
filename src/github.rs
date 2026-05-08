@@ -378,7 +378,7 @@ impl GithubClient {
         }
 
         // 4. Reviews → approval
-        let reviews_json = self.get(&format!("/repos/{}/{}/pulls/{}/reviews", owner, repo, pr_number))?;
+        let reviews_json = self.get_paginated(&format!("/repos/{}/{}/pulls/{}/reviews", owner, repo, pr_number))?;
         let any_approved = reviews_json
             .as_array()
             .unwrap_or(&vec![])

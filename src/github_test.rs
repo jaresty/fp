@@ -41,7 +41,7 @@ mod tests {
             .create();
         // reviews
         server
-            .mock("GET", "/repos/owner/repo/pulls/42/reviews")
+            .mock("GET", "/repos/owner/repo/pulls/42/reviews?per_page=100&page=1")
             .with_status(200)
             .with_header("content-type", "application/json")
             .with_body(r#"[]"#)
@@ -85,7 +85,7 @@ mod tests {
             .with_status(404)
             .create();
         server
-            .mock("GET", "/repos/owner/repo/pulls/1/reviews")
+            .mock("GET", "/repos/owner/repo/pulls/1/reviews?per_page=100&page=1")
             .with_status(200)
             .with_header("content-type", "application/json")
             .with_body(r#"[]"#)
@@ -139,7 +139,7 @@ mod tests {
             .with_body(r#"[]"#)
             .create();
         server
-            .mock("GET", "/repos/owner/repo/pulls/5/reviews")
+            .mock("GET", "/repos/owner/repo/pulls/5/reviews?per_page=100&page=1")
             .with_status(200)
             .with_header("content-type", "application/json")
             .with_body(r#"[]"#)
@@ -181,7 +181,7 @@ mod tests {
         server.mock("GET", "/repos/owner/repo/branches/main/protection").with_status(404).create();
         server.mock("GET", "/repos/owner/repo/commits//statuses")
             .with_status(200).with_header("content-type","application/json").with_body(r#"[]"#).create();
-        server.mock("GET", "/repos/owner/repo/pulls/55/reviews")
+        server.mock("GET", "/repos/owner/repo/pulls/55/reviews?per_page=100&page=1")
             .with_status(200).with_header("content-type","application/json").with_body(r#"[]"#).create();
         server.mock("GET", "/repos/owner/repo/pulls/55/comments?per_page=100&page=1")
             .with_status(200).with_header("content-type","application/json").with_body(r#"[]"#).create();
@@ -223,7 +223,7 @@ mod tests {
             .with_body(r#"{"required_status_checks":{"contexts":["ci/test"]}}"#)
             .create();
         server
-            .mock("GET", "/repos/owner/repo/pulls/6/reviews")
+            .mock("GET", "/repos/owner/repo/pulls/6/reviews?per_page=100&page=1")
             .with_status(200)
             .with_header("content-type", "application/json")
             .with_body(r#"[]"#)
@@ -260,7 +260,7 @@ mod tests {
             .with_status(404)
             .create();
         server
-            .mock("GET", "/repos/owner/repo/pulls/7/reviews")
+            .mock("GET", "/repos/owner/repo/pulls/7/reviews?per_page=100&page=1")
             .with_status(200)
             .with_header("content-type", "application/json")
             .with_body(r#"[]"#)
@@ -311,7 +311,7 @@ mod tests {
             .with_status(404)
             .create();
         server
-            .mock("GET", "/repos/owner/repo/pulls/11/reviews")
+            .mock("GET", "/repos/owner/repo/pulls/11/reviews?per_page=100&page=1")
             .with_status(200)
             .with_header("content-type", "application/json")
             .with_body(r#"[]"#)
@@ -354,7 +354,7 @@ mod tests {
             .with_body(r#"{"check_runs":[]}"#).create();
         server.mock("GET", "/repos/owner/repo/branches/b/protection")
             .with_status(404).create();
-        server.mock("GET", "/repos/owner/repo/pulls/88/reviews")
+        server.mock("GET", "/repos/owner/repo/pulls/88/reviews?per_page=100&page=1")
             .with_status(200).with_header("content-type","application/json")
             .with_body(r#"[]"#).create();
         server.mock("GET", "/repos/owner/repo/pulls/88/comments?per_page=100&page=1")
@@ -393,7 +393,7 @@ mod tests {
             .with_body(r#"{"check_runs":[]}"#).create();
         server.mock("GET", "/repos/owner/repo/branches/b/protection")
             .with_status(404).create();
-        server.mock("GET", "/repos/owner/repo/pulls/77/reviews")
+        server.mock("GET", "/repos/owner/repo/pulls/77/reviews?per_page=100&page=1")
             .with_status(200).with_header("content-type","application/json")
             .with_body(r#"[]"#).create();
         server.mock("GET", "/repos/owner/repo/pulls/77/comments?per_page=100&page=1")
@@ -436,7 +436,7 @@ mod tests {
             .with_status(404)
             .create();
         server
-            .mock("GET", "/repos/owner/repo/pulls/12/reviews")
+            .mock("GET", "/repos/owner/repo/pulls/12/reviews?per_page=100&page=1")
             .with_status(200)
             .with_header("content-type", "application/json")
             .with_body(r#"[]"#)
@@ -488,7 +488,7 @@ mod tests {
             .with_status(404)
             .create();
         server
-            .mock("GET", "/repos/owner/repo/pulls/8/reviews")
+            .mock("GET", "/repos/owner/repo/pulls/8/reviews?per_page=100&page=1")
             .with_status(200)
             .with_header("content-type", "application/json")
             .with_body(r#"[{"state":"APPROVED"}]"#)
@@ -527,7 +527,7 @@ mod tests {
             .with_status(404)
             .create();
         server
-            .mock("GET", "/repos/owner/repo/pulls/9/reviews")
+            .mock("GET", "/repos/owner/repo/pulls/9/reviews?per_page=100&page=1")
             .with_status(200)
             .with_header("content-type", "application/json")
             .with_body(r#"[{"state":"CHANGES_REQUESTED"}]"#)
@@ -586,7 +586,7 @@ mod tests {
             .with_status(404)
             .create();
         server
-            .mock("GET", "/repos/owner/repo/pulls/10/reviews")
+            .mock("GET", "/repos/owner/repo/pulls/10/reviews?per_page=100&page=1")
             .with_status(200)
             .with_header("content-type", "application/json")
             .with_body(r#"[]"#)
@@ -697,7 +697,7 @@ mod tests {
         server.mock("GET", "/repos/owner/repo/commits/b/check-runs").with_status(200).with_header("content-type","application/json").with_body(r#"{"check_runs":[]}"#).create();
         server.mock("GET", "/repos/owner/repo/branches/main/protection").with_status(404).create();
         server.mock("GET", "/repos/owner/repo/commits/sha95/statuses").with_status(200).with_header("content-type","application/json").with_body(r#"[]"#).create();
-        server.mock("GET", "/repos/owner/repo/pulls/95/reviews").with_status(200).with_header("content-type","application/json").with_body(reviews).create();
+        server.mock("GET", "/repos/owner/repo/pulls/95/reviews?per_page=100&page=1").with_status(200).with_header("content-type","application/json").with_body(reviews).create();
         server.mock("GET", "/repos/owner/repo/pulls/95/requested_reviewers").with_status(200).with_header("content-type","application/json").with_body(r#"{"users":[],"teams":[]}"#).create();
         server.mock("GET", "/repos/owner/repo/pulls/95/comments?per_page=100&page=1").with_status(200).with_header("content-type","application/json").with_body(r#"[]"#).create();
         server.mock("GET", "/repos/owner/repo/issues/95/comments?per_page=100&page=1").with_status(200).with_header("content-type","application/json").with_body(issue_comments).create();
@@ -720,7 +720,7 @@ mod tests {
         server.mock("GET", "/repos/owner/repo/commits/b/check-runs").with_status(200).with_header("content-type","application/json").with_body(r#"{"check_runs":[]}"#).create();
         server.mock("GET", "/repos/owner/repo/branches/main/protection").with_status(404).create();
         server.mock("GET", "/repos/owner/repo/commits/sha96/statuses").with_status(200).with_header("content-type","application/json").with_body(r#"[]"#).create();
-        server.mock("GET", "/repos/owner/repo/pulls/96/reviews").with_status(200).with_header("content-type","application/json").with_body(reviews).create();
+        server.mock("GET", "/repos/owner/repo/pulls/96/reviews?per_page=100&page=1").with_status(200).with_header("content-type","application/json").with_body(reviews).create();
         server.mock("GET", "/repos/owner/repo/pulls/96/requested_reviewers").with_status(200).with_header("content-type","application/json").with_body(r#"{"users":[],"teams":[]}"#).create();
         server.mock("GET", "/repos/owner/repo/pulls/96/comments?per_page=100&page=1").with_status(200).with_header("content-type","application/json").with_body(r#"[]"#).create();
         server.mock("GET", "/repos/owner/repo/issues/96/comments?per_page=100&page=1").with_status(200).with_header("content-type","application/json").with_body(r#"[]"#).create();
@@ -747,7 +747,7 @@ mod tests {
         server.mock("GET", "/repos/owner/repo/commits/b/check-runs").with_status(200).with_header("content-type","application/json").with_body(r#"{"check_runs":[]}"#).create();
         server.mock("GET", "/repos/owner/repo/branches/main/protection").with_status(404).create();
         server.mock("GET", "/repos/owner/repo/commits/sha97/statuses").with_status(200).with_header("content-type","application/json").with_body(r#"[]"#).create();
-        server.mock("GET", "/repos/owner/repo/pulls/97/reviews").with_status(200).with_header("content-type","application/json").with_body(reviews).create();
+        server.mock("GET", "/repos/owner/repo/pulls/97/reviews?per_page=100&page=1").with_status(200).with_header("content-type","application/json").with_body(reviews).create();
         server.mock("GET", "/repos/owner/repo/pulls/97/requested_reviewers").with_status(200).with_header("content-type","application/json").with_body(r#"{"users":[],"teams":[]}"#).create();
         server.mock("GET", "/repos/owner/repo/pulls/97/comments?per_page=100&page=1").with_status(200).with_header("content-type","application/json").with_body(r#"[]"#).create();
         server.mock("GET", "/repos/owner/repo/issues/97/comments?per_page=100&page=1").with_status(200).with_header("content-type","application/json").with_body(issue_comments).create();
@@ -864,7 +864,7 @@ mod tests {
             .with_body(r#"[]"#)
             .create();
         server
-            .mock("GET", "/repos/owner/repo/pulls/30/reviews")
+            .mock("GET", "/repos/owner/repo/pulls/30/reviews?per_page=100&page=1")
             .with_status(200)
             .with_header("content-type", "application/json")
             .with_body(r#"[]"#)
@@ -920,7 +920,7 @@ mod tests {
             ]"#)
             .create();
         server
-            .mock("GET", "/repos/owner/repo/pulls/20/reviews")
+            .mock("GET", "/repos/owner/repo/pulls/20/reviews?per_page=100&page=1")
             .with_status(200)
             .with_header("content-type", "application/json")
             .with_body(r#"[]"#)
@@ -984,7 +984,7 @@ mod tests {
         server.mock("GET", "/repos/owner/repo/commits/abc/statuses")
             .with_status(200).with_header("content-type","application/json")
             .with_body(r#"[]"#).create();
-        server.mock("GET", "/repos/owner/repo/pulls/55/reviews")
+        server.mock("GET", "/repos/owner/repo/pulls/55/reviews?per_page=100&page=1")
             .with_status(200).with_header("content-type","application/json")
             .with_body(r#"[]"#).create();
         server.mock("GET", "/repos/owner/repo/pulls/55/requested_reviewers")
@@ -1032,7 +1032,7 @@ mod tests {
             .with_status(404)
             .create();
         server
-            .mock("GET", "/repos/owner/repo/pulls/42/reviews")
+            .mock("GET", "/repos/owner/repo/pulls/42/reviews?per_page=100&page=1")
             .with_status(200)
             .with_header("content-type", "application/json")
             .with_body(r#"[]"#)
@@ -1061,7 +1061,7 @@ mod tests {
             .with_body(r#"{"check_runs":[]}"#).create();
         server.mock("GET", "/repos/owner/repo/branches/b/protection")
             .with_status(404).create();
-        server.mock("GET", format!("/repos/owner/repo/pulls/{}/reviews", pr_number).as_str())
+        server.mock("GET", format!("/repos/owner/repo/pulls/{}/reviews?per_page=100&page=1", pr_number).as_str())
             .with_status(200).with_header("content-type", "application/json")
             .with_body(r#"[]"#).create();
         server.mock("GET", comments_path)
@@ -1085,7 +1085,7 @@ mod tests {
             .with_body(r#"{"check_runs":[]}"#).create();
         server.mock("GET", "/repos/owner/repo/branches/b/protection")
             .with_status(404).create();
-        server.mock("GET", "/repos/owner/repo/pulls/43/reviews")
+        server.mock("GET", "/repos/owner/repo/pulls/43/reviews?per_page=100&page=1")
             .with_status(200).with_header("content-type", "application/json")
             .with_body(r#"[]"#).create();
 
@@ -1111,6 +1111,49 @@ mod tests {
         assert_eq!(pr.threads.len(), 2, "expected threads from both pages, got {}", pr.threads.len());
     }
 
+    // D_reviews_pagination: reviews endpoint uses get_paginated so reviews beyond page 1 are visible
+    #[test]
+    fn fetch_pr_paginates_reviews_across_multiple_pages() {
+        let mut server = mockito::Server::new();
+        let page2_url = format!("{}/repos/owner/repo/pulls/45/reviews?per_page=100&page=2", server.url());
+        let link_header = format!(r#"<{}>; rel="next""#, page2_url);
+
+        server.mock("GET", "/repos/owner/repo/pulls/45")
+            .with_status(200).with_header("content-type", "application/json")
+            .with_body(r#"{"number":45,"title":"t","draft":false,"head":{"ref":"b"},"user":{"login":"author"}}"#)
+            .create();
+        server.mock("GET", "/repos/owner/repo/commits/b/check-runs")
+            .with_status(200).with_header("content-type", "application/json")
+            .with_body(r#"{"check_runs":[]}"#).create();
+        server.mock("GET", "/repos/owner/repo/branches/b/protection")
+            .with_status(404).create();
+
+        // Page 1: no approvals, Link: next header pointing to page 2
+        server.mock("GET", "/repos/owner/repo/pulls/45/reviews?per_page=100&page=1")
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_header("link", &link_header)
+            .with_body(r#"[]"#)
+            .create();
+        // Page 2: APPROVED review
+        server.mock("GET", "/repos/owner/repo/pulls/45/reviews?per_page=100&page=2")
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body(r#"[{"id":999,"state":"APPROVED","body":"","user":{"login":"reviewer","type":"User"},"submitted_at":"2024-01-02T00:00:00Z"}]"#)
+            .create();
+
+        server.mock("GET", "/repos/owner/repo/pulls/45/comments?per_page=100&page=1")
+            .with_status(200).with_header("content-type", "application/json").with_body(r#"[]"#).create();
+        server.mock("GET", "/repos/owner/repo/issues/45/comments?per_page=100&page=1")
+            .with_status(200).with_header("content-type", "application/json").with_body(r#"[]"#).create();
+        server.mock("GET", "/repos/owner/repo/pulls/45/requested_reviewers")
+            .with_status(200).with_header("content-type", "application/json")
+            .with_body(r#"{"users":[],"teams":[]}"#).create();
+
+        let pr = mock_client(&server).fetch_pr("owner", "repo", 45).unwrap();
+        assert!(pr.approved, "expected approved=true from page-2 review, got false");
+    }
+
     // D3: comments endpoint no longer uses bare per_page=100 — uses paginated path
     #[test]
     fn fetch_pr_comments_uses_paginated_path_not_flat_per_page() {
@@ -1125,7 +1168,7 @@ mod tests {
             .with_body(r#"{"check_runs":[]}"#).create();
         server.mock("GET", "/repos/owner/repo/branches/b/protection")
             .with_status(404).create();
-        server.mock("GET", "/repos/owner/repo/pulls/44/reviews")
+        server.mock("GET", "/repos/owner/repo/pulls/44/reviews?per_page=100&page=1")
             .with_status(200).with_header("content-type", "application/json")
             .with_body(r#"[]"#).create();
 
@@ -1164,7 +1207,7 @@ mod tests {
         server.mock("GET", "/repos/owner/repo/commits/sha50/statuses")
             .with_status(200).with_header("content-type", "application/json")
             .with_body(r#"[]"#).create();
-        server.mock("GET", "/repos/owner/repo/pulls/50/reviews")
+        server.mock("GET", "/repos/owner/repo/pulls/50/reviews?per_page=100&page=1")
             .with_status(200).with_header("content-type", "application/json")
             .with_body(r#"[]"#).create();
         server.mock("GET", "/repos/owner/repo/pulls/50/comments?per_page=100&page=1")
@@ -1201,7 +1244,7 @@ mod tests {
                 {"context":"buildkite/primary","state":"success","target_url":"https://buildkite.com/org/p/builds/1"},
                 {"context":"buildkite/primary","state":"failure","target_url":"https://buildkite.com/org/p/builds/0"}
             ]"#).create();
-        server.mock("GET", "/repos/owner/repo/pulls/51/reviews")
+        server.mock("GET", "/repos/owner/repo/pulls/51/reviews?per_page=100&page=1")
             .with_status(200).with_header("content-type", "application/json")
             .with_body(r#"[]"#).create();
         server.mock("GET", "/repos/owner/repo/pulls/51/comments?per_page=100&page=1")
@@ -1364,7 +1407,7 @@ mod tests {
             .with_status(200).with_header("content-type","application/json")
             .with_body(r#"[]"#).create();
         // One APPROVED review exists
-        server.mock("GET", "/repos/owner/repo/pulls/99/reviews")
+        server.mock("GET", "/repos/owner/repo/pulls/99/reviews?per_page=100&page=1")
             .with_status(200).with_header("content-type","application/json")
             .with_body(r#"[{"state":"APPROVED","user":{"login":"reviewer1"}}]"#).create();
         // But a team review is still pending
@@ -1520,7 +1563,7 @@ mod tests {
         server.mock("GET", format!("/repos/owner/repo/commits//statuses").as_str())
             .with_status(200).with_header("content-type","application/json").with_body(r#"[]"#)
             .expect_at_least(1).create();
-        server.mock("GET", format!("/repos/owner/repo/pulls/{}/reviews", pr_number).as_str())
+        server.mock("GET", format!("/repos/owner/repo/pulls/{}/reviews?per_page=100&page=1", pr_number).as_str())
             .with_status(200).with_header("content-type","application/json").with_body(r#"[]"#).create();
         server.mock("GET", format!("/repos/owner/repo/pulls/{}/comments?per_page=100&page=1", pr_number).as_str())
             .with_status(200).with_header("content-type","application/json").with_body(r#"[]"#).create();
@@ -1577,7 +1620,7 @@ mod tests {
             .with_status(404).create();
         server.mock("GET", format!("/repos/owner/repo/commits/{}/statuses", sha).as_str())
             .with_status(200).with_header("content-type","application/json").with_body(r#"[]"#).create();
-        server.mock("GET", format!("/repos/owner/repo/pulls/{}/reviews", pr_number).as_str())
+        server.mock("GET", format!("/repos/owner/repo/pulls/{}/reviews?per_page=100&page=1", pr_number).as_str())
             .with_status(200).with_header("content-type","application/json").with_body(r#"[]"#).create();
         server.mock("GET", format!("/repos/owner/repo/pulls/{}/requested_reviewers", pr_number).as_str())
             .with_status(200).with_header("content-type","application/json").with_body(r#"{"users":[],"teams":[]}"#).create();
@@ -1652,7 +1695,7 @@ mod tests {
             .with_status(404).create();
         server.mock("GET", format!("/repos/owner/repo/commits/{}/statuses", sha).as_str())
             .with_status(200).with_header("content-type","application/json").with_body(r#"[]"#).create();
-        server.mock("GET", format!("/repos/owner/repo/pulls/{}/reviews", pr_number).as_str())
+        server.mock("GET", format!("/repos/owner/repo/pulls/{}/reviews?per_page=100&page=1", pr_number).as_str())
             .with_status(200).with_header("content-type","application/json").with_body(reviews_body).create();
         server.mock("GET", format!("/repos/owner/repo/pulls/{}/requested_reviewers", pr_number).as_str())
             .with_status(200).with_header("content-type","application/json").with_body(r#"{"users":[],"teams":[]}"#).create();
