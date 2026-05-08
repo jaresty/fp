@@ -662,6 +662,105 @@ mod tests {
         assert_eq!(body, "Thanks, fixed!");
     }
 
+    // RT3: reply_to_thread prepends @author when routing to issues API (file is None)
+    #[test]
+    fn reply_to_thread_prepends_mention_for_pr_level_thread() {
+        use crate::model::{Thread, ThreadState};
+        let mut server = mockito::Server::new();
+        // Expect the body to contain "@reviewer " prefix
+        server.mock("POST", "/repos/owner/repo/issues/42/comments")
+            .match_body(mockito::Matcher::PartialJson(serde_json::json!({"body": "@reviewer acknowledged"})))
+            .with_status(201).with_header("content-type","application/json")
+            .with_body(r#"{"id":2000,"html_url":"https://github.com/owner/repo/issues/42#issuecomment-2000"}"#).create();
+
+        let thread = Thread {
+            id: 500, state: ThreadState::Open, author: "reviewer".into(),
+            body: "general comment".into(), replies: vec![],
+            file: None, line: None,
+        };
+        let client = mock_client(&server);
+        let result = client.reply_to_thread("owner", "repo", 42, &thread, "acknowledged");
+        assert!(result.is_ok(), "expected Ok with @mention, got: {:?}", result);
+    }
+
+    // RV6: review body thread is Addressed when PR author has issue comment after review submitted_at
+    #[test]
+    fn review_body_thread_addressed_when_author_replied_after() {
+        let mut server = mockito::Server::new();
+        // Review submitted at T1, author replies at T2 > T1
+        let reviews = r#"[{"id":200,"state":"CHANGES_REQUESTED","body":"Fix naming","user":{"login":"reviewer","type":"User"},"submitted_at":"2024-01-01T10:00:00Z"}]"#;
+        // Issue comment from author at T2 > T1
+        let issue_comments = r#"[{"id":300,"body":"Fixed","user":{"login":"author","type":"User"},"created_at":"2024-01-01T11:00:00Z"}]"#;
+        // Use a custom mock setup with specific reviews and issue comments
+        let pr_body = r#"{"number":95,"title":"t","draft":false,"head":{"ref":"b","sha":"sha95"},"base":{"ref":"main"},"user":{"login":"author"}}"#;
+        server.mock("GET", "/repos/owner/repo/pulls/95").with_status(200).with_header("content-type","application/json").with_body(pr_body).create();
+        server.mock("GET", "/repos/owner/repo/commits/b/check-runs").with_status(200).with_header("content-type","application/json").with_body(r#"{"check_runs":[]}"#).create();
+        server.mock("GET", "/repos/owner/repo/branches/main/protection").with_status(404).create();
+        server.mock("GET", "/repos/owner/repo/commits/sha95/statuses").with_status(200).with_header("content-type","application/json").with_body(r#"[]"#).create();
+        server.mock("GET", "/repos/owner/repo/pulls/95/reviews").with_status(200).with_header("content-type","application/json").with_body(reviews).create();
+        server.mock("GET", "/repos/owner/repo/pulls/95/requested_reviewers").with_status(200).with_header("content-type","application/json").with_body(r#"{"users":[],"teams":[]}"#).create();
+        server.mock("GET", "/repos/owner/repo/pulls/95/comments?per_page=100&page=1").with_status(200).with_header("content-type","application/json").with_body(r#"[]"#).create();
+        server.mock("GET", "/repos/owner/repo/issues/95/comments?per_page=100&page=1").with_status(200).with_header("content-type","application/json").with_body(issue_comments).create();
+
+        let pr = mock_client(&server).fetch_pr("owner", "repo", 95).unwrap();
+        let review_threads: Vec<_> = pr.threads.iter().filter(|t| t.file.is_none()).collect();
+        assert_eq!(review_threads.len(), 1, "expected 1 review thread");
+        assert_eq!(review_threads[0].state, crate::model::ThreadState::Addressed,
+            "expected Addressed when author replied after review, got {:?}", review_threads[0].state);
+    }
+
+    // RV7: review body thread remains Open when no author issue comment exists after review
+    #[test]
+    fn review_body_thread_open_when_no_author_reply() {
+        let mut server = mockito::Server::new();
+        let reviews = r#"[{"id":201,"state":"CHANGES_REQUESTED","body":"Fix naming","user":{"login":"reviewer","type":"User"},"submitted_at":"2024-01-01T10:00:00Z"}]"#;
+        // No issue comments at all
+        let pr_body = r#"{"number":96,"title":"t","draft":false,"head":{"ref":"b","sha":"sha96"},"base":{"ref":"main"},"user":{"login":"author"}}"#;
+        server.mock("GET", "/repos/owner/repo/pulls/96").with_status(200).with_header("content-type","application/json").with_body(pr_body).create();
+        server.mock("GET", "/repos/owner/repo/commits/b/check-runs").with_status(200).with_header("content-type","application/json").with_body(r#"{"check_runs":[]}"#).create();
+        server.mock("GET", "/repos/owner/repo/branches/main/protection").with_status(404).create();
+        server.mock("GET", "/repos/owner/repo/commits/sha96/statuses").with_status(200).with_header("content-type","application/json").with_body(r#"[]"#).create();
+        server.mock("GET", "/repos/owner/repo/pulls/96/reviews").with_status(200).with_header("content-type","application/json").with_body(reviews).create();
+        server.mock("GET", "/repos/owner/repo/pulls/96/requested_reviewers").with_status(200).with_header("content-type","application/json").with_body(r#"{"users":[],"teams":[]}"#).create();
+        server.mock("GET", "/repos/owner/repo/pulls/96/comments?per_page=100&page=1").with_status(200).with_header("content-type","application/json").with_body(r#"[]"#).create();
+        server.mock("GET", "/repos/owner/repo/issues/96/comments?per_page=100&page=1").with_status(200).with_header("content-type","application/json").with_body(r#"[]"#).create();
+
+        let pr = mock_client(&server).fetch_pr("owner", "repo", 96).unwrap();
+        let review_threads: Vec<_> = pr.threads.iter().filter(|t| t.file.is_none()).collect();
+        assert_eq!(review_threads.len(), 1, "expected 1 review thread");
+        assert_eq!(review_threads[0].state, crate::model::ThreadState::Open,
+            "expected Open when no author reply, got {:?}", review_threads[0].state);
+    }
+
+    // RV8: review body thread is Open when reviewer replies after author's acknowledgement (interleaved)
+    #[test]
+    fn review_body_thread_open_when_reviewer_replies_after_author() {
+        let mut server = mockito::Server::new();
+        // Review at T1, author replies at T2, reviewer comes back at T3 — should be Open
+        let reviews = r#"[{"id":202,"state":"CHANGES_REQUESTED","body":"Fix naming","user":{"login":"reviewer","type":"User"},"submitted_at":"2024-01-01T10:00:00Z"}]"#;
+        let issue_comments = r#"[
+            {"id":301,"body":"Fixed","user":{"login":"author","type":"User"},"created_at":"2024-01-01T11:00:00Z"},
+            {"id":302,"body":"Still not quite right","user":{"login":"reviewer","type":"User"},"created_at":"2024-01-01T12:00:00Z"}
+        ]"#;
+        let pr_body = r#"{"number":97,"title":"t","draft":false,"head":{"ref":"b","sha":"sha97"},"base":{"ref":"main"},"user":{"login":"author"}}"#;
+        server.mock("GET", "/repos/owner/repo/pulls/97").with_status(200).with_header("content-type","application/json").with_body(pr_body).create();
+        server.mock("GET", "/repos/owner/repo/commits/b/check-runs").with_status(200).with_header("content-type","application/json").with_body(r#"{"check_runs":[]}"#).create();
+        server.mock("GET", "/repos/owner/repo/branches/main/protection").with_status(404).create();
+        server.mock("GET", "/repos/owner/repo/commits/sha97/statuses").with_status(200).with_header("content-type","application/json").with_body(r#"[]"#).create();
+        server.mock("GET", "/repos/owner/repo/pulls/97/reviews").with_status(200).with_header("content-type","application/json").with_body(reviews).create();
+        server.mock("GET", "/repos/owner/repo/pulls/97/requested_reviewers").with_status(200).with_header("content-type","application/json").with_body(r#"{"users":[],"teams":[]}"#).create();
+        server.mock("GET", "/repos/owner/repo/pulls/97/comments?per_page=100&page=1").with_status(200).with_header("content-type","application/json").with_body(r#"[]"#).create();
+        server.mock("GET", "/repos/owner/repo/issues/97/comments?per_page=100&page=1").with_status(200).with_header("content-type","application/json").with_body(issue_comments).create();
+
+        let pr = mock_client(&server).fetch_pr("owner", "repo", 97).unwrap();
+        let review_threads: Vec<_> = pr.threads.iter().filter(|t| t.file.is_none()).collect();
+        // The reviewer's T3 comment surfaces as a separate issue thread AND the review body thread should be Open
+        let review_body = review_threads.iter().find(|t| t.id == 202);
+        assert!(review_body.is_some(), "expected review body thread with id=202");
+        assert_eq!(review_body.unwrap().state, crate::model::ThreadState::Open,
+            "expected Open when reviewer replied after author, got {:?}", review_body.unwrap().state);
+    }
+
     // RT1: reply_to_thread routes to pulls/comments/replies for inline thread (file is Some)
     #[test]
     fn reply_to_thread_uses_pulls_api_for_inline_thread() {

@@ -355,13 +355,21 @@ impl GithubClient {
             let is_bot = user_type == "Bot" || login.contains("[bot]");
             if (state == "CHANGES_REQUESTED" || state == "COMMENTED") && !body.is_empty() && !is_bot && login != pr_author {
                 let submitted_at = r["submitted_at"].as_str().unwrap_or("");
-                let author_replied_after = issue_comments.iter().any(|c| {
-                    c["user"]["login"].as_str().unwrap_or("") == pr_author
-                        && c["created_at"].as_str().unwrap_or("") > submitted_at
-                });
+                // Find the last comment after submitted_at from either the reviewer or the author.
+                // If last speaker is the author → Addressed; if reviewer came back after → Open.
+                let last_relevant = issue_comments.iter()
+                    .rfind(|c| {
+                        let commenter = c["user"]["login"].as_str().unwrap_or("");
+                        let at = c["created_at"].as_str().unwrap_or("");
+                        at > submitted_at && (commenter == pr_author || commenter == login)
+                    });
+                let thread_state = match last_relevant {
+                    Some(c) if c["user"]["login"].as_str().unwrap_or("") == pr_author => ThreadState::Addressed,
+                    _ => ThreadState::Open,
+                };
                 review_body_threads.push(Thread {
                     id: r["id"].as_u64().unwrap_or(0),
-                    state: if author_replied_after { ThreadState::Addressed } else { ThreadState::Open },
+                    state: thread_state,
                     author: login.to_string(),
                     body: body.to_string(),
                     replies: vec![],
