@@ -119,7 +119,8 @@ impl GithubClient {
         if thread.file.is_some() {
             self.reply_to_comment(owner, repo, pr_number, thread.id, body)
         } else {
-            self.post_pr_comment(owner, repo, pr_number, body)
+            let body_with_mention = format!("@{} {}", thread.author, body);
+            self.post_pr_comment(owner, repo, pr_number, &body_with_mention)
         }
     }
 
@@ -340,6 +341,11 @@ impl GithubClient {
 
         // 4b. Review bodies → threads (CHANGES_REQUESTED/COMMENTED with non-empty body, non-bot, non-author)
         let pr_author = pr_json["user"]["login"].as_str().unwrap_or("").to_string();
+
+        // Fetch issue comments early so we can use them for review body thread state too
+        let issue_comments_json = self.get_paginated(&format!("/repos/{}/{}/issues/{}/comments", owner, repo, pr_number))?;
+        let issue_comments = issue_comments_json.as_array().cloned().unwrap_or_default();
+
         let mut review_body_threads: Vec<Thread> = Vec::new();
         for r in reviews_json.as_array().unwrap_or(&vec![]) {
             let state = r["state"].as_str().unwrap_or("");
@@ -348,9 +354,14 @@ impl GithubClient {
             let user_type = r["user"]["type"].as_str().unwrap_or("");
             let is_bot = user_type == "Bot" || login.contains("[bot]");
             if (state == "CHANGES_REQUESTED" || state == "COMMENTED") && !body.is_empty() && !is_bot && login != pr_author {
+                let submitted_at = r["submitted_at"].as_str().unwrap_or("");
+                let author_replied_after = issue_comments.iter().any(|c| {
+                    c["user"]["login"].as_str().unwrap_or("") == pr_author
+                        && c["created_at"].as_str().unwrap_or("") > submitted_at
+                });
                 review_body_threads.push(Thread {
                     id: r["id"].as_u64().unwrap_or(0),
-                    state: ThreadState::Open,
+                    state: if author_replied_after { ThreadState::Addressed } else { ThreadState::Open },
                     author: login.to_string(),
                     body: body.to_string(),
                     replies: vec![],
@@ -405,8 +416,6 @@ impl GithubClient {
 
         // 6. Issue-level comments (PR conversation, not inline review comments)
         // Surfaced as threads: Open if no author reply, Addressed if author replied. Bots and author-only threads excluded.
-        let issue_comments_json = self.get_paginated(&format!("/repos/{}/{}/issues/{}/comments", owner, repo, pr_number))?;
-        let issue_comments = issue_comments_json.as_array().cloned().unwrap_or_default();
         let mut issue_threads: Vec<Thread> = Vec::new();
         // Each top-level issue comment is its own thread (no threading in issue comments API)
         // Group consecutive comments: first non-author comment starts a thread, replies follow until next non-author comment
