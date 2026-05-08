@@ -10,6 +10,8 @@ pub struct TrackedPr {
     pub number: u64,
     pub title: String,
     pub branch: String,
+    #[serde(default)]
+    pub base: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
