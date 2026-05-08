@@ -205,7 +205,8 @@ fn main() -> Result<()> {
                     let mut prs: Vec<_> = state.prs.values().collect();
                     prs.sort_by_key(|p| p.number);
                     for pr in prs {
-                        println!("#{} {} ({})", pr.number, pr.title, pr.branch);
+                        let base_info = if pr.base.is_empty() { String::new() } else { format!(" ← {}", pr.base) };
+                        println!("#{} {}{} ({})", pr.number, pr.title, base_info, pr.branch);
                     }
                 }
             }
@@ -288,22 +289,25 @@ fn main() -> Result<()> {
         }
 
         Commands::Track { pr, title, branch } => {
-            let (title, resolved_branch) = {
+            let (title, resolved_branch, base) = {
                 let token = resolve_github_token().ok();
                 let repo = detect_repo();
-                let (fetched_title, fetched_branch) = if let (Some(tok), Some((owner, repo_name))) = (token, repo) {
+                let (fetched_title, fetched_branch, fetched_base) = if let (Some(tok), Some((owner, repo_name))) = (token, repo) {
                     let client = GithubClient::new(tok);
                     client.fetch_pr_metadata(&owner, &repo_name, pr).ok()
-                        .map(|(t, b)| (Some(t), Some(b)))
-                        .unwrap_or((None, None))
+                        .map(|(t, b)| {
+                            let base = client.fetch_pr_base(&owner, &repo_name, pr).unwrap_or_default();
+                            (Some(t), Some(b), base)
+                        })
+                        .unwrap_or((None, None, String::new()))
                 } else {
-                    (None, None)
+                    (None, None, String::new())
                 };
                 let resolved_title = title.or(fetched_title).unwrap_or_else(|| format!("PR #{}", pr));
                 let resolved_branch = resolve_track_branch(branch, fetched_branch, pr)?;
-                (resolved_title, resolved_branch)
+                (resolved_title, resolved_branch, fetched_base)
             };
-            store.track(TrackedPr { number: pr, title: title.clone(), branch: resolved_branch })?;
+            store.track(TrackedPr { number: pr, title: title.clone(), branch: resolved_branch, base })?;
             println!("Tracking PR #{} — {}", pr, title);
         }
 
@@ -316,8 +320,11 @@ fn main() -> Result<()> {
             let token = resolve_github_token()?;
             let (owner, repo_name) = detect_repo()
                 .context("could not detect GitHub repo from git remote")?;
-            let client = GithubClient::new(token);
-            let posted = client.reply_to_comment(&owner, &repo_name, pr, thread_id, &message)?;
+            let client = GithubClient::new(token.clone());
+            let pr_state = client.fetch_pr(&owner, &repo_name, pr)?;
+            let thread = pr_state.threads.iter().find(|t| t.id == thread_id)
+                .context(format!("thread #{} not found on PR #{}", thread_id, pr))?;
+            let posted = client.reply_to_thread(&owner, &repo_name, pr, thread, &message)?;
             println!("Replied to thread #{}: {}", thread_id, posted);
         }
 
@@ -419,6 +426,7 @@ fn main() -> Result<()> {
                 number: pr_state.number,
                 title: pr_state.title.clone(),
                 branch: pr_state.branch.clone(),
+                base: pr_state.base.clone(),
             })?;
             println!("Created PR #{}: {} ({})", pr_state.number, pr_state.title, pr_state.branch);
 
@@ -514,14 +522,12 @@ fn main() -> Result<()> {
             }
             let parent_of = stack::detect_parent_of(&branches, &work_dir)?;
 
-            // Build base_of: branch → upstream base branch name (from API when available)
+            // Build base_of from parallel fetch (reuses PrState.base, no extra API calls)
+            let rebase_pr_numbers: Vec<u64> = state.prs.keys().copied().collect();
             let base_of: std::collections::HashMap<String, String> =
                 if let (Ok(token), Some((owner, repo_name))) = (resolve_github_token(), detect_repo()) {
-                    let client = GithubClient::new(token);
-                    state.prs.values().filter_map(|p| {
-                        client.fetch_pr_base(&owner, &repo_name, p.number).ok()
-                            .map(|base| (p.branch.clone(), base))
-                    }).collect()
+                    GithubClient::new(token).fetch_prs_as_map(&owner, &repo_name, &rebase_pr_numbers)
+                        .into_values().map(|p| (p.branch, p.base)).collect()
                 } else {
                     std::collections::HashMap::new()
                 };

@@ -662,6 +662,44 @@ mod tests {
         assert_eq!(body, "Thanks, fixed!");
     }
 
+    // RT1: reply_to_thread routes to pulls/comments/replies for inline thread (file is Some)
+    #[test]
+    fn reply_to_thread_uses_pulls_api_for_inline_thread() {
+        use crate::model::{Thread, ThreadState};
+        let mut server = mockito::Server::new();
+        server.mock("POST", "/repos/owner/repo/pulls/42/comments/999/replies")
+            .with_status(201).with_header("content-type","application/json")
+            .with_body(r#"{"id":1000,"body":"done"}"#).create();
+
+        let thread = Thread {
+            id: 999, state: ThreadState::Open, author: "rev".into(),
+            body: "fix this".into(), replies: vec![],
+            file: Some("src/main.rs".into()), line: Some(10),
+        };
+        let client = mock_client(&server);
+        let result = client.reply_to_thread("owner", "repo", 42, &thread, "done");
+        assert!(result.is_ok(), "expected Ok for inline thread reply, got: {:?}", result);
+    }
+
+    // RT2: reply_to_thread routes to issues/comments for PR-level thread (file is None)
+    #[test]
+    fn reply_to_thread_uses_issues_api_for_pr_level_thread() {
+        use crate::model::{Thread, ThreadState};
+        let mut server = mockito::Server::new();
+        server.mock("POST", "/repos/owner/repo/issues/42/comments")
+            .with_status(201).with_header("content-type","application/json")
+            .with_body(r#"{"id":2000,"html_url":"https://github.com/owner/repo/issues/42#issuecomment-2000"}"#).create();
+
+        let thread = Thread {
+            id: 500, state: ThreadState::Open, author: "rev".into(),
+            body: "general comment".into(), replies: vec![],
+            file: None, line: None,
+        };
+        let client = mock_client(&server);
+        let result = client.reply_to_thread("owner", "repo", 42, &thread, "acknowledged");
+        assert!(result.is_ok(), "expected Ok for PR-level thread reply, got: {:?}", result);
+    }
+
     // T1: reply_to_comment errors on API failure
     #[test]
     fn reply_to_comment_errors_on_failure() {

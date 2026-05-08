@@ -112,6 +112,17 @@ impl GithubClient {
         Ok(serde_json::Value::Array(all_items))
     }
 
+    /// Route reply to the correct API based on thread type:
+    /// - inline (file is Some) → pulls/comments/replies
+    /// - PR-level (file is None) → issues/comments
+    pub fn reply_to_thread(&self, owner: &str, repo: &str, pr_number: u64, thread: &crate::model::Thread, body: &str) -> Result<String> {
+        if thread.file.is_some() {
+            self.reply_to_comment(owner, repo, pr_number, thread.id, body)
+        } else {
+            self.post_pr_comment(owner, repo, pr_number, body)
+        }
+    }
+
     pub fn reply_to_comment(&self, owner: &str, repo: &str, pr_number: u64, comment_id: u64, body: &str) -> Result<String> {
         let url = format!("{}/repos/{}/{}/pulls/{}/comments/{}/replies", self.base_url, owner, repo, pr_number, comment_id);
         let payload = serde_json::json!({ "body": body });
