@@ -216,6 +216,25 @@ impl GithubClient {
         Ok(resp["merged"].as_bool().unwrap_or(false))
     }
 
+    pub fn merge_pr(&self, owner: &str, repo: &str, pr_number: u64, merge_method: Option<&str>) -> Result<String> {
+        let url = format!("{}/repos/{}/{}/pulls/{}/merge", self.base_url, owner, repo, pr_number);
+        let mut payload = serde_json::json!({});
+        if let Some(method) = merge_method {
+            payload["merge_method"] = serde_json::Value::String(method.to_string());
+        }
+        let resp = reqwest::blocking::Client::new()
+            .put(&url)
+            .header("Authorization", format!("Bearer {}", self.token))
+            .header("Accept", "application/vnd.github+json")
+            .header("User-Agent", "fp/0.1")
+            .header("X-GitHub-Api-Version", "2022-11-28")
+            .json(&payload)
+            .send()?
+            .error_for_status()?
+            .json::<serde_json::Value>()?;
+        Ok(resp["sha"].as_str().unwrap_or("").to_string())
+    }
+
     pub fn update_pr_base(&self, owner: &str, repo: &str, pr_number: u64, new_base: &str) -> Result<()> {
         let url = format!("{}/repos/{}/{}/pulls/{}", self.base_url, owner, repo, pr_number);
         let payload = serde_json::json!({ "base": new_base });

@@ -1458,6 +1458,33 @@ mod tests {
         assert_eq!(base, "main");
     }
 
+    // MG3: merge_pr calls PUT endpoint and returns merge commit sha
+    #[test]
+    fn merge_pr_calls_put_endpoint_and_returns_sha() {
+        let mut server = mockito::Server::new();
+        server.mock("PUT", "/repos/owner/repo/pulls/42/merge")
+            .with_status(200).with_header("content-type", "application/json")
+            .with_body(r#"{"sha":"mergesha123","merged":true,"message":"Pull Request successfully merged"}"#)
+            .create();
+
+        let sha = mock_client(&server).merge_pr("owner", "repo", 42, None).unwrap();
+        assert_eq!(sha, "mergesha123");
+    }
+
+    // MG4: merge_pr passes merge_method when specified
+    #[test]
+    fn merge_pr_passes_merge_method_when_specified() {
+        let mut server = mockito::Server::new();
+        server.mock("PUT", "/repos/owner/repo/pulls/43/merge")
+            .match_body(mockito::Matcher::PartialJsonString(r#"{"merge_method":"squash"}"#.to_string()))
+            .with_status(200).with_header("content-type", "application/json")
+            .with_body(r#"{"sha":"squashsha456","merged":true,"message":"Pull Request successfully merged"}"#)
+            .create();
+
+        let sha = mock_client(&server).merge_pr("owner", "repo", 43, Some("squash")).unwrap();
+        assert_eq!(sha, "squashsha456");
+    }
+
     // MG2: fetch_pr_is_merged returns true for merged PR, false for open PR
     #[test]
     fn fetch_pr_is_merged_returns_correct_state() {

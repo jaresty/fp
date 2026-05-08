@@ -138,6 +138,18 @@ enum Commands {
         #[arg(long)]
         insert_after: Option<u64>,
     },
+    /// Merge a PR via the GitHub API and rebase downstream tracked branches
+    Merge {
+        /// PR number to merge
+        pr: u64,
+        /// Merge method: squash, rebase, or merge (default: repo default)
+        #[arg(long)]
+        squash: bool,
+        #[arg(long)]
+        rebase: bool,
+        #[arg(long, name = "merge")]
+        merge_commit: bool,
+    },
     /// Rebase all tracked PRs in stack order onto their parent branches
     RebaseStack,
     /// Install the fp Claude Code skill into ~/.claude/skills/fp/SKILL.md
@@ -479,6 +491,53 @@ fn main() -> Result<()> {
             }
             std::fs::write(&skill_path, FP_SKILL)?;
             println!("Installed fp skill to {}", skill_path.display());
+        }
+
+        Commands::Merge { pr, squash, rebase, merge_commit } => {
+            let token = resolve_github_token()?;
+            let (owner, repo_name) = detect_repo()
+                .context("could not detect GitHub repo from git remote")?;
+            let client = GithubClient::new(token);
+
+            // Determine merge method flag
+            let merge_method: Option<&str> = if squash {
+                Some("squash")
+            } else if rebase {
+                Some("rebase")
+            } else if merge_commit {
+                Some("merge")
+            } else {
+                None
+            };
+
+            // Fetch the PR's head branch and base before merging (need head_sha for rebase --onto)
+            let (head_sha, _base_ref) = client.fetch_pr_head_sha_and_base(&owner, &repo_name, pr)?;
+
+            // Perform the merge
+            let merge_sha = client.merge_pr(&owner, &repo_name, pr, merge_method)?;
+            println!("✓ merged PR #{} ({})", pr, merge_sha);
+
+            // Find the tracked PR to get the head branch name, then rebase downstream
+            let state = store.load()?;
+            if let Some(tracked_pr) = state.prs.get(&pr) {
+                let merged_branch = tracked_pr.branch.clone();
+                let merged_base = tracked_pr.base.clone();
+                let work_dir = stack::resolve_work_dir(std::path::Path::new("."))?;
+
+                for downstream in state.prs.values() {
+                    if downstream.number == pr { continue; }
+                    if downstream.base == merged_branch {
+                        match stack::rebase_onto_after_merge(&downstream.branch, &head_sha, &merged_base, &work_dir) {
+                            Ok(()) => println!("✓ rebased {} onto {} (base was {})", downstream.branch, merged_base, merged_branch),
+                            Err(e) => println!("✗ failed to rebase {}: {}", downstream.branch, e),
+                        }
+                    }
+                }
+            }
+
+            // Untrack the merged PR
+            store.untrack(pr)?;
+            println!("✓ untracked PR #{}", pr);
         }
 
         Commands::RebaseStack => {
