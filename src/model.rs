@@ -15,6 +15,8 @@ pub struct Check {
     pub required: bool,
     #[serde(default)]
     pub details_url: Option<String>,
+    #[serde(default)]
+    pub log_snippet: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]
@@ -47,4 +49,6 @@ pub struct PrState {
     pub approved: bool,
     pub checks: Vec<Check>,
     pub threads: Vec<Thread>,
+    #[serde(default)]
+    pub has_merge_conflict: bool,
 }

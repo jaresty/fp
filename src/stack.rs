@@ -3,9 +3,13 @@ use std::path::Path;
 use anyhow::Result;
 
 pub fn stack_order(branches: &[String], parent_of: &HashMap<String, Option<String>>) -> Vec<String> {
+    let branch_set: std::collections::HashSet<&str> = branches.iter().map(String::as_str).collect();
     let mut children: HashMap<Option<&str>, Vec<&str>> = HashMap::new();
     for branch in branches {
-        let parent = parent_of.get(branch).and_then(|p| p.as_deref());
+        // If parent is not in the branches set, treat this branch as a root
+        let parent = parent_of.get(branch)
+            .and_then(|p| p.as_deref())
+            .filter(|p| branch_set.contains(*p));
         children.entry(parent).or_default().push(branch.as_str());
     }
 
@@ -33,12 +37,13 @@ pub struct RebaseResult {
     pub conflicts: Vec<String>,
     pub rebased: Vec<String>,
     pub status_output: Option<String>,
+    pub invariant_warnings: Vec<String>,
 }
 
 /// Rebase each branch onto its parent's current tip, in stack_order.
 /// Root branches (no parent) rebase onto origin/<base_of[branch]>.
 /// Fetches origin before rebasing to ensure remote refs are current.
-pub fn rebase_stack(branches: &[String], parent_of: &HashMap<String, Option<String>>, base_of: &HashMap<String, String>, dir: &Path) -> Result<RebaseResult> {
+pub fn rebase_stack(branches: &[String], parent_of: &HashMap<String, Option<String>>, base_of: &HashMap<String, String>, dir: &Path, progress: &dyn Fn(&str)) -> Result<RebaseResult> {
     // Bail if a rebase is already in progress — user must resolve first
     if dir.join(".git").join("REBASE_HEAD").exists() {
         anyhow::bail!("rebase in progress — resolve conflicts then run: git rebase --continue && fp rebase-stack");
@@ -54,6 +59,28 @@ pub fn rebase_stack(branches: &[String], parent_of: &HashMap<String, Option<Stri
     let mut conflicts = Vec::new();
     let mut rebased = Vec::new();
     let mut status_output: Option<String> = None;
+    let mut invariant_warnings = Vec::new();
+
+    // Snapshot parent SHA for each branch before any rebasing begins.
+    // Used for the diff invariant check: pre-rebase diff must use the original parent SHA.
+    let pre_rebase_parent_shas: HashMap<String, String> = ordered.iter().filter_map(|branch| {
+        let parent_ref = match parent_of.get(branch).and_then(|p| p.as_ref()) {
+            Some(p) => p.as_str(),
+            None => {
+                let base = base_of.get(branch.as_str()).map(String::as_str).unwrap_or("main");
+                return std::process::Command::new("git")
+                    .args(["rev-parse", &format!("origin/{}", base)])
+                    .current_dir(dir).output().ok()
+                    .and_then(|o| String::from_utf8(o.stdout).ok())
+                    .map(|s| (branch.clone(), s.trim().to_string()));
+            }
+        };
+        std::process::Command::new("git")
+            .args(["rev-parse", parent_ref])
+            .current_dir(dir).output().ok()
+            .and_then(|o| String::from_utf8(o.stdout).ok())
+            .map(|s| (branch.clone(), s.trim().to_string()))
+    }).collect();
 
     for branch in &ordered {
         let parent_owned: String;
@@ -66,6 +93,19 @@ pub fn rebase_stack(branches: &[String], parent_of: &HashMap<String, Option<Stri
             }
         };
 
+        progress(&format!("rebasing {} onto {}", branch, parent));
+
+        // Capture pre-rebase diff using three-dot (symmetric diff from merge-base).
+        // Use the snapshotted parent SHA (before any sibling rebase changed the ref).
+        let pre_parent_sha = pre_rebase_parent_shas.get(branch.as_str()).cloned().unwrap_or_default();
+        let pre_rebase_diff = if pre_parent_sha.is_empty() { String::new() } else {
+            std::process::Command::new("git")
+                .args(["diff", &format!("{}...{}", pre_parent_sha, branch), "--"])
+                .current_dir(dir).output().ok()
+                .map(|o| String::from_utf8_lossy(&o.stdout).to_string())
+                .unwrap_or_default()
+        };
+
         // Checkout the branch
         let checkout = std::process::Command::new("git")
             .args(["checkout", branch])
@@ -76,13 +116,72 @@ pub fn rebase_stack(branches: &[String], parent_of: &HashMap<String, Option<Stri
             continue;
         }
 
+        // Detect whether the parent branch has been merged (and its remote branch deleted).
+        // Two signals, either sufficient:
+        // 1. git merge-base --is-ancestor <parent> origin/<base>: parent's tip is in base (regular merge)
+        // 2. origin/<parent> remote tracking ref is gone after fetch (squash/rebase merge with auto-delete)
+        let base_for_parent = base_of.get(branch.as_str()).map(String::as_str).unwrap_or("main");
+        let origin_base = format!("origin/{}", base_for_parent);
+        let parent_merged_into_base = !parent.starts_with("origin/") && {
+            let parent_exists = std::process::Command::new("git")
+                .args(["rev-parse", "--verify", parent])
+                .current_dir(dir).output()?.status.success();
+            if parent_exists {
+                // Regular merge: parent's tip is an ancestor of origin/<base>
+                let is_ancestor = std::process::Command::new("git")
+                    .args(["merge-base", "--is-ancestor", parent, &origin_base])
+                    .current_dir(dir).output()?.status.success();
+                // Squash/rebase merge: remote branch is gone (use ls-remote for authoritative check)
+                let ls_remote_out = std::process::Command::new("git")
+                    .args(["ls-remote", "--exit-code", "--heads", "origin", parent])
+                    .current_dir(dir).output()?;
+                let remote_branch_gone = !ls_remote_out.status.success();
+                is_ancestor || remote_branch_gone
+            } else {
+                // Local branch ref is gone — definitely merged
+                true
+            }
+        };
+
         // Rebase onto parent
-        let rebase = std::process::Command::new("git")
-            .args(["rebase", parent])
-            .current_dir(dir)
-            .output()?;
+        let rebase = if parent_merged_into_base {
+            // Parent merged — use --onto to transplant only commits unique to this branch.
+            // Find the oldest commit on branch not in origin/<base> — that's the former parent tip.
+            let rev_list_out = std::process::Command::new("git")
+                .args(["rev-list", &format!("{}..{}", origin_base, branch)])
+                .current_dir(dir)
+                .output()?;
+            let old_parent_sha = String::from_utf8_lossy(&rev_list_out.stdout)
+                .lines()
+                .last()
+                .map(str::trim)
+                .unwrap_or("")
+                .to_string();
+            std::process::Command::new("git")
+                .args(["rebase", "--onto", &origin_base, &old_parent_sha, branch])
+                .current_dir(dir)
+                .output()?
+        } else {
+            std::process::Command::new("git")
+                .args(["rebase", parent])
+                .current_dir(dir)
+                .output()?
+        };
 
         if rebase.status.success() {
+            // Invariant check: semantic diff (three-dot) should match pre-rebase diff
+            let new_parent = if parent_merged_into_base { &origin_base } else { parent };
+            let post_rebase_diff = std::process::Command::new("git")
+                .args(["diff", &format!("{}...{}", new_parent, branch), "--"])
+                .current_dir(dir).output().ok()
+                .map(|o| String::from_utf8_lossy(&o.stdout).to_string())
+                .unwrap_or_default();
+            if !pre_rebase_diff.is_empty() && post_rebase_diff != pre_rebase_diff {
+                invariant_warnings.push(format!(
+                    "{}: diff vs parent changed after rebase — review carefully", branch
+                ));
+            }
+            progress(&format!("pushing {}", branch));
             let push = std::process::Command::new("git")
                 .args(["push", "origin", branch, "--force-with-lease"])
                 .current_dir(dir)
@@ -114,7 +213,7 @@ pub fn rebase_stack(branches: &[String], parent_of: &HashMap<String, Option<Stri
         }
     }
 
-    Ok(RebaseResult { conflicts, rebased, status_output })
+    Ok(RebaseResult { conflicts, rebased, status_output, invariant_warnings })
 }
 
 /// Rebase `branch` onto `new_base`, cutting away commits from `old_base_sha` (the pre-merge tip).
@@ -134,6 +233,52 @@ pub fn rebase_onto_after_merge(branch: &str, old_base_sha: &str, new_base: &str,
     let push = git(&["push", "--force-with-lease"])?;
     anyhow::ensure!(push.status.success(), "force-push of {} failed: {}", branch, String::from_utf8_lossy(&push.stderr));
     Ok(())
+}
+
+/// Rebase the full downstream stack after `merged_branch` (with tip `merged_sha`) is merged into `new_base`.
+/// `branch_base_of` maps each branch to its immediate parent branch name.
+/// Rebases all branches whose parent chain includes `merged_branch`, in topological order.
+pub fn rebase_downstream_stack(
+    merged_branch: &str,
+    merged_sha: &str,
+    new_base: &str,
+    branch_base_of: &HashMap<String, String>,
+    dir: &Path,
+    progress: &dyn Fn(&str),
+) -> Vec<String> {
+    let mut errors = Vec::new();
+    let direct_children: Vec<String> = branch_base_of.iter()
+        .filter(|(_, parent)| parent.as_str() == merged_branch)
+        .map(|(child, _)| child.clone())
+        .collect();
+
+    for child in direct_children {
+        progress(&child);
+        match rebase_onto_after_merge(&child, merged_sha, new_base, dir) {
+            Ok(()) => {
+                let new_child_sha = match std::process::Command::new("git")
+                    .args(["rev-parse", &child])
+                    .current_dir(dir)
+                    .output()
+                    .ok()
+                    .and_then(|o| String::from_utf8(o.stdout).ok())
+                    .map(|s| s.trim().to_string())
+                {
+                    Some(sha) if !sha.is_empty() => sha,
+                    _ => {
+                        errors.push(format!("{}: could not resolve new SHA after rebase", child));
+                        continue;
+                    }
+                };
+                let mut child_errors = rebase_downstream_stack(
+                    &child, &new_child_sha, &child, branch_base_of, dir, progress,
+                );
+                errors.append(&mut child_errors);
+            }
+            Err(e) => errors.push(format!("{}: {}", child, e)),
+        }
+    }
+    errors
 }
 
 pub fn resolve_work_dir(_git_dir: &Path) -> Result<std::path::PathBuf> {

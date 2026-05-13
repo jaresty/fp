@@ -182,6 +182,7 @@ impl GithubClient {
             approved: false,
             checks: vec![],
             threads: vec![],
+            has_merge_conflict: false,
         })
     }
 
@@ -277,7 +278,7 @@ impl GithubClient {
                     _ => CheckStatus::Pending,
                 };
                 let details_url = c["details_url"].as_str().map(String::from);
-                Check { name, status, required: false, details_url }
+                Check { name, status, required: false, details_url, log_snippet: None }
             })
             .collect())
     }
@@ -355,7 +356,7 @@ impl GithubClient {
                 };
                 let required = required_names.contains(&name);
                 let details_url = c["details_url"].as_str().map(String::from);
-                Check { name, status, required, details_url }
+                Check { name, status, required, details_url, log_snippet: None }
             })
             .collect();
 
@@ -373,7 +374,7 @@ impl GithubClient {
                 };
                 let required = required_names.contains(&name);
                 let details_url = s["target_url"].as_str().filter(|u| !u.is_empty()).map(String::from);
-                checks.push(Check { name, status, required, details_url });
+                checks.push(Check { name, status, required, details_url, log_snippet: None });
             }
         }
 
@@ -506,7 +507,7 @@ impl GithubClient {
         }
         let threads: Vec<Thread> = threads.into_iter().chain(review_body_threads).chain(issue_threads).collect();
 
-        Ok(PrState { number: pr_number, title, branch, base: base_branch, draft, approved, checks, threads })
+        Ok(PrState { number: pr_number, title, branch, base: base_branch, draft, approved, checks, threads, has_merge_conflict: false })
     }
 }
 

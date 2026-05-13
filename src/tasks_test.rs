@@ -16,8 +16,10 @@ mod tests {
                 status: CheckStatus::Pass,
                 required: true,
                 details_url: None,
+                log_snippet: None,
             }],
             threads: vec![],
+            has_merge_conflict: false,
         }
     }
 
@@ -161,6 +163,7 @@ mod tests {
             status: CheckStatus::Fail,
             required: false,
             details_url: None,
+            log_snippet: None,
         });
         let tasks = generate_tasks(&pr);
         assert!(
@@ -248,8 +251,9 @@ mod tests {
             base: "main".into(),
             draft: true,
             approved: false,
-            checks: vec![Check { name: "ci".into(), status: CheckStatus::Pass, required: true, details_url: None }],
+            checks: vec![Check { name: "ci".into(), status: CheckStatus::Pass, required: true, details_url: None, log_snippet: None }],
             threads: vec![],
+            has_merge_conflict: false,
         };
         let tasks = generate_tasks(&pr);
         assert!(
@@ -269,13 +273,59 @@ mod tests {
             base: "main".into(),
             draft: false,
             approved: false,
-            checks: vec![Check { name: "ci".into(), status: CheckStatus::Pass, required: true, details_url: None }],
+            checks: vec![Check { name: "ci".into(), status: CheckStatus::Pass, required: true, details_url: None, log_snippet: None }],
             threads: vec![],
+            has_merge_conflict: false,
         };
         let tasks = generate_tasks(&pr);
         assert!(
             !tasks.iter().any(|t| t.task_type == TaskType::MarkReady),
             "expected no MarkReady task for non-draft PR"
+        );
+    }
+
+    // ADR-006: ESLint errors in check log_snippet produce FixCi tasks
+    #[test]
+    fn eslint_errors_in_log_produce_fix_ci_tasks() {
+        let mut pr = pr_clean();
+        pr.checks[0].status = CheckStatus::Fail;
+        pr.checks[0].log_snippet = Some(
+            "src/foo.ts:10:5  error  'x' is not defined  no-undef\n\
+             src/bar.ts:3:1  error  Missing semicolon  semi\n\
+             ✖ 2 problems (2 errors, 0 warnings)".into()
+        );
+        let tasks = generate_tasks(&pr);
+        let fix_ci: Vec<_> = tasks.iter().filter(|t| t.task_type == TaskType::FixCi).collect();
+        assert!(
+            fix_ci.iter().any(|t| t.context_hint.contains("no-undef") || t.description.contains("no-undef")),
+            "expected FixCi task for no-undef ESLint error, got: {:?}", fix_ci
+        );
+        assert!(
+            fix_ci.iter().any(|t| t.context_hint.contains("semi") || t.description.contains("semi")),
+            "expected FixCi task for semi ESLint error, got: {:?}", fix_ci
+        );
+    }
+
+    // ADR-006: merge conflict produces merge_conflict task (blocking)
+    #[test]
+    fn merge_conflict_produces_task() {
+        let mut pr = pr_clean();
+        pr.has_merge_conflict = true;
+        let tasks = generate_tasks(&pr);
+        assert!(
+            tasks.iter().any(|t| t.task_type == TaskType::MergeConflict && t.blocking),
+            "expected blocking MergeConflict task, got: {:?}", tasks
+        );
+    }
+
+    // ADR-006: no merge conflict produces no merge_conflict task
+    #[test]
+    fn no_merge_conflict_produces_no_task() {
+        let pr = pr_clean();
+        let tasks = generate_tasks(&pr);
+        assert!(
+            !tasks.iter().any(|t| t.task_type == TaskType::MergeConflict),
+            "expected no MergeConflict task when no conflict, got: {:?}", tasks
         );
     }
 

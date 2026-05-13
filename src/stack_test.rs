@@ -202,7 +202,7 @@ mod tests {
         parent_of.insert("feat/base".to_string(), None);
         parent_of.insert("feat/top".to_string(), Some("feat/base".to_string()));
 
-        let result = rebase_stack(&branches, &parent_of, &std::collections::HashMap::new(), path).unwrap();
+        let result = rebase_stack(&branches, &parent_of, &std::collections::HashMap::new(), path, &|_| {}).unwrap();
         assert!(result.conflicts.is_empty(), "expected no conflicts: {:?}", result.conflicts);
 
         // Verify feat/top was pushed to remote by checking remote tip matches local tip
@@ -247,7 +247,7 @@ mod tests {
         let branches = vec!["main".to_string()];
         let parent_of = std::collections::HashMap::new();
         let base_of = std::collections::HashMap::new();
-        let result = rebase_stack(&branches, &parent_of, &base_of, path);
+        let result = rebase_stack(&branches, &parent_of, &base_of, path, &|_| {});
         assert!(result.is_err(), "expected error when rebase in progress");
         let msg = format!("{}", result.unwrap_err());
         assert!(msg.contains("rebase in progress"), "expected 'rebase in progress' in error, got: {}", msg);
@@ -299,7 +299,7 @@ mod tests {
         let mut base_of = std::collections::HashMap::new();
         base_of.insert("feat/base".to_string(), "main".to_string());
 
-        let result = rebase_stack(&branches, &parent_of, &base_of, path).unwrap();
+        let result = rebase_stack(&branches, &parent_of, &base_of, path, &|_| {}).unwrap();
         assert_eq!(result.conflicts, vec!["feat/base"], "expected feat/base in conflicts");
 
         // REBASE_HEAD must exist — rebase was NOT aborted
@@ -364,7 +364,7 @@ mod tests {
         let mut base_of = std::collections::HashMap::new();
         base_of.insert("feat/base".to_string(), "main".to_string());
 
-        let result = rebase_stack(&branches, &parent_of, &base_of, path).unwrap();
+        let result = rebase_stack(&branches, &parent_of, &base_of, path, &|_| {}).unwrap();
         assert!(result.conflicts.is_empty(), "expected no conflicts: {:?}", result.conflicts);
 
         // feat/base should be on top of the remote commit X (only reachable via fetch)
@@ -426,7 +426,7 @@ mod tests {
         let mut base_of = std::collections::HashMap::new();
         base_of.insert("feat/base".to_string(), "develop".to_string());
 
-        let result = rebase_stack(&branches, &parent_of, &base_of, path).unwrap();
+        let result = rebase_stack(&branches, &parent_of, &base_of, path, &|_| {}).unwrap();
         assert!(result.conflicts.is_empty(), "expected no conflicts: {:?}", result.conflicts);
 
         let base_parent = String::from_utf8(
@@ -487,7 +487,7 @@ mod tests {
         let mut parent_of = std::collections::HashMap::new();
         parent_of.insert("feat/base".to_string(), None);
 
-        let result = rebase_stack(&branches, &parent_of, &std::collections::HashMap::new(), path).unwrap();
+        let result = rebase_stack(&branches, &parent_of, &std::collections::HashMap::new(), path, &|_| {}).unwrap();
         assert!(result.conflicts.is_empty(), "expected no conflicts: {:?}", result.conflicts);
 
         // feat/base should now be on top of origin/main (commit X)
@@ -550,7 +550,7 @@ mod tests {
         parent_of.insert("feat/base".to_string(), None);
         parent_of.insert("feat/top".to_string(), Some("feat/base".to_string()));
 
-        let result = rebase_stack(&branches, &parent_of, &std::collections::HashMap::new(), path).unwrap();
+        let result = rebase_stack(&branches, &parent_of, &std::collections::HashMap::new(), path, &|_| {}).unwrap();
         assert!(result.conflicts.is_empty(), "expected no conflicts, got: {:?}", result.conflicts);
 
         // feat/top should now be on top of feat/base
@@ -570,6 +570,275 @@ mod tests {
 
         assert_ne!(top_tip, base_tip, "feat/top should have its own commit");
         assert_eq!(top_parent, base_tip, "feat/top's parent should be feat/base tip");
+    }
+
+    // ADR-004: rebase_downstream_stack rebases the full stack (A→B→C) when A merges
+    #[test]
+    fn rebase_downstream_stack_rebases_full_chain() {
+        use std::process::Command;
+        use tempfile::TempDir;
+
+        let remote_dir = TempDir::new().unwrap();
+        Command::new("git").args(["init", "--bare", "-b", "main"])
+            .current_dir(remote_dir.path()).output().unwrap();
+
+        let dir = TempDir::new().unwrap();
+        let path = dir.path();
+        let git = |args: &[&str]| Command::new("git").args(args).current_dir(path).output().unwrap();
+
+        git(&["init", "-b", "main"]);
+        git(&["config", "user.email", "t@t.com"]);
+        git(&["config", "user.name", "T"]);
+        git(&["remote", "add", "origin", remote_dir.path().to_str().unwrap()]);
+
+        // main: A
+        std::fs::write(path.join("a.txt"), "a").unwrap();
+        git(&["add", "."]);
+        git(&["commit", "-m", "A"]);
+        git(&["push", "origin", "main"]);
+
+        // feat/parent: B
+        git(&["checkout", "-b", "feat/parent"]);
+        std::fs::write(path.join("b.txt"), "b").unwrap();
+        git(&["add", "."]);
+        git(&["commit", "-m", "B"]);
+        let parent_sha = String::from_utf8(
+            Command::new("git").args(["rev-parse", "feat/parent"]).current_dir(path).output().unwrap().stdout
+        ).unwrap().trim().to_string();
+
+        // feat/child: C on feat/parent
+        git(&["checkout", "-b", "feat/child"]);
+        std::fs::write(path.join("c.txt"), "c").unwrap();
+        git(&["add", "."]);
+        git(&["commit", "-m", "C"]);
+        git(&["push", "--set-upstream", "origin", "feat/child"]);
+
+        // feat/grandchild: D on feat/child
+        git(&["checkout", "-b", "feat/grandchild"]);
+        std::fs::write(path.join("d.txt"), "d").unwrap();
+        git(&["add", "."]);
+        git(&["commit", "-m", "D"]);
+        git(&["push", "--set-upstream", "origin", "feat/grandchild"]);
+
+        // Squash merge feat/parent into main
+        git(&["checkout", "main"]);
+        git(&["merge", "--squash", "feat/parent"]);
+        git(&["commit", "-m", "squash: B"]);
+        git(&["push", "origin", "main"]);
+
+        // Build branch_base_of map: child → parent_branch
+        let mut branch_base_of: std::collections::HashMap<String, String> = std::collections::HashMap::new();
+        branch_base_of.insert("feat/child".to_string(), "feat/parent".to_string());
+        branch_base_of.insert("feat/grandchild".to_string(), "feat/child".to_string());
+
+        // rebase_downstream_stack should rebase feat/child then feat/grandchild onto main
+        let errors = crate::stack::rebase_downstream_stack(
+            "feat/parent", &parent_sha, "main", &branch_base_of, path, &|_| {}
+        );
+        assert!(errors.is_empty(), "expected no errors, got: {:?}", errors);
+
+        // feat/child~1 should now be main tip
+        let child_parent = String::from_utf8(
+            Command::new("git").args(["rev-parse", "feat/child~1"]).current_dir(path).output().unwrap().stdout
+        ).unwrap().trim().to_string();
+        let main_tip = String::from_utf8(
+            Command::new("git").args(["rev-parse", "main"]).current_dir(path).output().unwrap().stdout
+        ).unwrap().trim().to_string();
+        assert_eq!(child_parent, main_tip, "feat/child should be on top of main");
+
+        // feat/grandchild~1 should be feat/child tip (after rebase)
+        let grandchild_parent = String::from_utf8(
+            Command::new("git").args(["rev-parse", "feat/grandchild~1"]).current_dir(path).output().unwrap().stdout
+        ).unwrap().trim().to_string();
+        let child_tip = String::from_utf8(
+            Command::new("git").args(["rev-parse", "feat/child"]).current_dir(path).output().unwrap().stdout
+        ).unwrap().trim().to_string();
+        assert_eq!(grandchild_parent, child_tip, "feat/grandchild should be on top of rebased feat/child");
+    }
+
+    // ADR-003: rebase_stack produces no invariant_warning on a clean rebase
+    #[test]
+    fn rebase_stack_no_invariant_warning_on_clean_rebase() {
+        use std::process::Command;
+        use tempfile::TempDir;
+
+        let remote_dir = TempDir::new().unwrap();
+        Command::new("git").args(["init", "--bare", "-b", "main"])
+            .current_dir(remote_dir.path()).output().unwrap();
+
+        let dir = TempDir::new().unwrap();
+        let path = dir.path();
+        let git = |args: &[&str]| Command::new("git").args(args).current_dir(path).output().unwrap();
+
+        git(&["init", "-b", "main"]);
+        git(&["config", "user.email", "t@t.com"]);
+        git(&["config", "user.name", "T"]);
+        git(&["remote", "add", "origin", remote_dir.path().to_str().unwrap()]);
+
+        // main: commit A
+        std::fs::write(path.join("a.txt"), "a").unwrap();
+        git(&["add", "."]);
+        git(&["commit", "-m", "A"]);
+        git(&["push", "origin", "main"]);
+
+        // feat/base: independent change to b.txt
+        git(&["checkout", "-b", "feat/base"]);
+        std::fs::write(path.join("b.txt"), "b").unwrap();
+        git(&["add", "."]);
+        git(&["commit", "-m", "B"]);
+        git(&["push", "--set-upstream", "origin", "feat/base"]);
+
+        // feat/top: independent change to c.txt
+        git(&["checkout", "-b", "feat/top"]);
+        std::fs::write(path.join("c.txt"), "c").unwrap();
+        git(&["add", "."]);
+        git(&["commit", "-m", "C"]);
+        git(&["push", "--set-upstream", "origin", "feat/top"]);
+
+        // Advance main with an independent commit (d.txt)
+        git(&["checkout", "main"]);
+        std::fs::write(path.join("d.txt"), "d").unwrap();
+        git(&["add", "."]);
+        git(&["commit", "-m", "D"]);
+        git(&["push", "origin", "main"]);
+        git(&["checkout", "feat/top"]);
+
+        let branches = vec!["feat/base".to_string(), "feat/top".to_string()];
+        let mut parent_of = std::collections::HashMap::new();
+        parent_of.insert("feat/base".to_string(), None);
+        parent_of.insert("feat/top".to_string(), Some("feat/base".to_string()));
+        let base_of: std::collections::HashMap<String, String> =
+            [("feat/base".to_string(), "main".to_string()),
+             ("feat/top".to_string(), "main".to_string())].into_iter().collect();
+
+        let result = rebase_stack(&branches, &parent_of, &base_of, path, &|_| {}).unwrap();
+        assert!(result.conflicts.is_empty(), "expected no conflicts: {:?}", result.conflicts);
+        assert!(
+            result.invariant_warnings.is_empty(),
+            "expected no invariant warnings on clean rebase, got: {:?}", result.invariant_warnings
+        );
+    }
+
+    // ADR-003: rebase_stack uses --onto when parent branch ref is gone (merged)
+    #[test]
+    fn rebase_stack_uses_onto_when_parent_branch_is_deleted() {
+        use std::process::Command;
+        use tempfile::TempDir;
+
+        let remote_dir = TempDir::new().unwrap();
+        Command::new("git").args(["init", "--bare", "-b", "main"])
+            .current_dir(remote_dir.path()).output().unwrap();
+
+        let dir = TempDir::new().unwrap();
+        let path = dir.path();
+        let git = |args: &[&str]| Command::new("git").args(args).current_dir(path).output().unwrap();
+
+        git(&["init", "-b", "main"]);
+        git(&["config", "user.email", "t@t.com"]);
+        git(&["config", "user.name", "T"]);
+        git(&["remote", "add", "origin", remote_dir.path().to_str().unwrap()]);
+
+        // main: commit A
+        std::fs::write(path.join("a.txt"), "a").unwrap();
+        git(&["add", "."]);
+        git(&["commit", "-m", "A"]);
+        git(&["push", "origin", "main"]);
+
+        // feat/parent: commit B
+        git(&["checkout", "-b", "feat/parent"]);
+        std::fs::write(path.join("b.txt"), "b").unwrap();
+        git(&["add", "."]);
+        git(&["commit", "-m", "B"]);
+
+        // feat/child: commit C on top of feat/parent
+        git(&["checkout", "-b", "feat/child"]);
+        std::fs::write(path.join("c.txt"), "c").unwrap();
+        git(&["add", "."]);
+        git(&["commit", "-m", "C"]);
+        git(&["push", "--set-upstream", "origin", "feat/child"]);
+
+        // Push feat/parent to remote (as a PR would be), then squash-merge it and
+        // delete the remote branch — simulating GitHub's "auto-delete branch on merge".
+        git(&["push", "--set-upstream", "origin", "feat/parent"]);
+        git(&["checkout", "main"]);
+        git(&["merge", "--squash", "feat/parent"]);
+        git(&["commit", "-m", "squash: B"]);
+        git(&["push", "origin", "main"]);
+        // Simulate remote branch auto-deletion on merge: delete feat/parent from remote
+        git(&["push", "origin", "--delete", "feat/parent"]);
+        // Fetch to update local tracking refs (origin/feat/parent will be pruned)
+        git(&["fetch", "--prune", "origin"]);
+
+        // Rebase stack with feat/child still listing feat/parent as parent
+        let branches = vec!["feat/child".to_string()];
+        let mut parent_of = std::collections::HashMap::new();
+        parent_of.insert("feat/child".to_string(), Some("feat/parent".to_string()));
+        let base_of: std::collections::HashMap<String, String> =
+            [("feat/child".to_string(), "main".to_string())].into_iter().collect();
+
+        let result = rebase_stack(&branches, &parent_of, &base_of, path, &|_| {}).unwrap();
+        assert!(result.conflicts.is_empty(), "expected no conflicts after --onto rebase: {:?}", result.conflicts);
+
+        // feat/child should now be directly on top of origin/main
+        let child_parent = String::from_utf8(
+            Command::new("git").args(["rev-parse", "feat/child~1"]).current_dir(path).output().unwrap().stdout
+        ).unwrap().trim().to_string();
+        let main_tip = String::from_utf8(
+            Command::new("git").args(["rev-parse", "origin/main"]).current_dir(path).output().unwrap().stdout
+        ).unwrap().trim().to_string();
+        assert_eq!(child_parent, main_tip, "feat/child should be on top of origin/main after --onto rebase");
+    }
+
+    // ADR-004: rebase_stack emits progress messages via callback
+    #[test]
+    fn rebase_stack_emits_progress_via_callback() {
+        use std::process::Command;
+        use tempfile::TempDir;
+        use std::sync::{Arc, Mutex};
+
+        let remote_dir = TempDir::new().unwrap();
+        Command::new("git").args(["init", "--bare", "-b", "main"])
+            .current_dir(remote_dir.path()).output().unwrap();
+
+        let dir = TempDir::new().unwrap();
+        let path = dir.path();
+        let git = |args: &[&str]| Command::new("git").args(args).current_dir(path).output().unwrap();
+
+        git(&["init", "-b", "main"]);
+        git(&["config", "user.email", "t@t.com"]);
+        git(&["config", "user.name", "T"]);
+        git(&["remote", "add", "origin", remote_dir.path().to_str().unwrap()]);
+
+        std::fs::write(path.join("a.txt"), "a").unwrap();
+        git(&["add", "."]);
+        git(&["commit", "-m", "A"]);
+        git(&["push", "origin", "main"]);
+
+        git(&["checkout", "-b", "feat/x"]);
+        std::fs::write(path.join("x.txt"), "x").unwrap();
+        git(&["add", "."]);
+        git(&["commit", "-m", "X"]);
+        git(&["push", "--set-upstream", "origin", "feat/x"]);
+
+        let branches = vec!["feat/x".to_string()];
+        let mut parent_of = std::collections::HashMap::new();
+        parent_of.insert("feat/x".to_string(), None);
+        let base_of: std::collections::HashMap<String, String> =
+            [("feat/x".to_string(), "main".to_string())].into_iter().collect();
+
+        let messages: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
+        let messages_clone = Arc::clone(&messages);
+        let result = rebase_stack(&branches, &parent_of, &base_of, path, &|msg| {
+            messages_clone.lock().unwrap().push(msg.to_string());
+        }).unwrap();
+
+        assert!(result.conflicts.is_empty());
+        let msgs = messages.lock().unwrap();
+        assert!(!msgs.is_empty(), "expected progress messages, got none");
+        assert!(
+            msgs.iter().any(|m| m.contains("feat/x")),
+            "expected progress message mentioning feat/x, got: {:?}", msgs
+        );
     }
 
     // RS10: push uses explicit 'origin <branch>' args (verifiable by pushing branch with no upstream configured)
@@ -610,7 +879,7 @@ mod tests {
         let base_of: std::collections::HashMap<String, String> =
             [("feat/x".to_string(), "main".to_string())].into_iter().collect();
 
-        let result = rebase_stack(&branches, &parent_of, &base_of, path).unwrap();
+        let result = rebase_stack(&branches, &parent_of, &base_of, path, &|_| {}).unwrap();
         assert!(result.conflicts.is_empty(), "expected push to succeed with explicit origin branch, got: {:?}", result.conflicts);
 
         // Verify remote has the branch
@@ -692,7 +961,7 @@ mod tests {
 
         // Hook now active — push will be rejected. Rebase of feat/base onto origin/main succeeds
         // (it's a no-op since feat/base is already based on main), but push fails.
-        let result = rebase_stack(&branches, &parent_of, &base_of, path).unwrap();
+        let result = rebase_stack(&branches, &parent_of, &base_of, path, &|_| {}).unwrap();
 
         // feat/base push failed → feat/top should not have been touched (SHA unchanged)
         let top_sha_after = String::from_utf8(
@@ -747,11 +1016,98 @@ mod tests {
         let mut base_of = std::collections::HashMap::new();
         base_of.insert("feat/base".to_string(), "main".to_string());
 
-        let result = rebase_stack(&branches, &parent_of, &base_of, path).unwrap();
+        let result = rebase_stack(&branches, &parent_of, &base_of, path, &|_| {}).unwrap();
         assert_eq!(result.conflicts, vec!["feat/base"]);
         let status = result.status_output.expect("expected status_output on conflict");
         assert!(!status.is_empty(), "expected non-empty git status output on conflict");
         assert!(status.contains("conflict.txt") || status.contains("rebase"),
             "expected conflict.txt or rebase in git status output, got: {}", status);
+    }
+
+    /// Verifies that after a parent branch is merged, rebase_downstream_stack rebases
+    /// not just direct children but also grandchildren — the behavior the old one-level
+    /// loop in fp merge did NOT provide.
+    #[test]
+    fn rebase_downstream_stack_rebases_grandchildren_not_just_direct_children() {
+        use std::process::Command;
+        use tempfile::TempDir;
+
+        let remote_dir = TempDir::new().unwrap();
+        Command::new("git").args(["init", "--bare", "-b", "main"])
+            .current_dir(remote_dir.path()).output().unwrap();
+
+        let dir = TempDir::new().unwrap();
+        let path = dir.path();
+        let git = |args: &[&str]| Command::new("git").args(args).current_dir(path).output().unwrap();
+
+        git(&["init", "-b", "main"]);
+        git(&["config", "user.email", "t@t.com"]);
+        git(&["config", "user.name", "T"]);
+        git(&["remote", "add", "origin", remote_dir.path().to_str().unwrap()]);
+
+        // main: A
+        std::fs::write(path.join("a.txt"), "a").unwrap();
+        git(&["add", "."]);
+        git(&["commit", "-m", "A"]);
+        git(&["push", "origin", "main"]);
+
+        // feat/parent: B on main
+        git(&["checkout", "-b", "feat/parent"]);
+        std::fs::write(path.join("b.txt"), "b").unwrap();
+        git(&["add", "."]);
+        git(&["commit", "-m", "B"]);
+        let parent_sha = String::from_utf8(
+            Command::new("git").args(["rev-parse", "feat/parent"]).current_dir(path).output().unwrap().stdout
+        ).unwrap().trim().to_string();
+
+        // feat/child: C on feat/parent
+        git(&["checkout", "-b", "feat/child"]);
+        std::fs::write(path.join("c.txt"), "c").unwrap();
+        git(&["add", "."]);
+        git(&["commit", "-m", "C"]);
+        git(&["push", "--set-upstream", "origin", "feat/child"]);
+
+        // feat/grandchild: D on feat/child
+        git(&["checkout", "-b", "feat/grandchild"]);
+        std::fs::write(path.join("d.txt"), "d").unwrap();
+        git(&["add", "."]);
+        git(&["commit", "-m", "D"]);
+        git(&["push", "--set-upstream", "origin", "feat/grandchild"]);
+
+        // Squash merge feat/parent into main
+        git(&["checkout", "main"]);
+        git(&["merge", "--squash", "feat/parent"]);
+        git(&["commit", "-m", "squash: B"]);
+        git(&["push", "origin", "main"]);
+
+        let main_tip = String::from_utf8(
+            Command::new("git").args(["rev-parse", "main"]).current_dir(path).output().unwrap().stdout
+        ).unwrap().trim().to_string();
+
+        // branch_base_of mirrors what fp merge builds from state.prs
+        let mut branch_base_of: std::collections::HashMap<String, String> = std::collections::HashMap::new();
+        branch_base_of.insert("feat/child".to_string(), "feat/parent".to_string());
+        branch_base_of.insert("feat/grandchild".to_string(), "feat/child".to_string());
+
+        let errors = crate::stack::rebase_downstream_stack(
+            "feat/parent", &parent_sha, "main", &branch_base_of, path, &|_| {}
+        );
+        assert!(errors.is_empty(), "expected no errors, got: {:?}", errors);
+
+        // feat/child~1 == main tip
+        let child_parent = String::from_utf8(
+            Command::new("git").args(["rev-parse", "feat/child~1"]).current_dir(path).output().unwrap().stdout
+        ).unwrap().trim().to_string();
+        assert_eq!(child_parent, main_tip, "feat/child should be on top of main after rebase");
+
+        // feat/grandchild~1 == rebased feat/child tip (not original feat/child)
+        let rebased_child_tip = String::from_utf8(
+            Command::new("git").args(["rev-parse", "feat/child"]).current_dir(path).output().unwrap().stdout
+        ).unwrap().trim().to_string();
+        let grandchild_parent = String::from_utf8(
+            Command::new("git").args(["rev-parse", "feat/grandchild~1"]).current_dir(path).output().unwrap().stdout
+        ).unwrap().trim().to_string();
+        assert_eq!(grandchild_parent, rebased_child_tip,
+            "feat/grandchild should be on top of rebased feat/child, not original — old one-level loop misses this");
     }
 }

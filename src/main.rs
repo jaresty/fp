@@ -262,7 +262,7 @@ fn main() -> Result<()> {
                             title: tracked.title.clone(),
                             branch: tracked.branch.clone(),
                             base: "".into(), draft: false, approved: false,
-                            checks: vec![], threads: vec![],
+                            checks: vec![], threads: vec![], has_merge_conflict: false,
                         });
                     let tasks = generate_tasks(&pr_state);
                     if json {
@@ -285,7 +285,7 @@ fn main() -> Result<()> {
                         title: tracked.title.clone(),
                         branch: tracked.branch.clone(),
                         base: "".into(), draft: false, approved: false,
-                        checks: vec![], threads: vec![],
+                        checks: vec![], threads: vec![], has_merge_conflict: false,
                     });
                 let task_list = generate_tasks(&pr_state);
 
@@ -389,7 +389,7 @@ fn main() -> Result<()> {
                             title: tracked.title.clone(),
                             branch: tracked.branch.clone(),
                             base: "".into(), draft: false, approved: false,
-                            checks: vec![], threads: vec![],
+                            checks: vec![], threads: vec![], has_merge_conflict: false,
                         });
                     let curr = generate_tasks(&pr_state);
 
@@ -524,14 +524,20 @@ fn main() -> Result<()> {
                 let merged_base = tracked_pr.base.clone();
                 let work_dir = stack::resolve_work_dir(std::path::Path::new("."))?;
 
-                for downstream in state.prs.values() {
-                    if downstream.number == pr { continue; }
-                    if downstream.base == merged_branch {
-                        match stack::rebase_onto_after_merge(&downstream.branch, &head_sha, &merged_base, &work_dir) {
-                            Ok(()) => println!("✓ rebased {} onto {} (base was {})", downstream.branch, merged_base, merged_branch),
-                            Err(e) => println!("✗ failed to rebase {}: {}", downstream.branch, e),
-                        }
+                let branch_base_of: std::collections::HashMap<String, String> = state.prs.values()
+                    .filter(|p| p.number != pr)
+                    .map(|p| (p.branch.clone(), p.base.clone()))
+                    .collect();
+                let errors = stack::rebase_downstream_stack(
+                    &merged_branch, &head_sha, &merged_base, &branch_base_of, &work_dir, &|b| {
+                        println!("  rebasing {}...", b);
                     }
+                );
+                for e in &errors {
+                    println!("✗ {}", e);
+                }
+                if errors.is_empty() {
+                    println!("✓ rebased downstream stack onto {}", merged_base);
                 }
             }
 
@@ -596,7 +602,7 @@ fn main() -> Result<()> {
                     std::collections::HashMap::new()
                 };
 
-            let result = stack::rebase_stack(&branches, &parent_of, &base_of, &work_dir)?;
+            let result = stack::rebase_stack(&branches, &parent_of, &base_of, &work_dir, &|msg| eprintln!("{}", msg))?;
 
             for branch in &result.rebased {
                 println!("✓ rebased {}", branch);
@@ -606,6 +612,9 @@ fn main() -> Result<()> {
             }
             if let Some(status) = &result.status_output {
                 println!("\ngit status:\n{}", status);
+            }
+            for warn in &result.invariant_warnings {
+                println!("⚠ {}", warn);
             }
             if result.rebased.is_empty() && result.conflicts.is_empty() {
                 println!("Stack is already up to date.");
@@ -630,7 +639,7 @@ fn main() -> Result<()> {
                 title: tracked.title.clone(),
                 branch: tracked.branch.clone(),
                 base: "".into(), draft: false, approved: false,
-                checks: vec![], threads: vec![],
+                checks: vec![], threads: vec![], has_merge_conflict: false,
             });
 
             if let Some(stripped) = hint.strip_prefix("thread:") {
@@ -714,7 +723,7 @@ fn main() -> Result<()> {
                 None
             }.unwrap_or_else(|| model::PrState {
                 number: tracked.number, title: tracked.title.clone(), branch: tracked.branch.clone(),
-                base: "".into(), draft: false, approved: false, checks: vec![], threads: vec![],
+                base: "".into(), draft: false, approved: false, checks: vec![], threads: vec![], has_merge_conflict: false,
             });
 
             let threads: Vec<&model::Thread> = if resolved {

@@ -10,6 +10,7 @@ pub enum TaskType {
     AwaitingReview,
     AwaitingCi,
     MarkReady,
+    MergeConflict,
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
@@ -48,13 +49,23 @@ pub fn generate_tasks(pr: &PrState) -> Vec<Task> {
     // All checks → produce tasks based on status, required gates blocking only
     for check in &pr.checks {
         match check.status {
-            CheckStatus::Fail => tasks.push(Task {
-                pr: pr.number,
-                task_type: TaskType::FixCi,
-                blocking: check.required,
-                description: format!("Fix failing check: {}", check.name),
-                context_hint: check.name.clone(),
-            }),
+            CheckStatus::Fail => {
+                // Parse ESLint-format lines from log_snippet if present
+                let eslint_tasks = check.log_snippet.as_deref()
+                    .map(|log| parse_eslint_tasks(pr.number, log, check.required))
+                    .unwrap_or_default();
+                if eslint_tasks.is_empty() {
+                    tasks.push(Task {
+                        pr: pr.number,
+                        task_type: TaskType::FixCi,
+                        blocking: check.required,
+                        description: format!("Fix failing check: {}", check.name),
+                        context_hint: check.name.clone(),
+                    });
+                } else {
+                    tasks.extend(eslint_tasks);
+                }
+            }
             CheckStatus::Pending => tasks.push(Task {
                 pr: pr.number,
                 task_type: TaskType::AwaitingCi,
@@ -91,6 +102,17 @@ pub fn generate_tasks(pr: &PrState) -> Vec<Task> {
         });
     }
 
+    // Merge conflict → blocking task
+    if pr.has_merge_conflict {
+        tasks.push(Task {
+            pr: pr.number,
+            task_type: TaskType::MergeConflict,
+            blocking: true,
+            description: "Resolve merge conflict".into(),
+            context_hint: "merge_conflict".into(),
+        });
+    }
+
     // Draft PR with all checks green and no open threads → suggest marking ready
     if pr.draft
         && pr.checks.iter().all(|c| c.status == CheckStatus::Pass)
@@ -105,5 +127,34 @@ pub fn generate_tasks(pr: &PrState) -> Vec<Task> {
         });
     }
 
+    tasks
+}
+
+/// Parse ESLint-format error lines from a log snippet.
+/// ESLint format: `<file>:<line>:<col>  error  <message>  <rule>`
+/// Returns one FixCi task per distinct ESLint error line found.
+fn parse_eslint_tasks(pr: u64, log: &str, blocking: bool) -> Vec<Task> {
+    let mut tasks = Vec::new();
+    for line in log.lines() {
+        // Detect lines matching: path:line:col  error  message  rule
+        // Minimum: contains "  error  " and a rule identifier at the end
+        if !line.contains("  error  ") { continue; }
+        let parts: Vec<&str> = line.splitn(2, "  error  ").collect();
+        if parts.len() < 2 { continue; }
+        let after_error = parts[1];
+        // Split message  rule — last whitespace-separated token is the rule
+        let tokens: Vec<&str> = after_error.split_whitespace().collect();
+        if tokens.is_empty() { continue; }
+        let rule = tokens.last().unwrap().to_string();
+        let message = tokens[..tokens.len().saturating_sub(1)].join(" ");
+        let location = parts[0].trim().to_string();
+        tasks.push(Task {
+            pr,
+            task_type: TaskType::FixCi,
+            blocking,
+            description: format!("ESLint {}: {} ({})", rule, message, location),
+            context_hint: rule,
+        });
+    }
     tasks
 }
