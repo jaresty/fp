@@ -1110,4 +1110,100 @@ mod tests {
         assert_eq!(grandchild_parent, rebased_child_tip,
             "feat/grandchild should be on top of rebased feat/child, not original — old one-level loop misses this");
     }
+
+    /// Splice test: A→C becomes A→B→C after inserting B between A and C.
+    /// Verifies that after rebase_stack with the updated parent_of:
+    /// 1. C sits on top of B (not A) after rebase
+    /// 2. C's three-dot diff vs B equals C's original three-dot diff vs A
+    ///    (semantic content unchanged; only base moves)
+    #[test]
+    fn rebase_stack_splice_preserves_c_diff_after_inserting_b_between_a_and_c() {
+        use std::process::Command;
+        use tempfile::TempDir;
+
+        let remote_dir = TempDir::new().unwrap();
+        Command::new("git").args(["init", "--bare", "-b", "main"])
+            .current_dir(remote_dir.path()).output().unwrap();
+
+        let dir = TempDir::new().unwrap();
+        let path = dir.path();
+        let git = |args: &[&str]| Command::new("git").args(args).current_dir(path).output().unwrap();
+
+        git(&["init", "-b", "main"]);
+        git(&["config", "user.email", "t@t.com"]);
+        git(&["config", "user.name", "T"]);
+        git(&["remote", "add", "origin", remote_dir.path().to_str().unwrap()]);
+
+        // main (origin/main): commit M
+        std::fs::write(path.join("m.txt"), "m").unwrap();
+        git(&["add", "."]);
+        git(&["commit", "-m", "M"]);
+        git(&["push", "origin", "main"]);
+
+        // feat/a: commit A on main (this is "branch A" in the splice)
+        git(&["checkout", "-b", "feat/a"]);
+        std::fs::write(path.join("a.txt"), "a").unwrap();
+        git(&["add", "."]);
+        git(&["commit", "-m", "A"]);
+        git(&["push", "--set-upstream", "origin", "feat/a"]);
+
+        // feat/c: commit C on feat/a — original stack is main→feat/a→feat/c
+        git(&["checkout", "-b", "feat/c"]);
+        std::fs::write(path.join("c.txt"), "c-content").unwrap();
+        git(&["add", "."]);
+        git(&["commit", "-m", "C"]);
+        git(&["push", "--set-upstream", "origin", "feat/c"]);
+
+        // Capture C's original semantic diff vs A (before splice)
+        let pre_splice_diff = String::from_utf8(
+            Command::new("git").args(["diff", "feat/a...feat/c", "--"])
+                .current_dir(path).output().unwrap().stdout
+        ).unwrap();
+        assert!(!pre_splice_diff.is_empty(), "pre-splice diff should not be empty");
+
+        // Now create feat/b by branching from feat/a (inserting B between A and C)
+        git(&["checkout", "feat/a"]);
+        git(&["checkout", "-b", "feat/b"]);
+        std::fs::write(path.join("b.txt"), "b").unwrap();
+        git(&["add", "."]);
+        git(&["commit", "-m", "B"]);
+        git(&["push", "--set-upstream", "origin", "feat/b"]);
+
+        // Updated stack: feat/a → feat/b → feat/c
+        // parent_of reflects the splice: C's parent is now B
+        let mut parent_of = std::collections::HashMap::new();
+        parent_of.insert("feat/a".to_string(), None);
+        parent_of.insert("feat/b".to_string(), Some("feat/a".to_string()));
+        parent_of.insert("feat/c".to_string(), Some("feat/b".to_string()));
+
+        let mut base_of = std::collections::HashMap::new();
+        base_of.insert("feat/a".to_string(), "main".to_string());
+        base_of.insert("feat/b".to_string(), "main".to_string());
+        base_of.insert("feat/c".to_string(), "main".to_string());
+
+        let branches = vec!["feat/a".to_string(), "feat/b".to_string(), "feat/c".to_string()];
+
+        let result = crate::stack::rebase_stack(&branches, &parent_of, &base_of, path, &|_| {});
+        let result = result.unwrap();
+        assert!(result.conflicts.is_empty(), "expected no conflicts, got: {:?}", result.conflicts);
+
+        // Dimension 1: C sits on top of B after rebase
+        let b_tip = String::from_utf8(
+            Command::new("git").args(["rev-parse", "feat/b"])
+                .current_dir(path).output().unwrap().stdout
+        ).unwrap().trim().to_string();
+        let c_parent = String::from_utf8(
+            Command::new("git").args(["rev-parse", "feat/c~1"])
+                .current_dir(path).output().unwrap().stdout
+        ).unwrap().trim().to_string();
+        assert_eq!(c_parent, b_tip, "C should sit on top of B after splice rebase");
+
+        // Dimension 2: C's semantic diff vs B equals pre-splice diff vs A
+        let post_splice_diff = String::from_utf8(
+            Command::new("git").args(["diff", "feat/b...feat/c", "--"])
+                .current_dir(path).output().unwrap().stdout
+        ).unwrap();
+        assert_eq!(post_splice_diff, pre_splice_diff,
+            "C's semantic diff should be unchanged after splice rebase");
+    }
 }
