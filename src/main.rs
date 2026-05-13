@@ -499,8 +499,8 @@ fn main() -> Result<()> {
                 .context("could not detect GitHub repo from git remote")?;
             let client = GithubClient::new(token);
 
-            // Determine merge method flag
-            let merge_method: Option<&str> = if squash {
+            // Determine merge method: explicit flag, or auto-detect from repo settings
+            let explicit_method: Option<&str> = if squash {
                 Some("squash")
             } else if rebase {
                 Some("rebase")
@@ -509,16 +509,24 @@ fn main() -> Result<()> {
             } else {
                 None
             };
+            let mut state = store.load()?;
+            let resolved_method: String;
+            let merge_method: &str = if let Some(m) = explicit_method {
+                m
+            } else {
+                resolved_method = github::resolve_merge_method(&client, &owner, &repo_name, &mut state.cached_merge_methods)?;
+                store.save(&state)?;
+                &resolved_method
+            };
 
             // Fetch the PR's head branch and base before merging (need head_sha for rebase --onto)
             let (head_sha, _base_ref) = client.fetch_pr_head_sha_and_base(&owner, &repo_name, pr)?;
 
             // Perform the merge
-            let merge_sha = client.merge_pr(&owner, &repo_name, pr, merge_method)?;
+            let merge_sha = client.merge_pr(&owner, &repo_name, pr, Some(merge_method))?;
             println!("✓ merged PR #{} ({})", pr, merge_sha);
 
             // Find the tracked PR to get the head branch name, then rebase downstream
-            let state = store.load()?;
             if let Some(tracked_pr) = state.prs.get(&pr) {
                 let merged_branch = tracked_pr.branch.clone();
                 let merged_base = tracked_pr.base.clone();

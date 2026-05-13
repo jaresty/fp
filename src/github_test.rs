@@ -1799,4 +1799,80 @@ mod tests {
         assert!(failed.iter().any(|c| c.name == "test"), "expected 'test' in failures");
         assert!(failed[0].details_url.is_some(), "expected details_url on failed check");
     }
+
+    // ADR-005: resolve_merge_method uses cached value on second call (no second API hit)
+    #[test]
+    fn resolve_merge_method_uses_cache_on_second_call() {
+        let mut server = mockito::Server::new();
+        // Mock set to respond exactly once — second call would 404
+        let _m = server.mock("GET", "/repos/owner/repo")
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body(r#"{"allow_squash_merge": true, "allow_merge_commit": false, "allow_rebase_merge": false}"#)
+            .expect(1)
+            .create();
+        let client = mock_client(&server);
+        let mut cache: std::collections::HashMap<String, String> = std::collections::HashMap::new();
+        let m1 = crate::github::resolve_merge_method(&client, "owner", "repo", &mut cache).unwrap();
+        let m2 = crate::github::resolve_merge_method(&client, "owner", "repo", &mut cache).unwrap();
+        assert_eq!(m1, "squash");
+        assert_eq!(m2, "squash", "second call should return cached value");
+        _m.assert(); // verifies mock was called exactly once
+    }
+
+    // ADR-005: fetch_repo_merge_methods returns "squash" when only squash is allowed
+    #[test]
+    fn fetch_repo_merge_methods_returns_squash_when_only_squash_allowed() {
+        let mut server = mockito::Server::new();
+        server.mock("GET", "/repos/owner/repo")
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body(r#"{"allow_squash_merge": true, "allow_merge_commit": false, "allow_rebase_merge": false}"#)
+            .create();
+        let client = mock_client(&server);
+        let method = client.fetch_repo_merge_method("owner", "repo").unwrap();
+        assert_eq!(method, "squash", "expected squash when only squash allowed");
+    }
+
+    // ADR-005: returns "merge" when only merge commit is allowed
+    #[test]
+    fn fetch_repo_merge_methods_returns_merge_when_only_merge_allowed() {
+        let mut server = mockito::Server::new();
+        server.mock("GET", "/repos/owner/repo")
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body(r#"{"allow_squash_merge": false, "allow_merge_commit": true, "allow_rebase_merge": false}"#)
+            .create();
+        let client = mock_client(&server);
+        let method = client.fetch_repo_merge_method("owner", "repo").unwrap();
+        assert_eq!(method, "merge", "expected merge when only merge commit allowed");
+    }
+
+    // ADR-005: returns "rebase" when only rebase is allowed
+    #[test]
+    fn fetch_repo_merge_methods_returns_rebase_when_only_rebase_allowed() {
+        let mut server = mockito::Server::new();
+        server.mock("GET", "/repos/owner/repo")
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body(r#"{"allow_squash_merge": false, "allow_merge_commit": false, "allow_rebase_merge": true}"#)
+            .create();
+        let client = mock_client(&server);
+        let method = client.fetch_repo_merge_method("owner", "repo").unwrap();
+        assert_eq!(method, "rebase", "expected rebase when only rebase allowed");
+    }
+
+    // ADR-005: returns "squash" (preferred) when multiple methods are allowed
+    #[test]
+    fn fetch_repo_merge_methods_prefers_squash_when_multiple_allowed() {
+        let mut server = mockito::Server::new();
+        server.mock("GET", "/repos/owner/repo")
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body(r#"{"allow_squash_merge": true, "allow_merge_commit": true, "allow_rebase_merge": true}"#)
+            .create();
+        let client = mock_client(&server);
+        let method = client.fetch_repo_merge_method("owner", "repo").unwrap();
+        assert_eq!(method, "squash", "expected squash preferred when multiple methods allowed");
+    }
 }

@@ -17,6 +17,8 @@ pub struct TrackedPr {
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct State {
     pub prs: HashMap<u64, TrackedPr>,
+    #[serde(default)]
+    pub cached_merge_methods: HashMap<String, String>,
 }
 
 pub struct Store {

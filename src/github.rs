@@ -217,6 +217,17 @@ impl GithubClient {
         Ok(resp["merged"].as_bool().unwrap_or(false))
     }
 
+    pub fn fetch_repo_merge_method(&self, owner: &str, repo: &str) -> Result<String> {
+        let body = self.get(&format!("/repos/{}/{}", owner, repo))?;
+        let squash = body["allow_squash_merge"].as_bool().unwrap_or(false);
+        let merge = body["allow_merge_commit"].as_bool().unwrap_or(false);
+        let rebase = body["allow_rebase_merge"].as_bool().unwrap_or(false);
+        if squash { return Ok("squash".to_string()); }
+        if rebase { return Ok("rebase".to_string()); }
+        if merge { return Ok("merge".to_string()); }
+        Ok("squash".to_string())
+    }
+
     pub fn merge_pr(&self, owner: &str, repo: &str, pr_number: u64, merge_method: Option<&str>) -> Result<String> {
         let url = format!("{}/repos/{}/{}/pulls/{}/merge", self.base_url, owner, repo, pr_number);
         let mut payload = serde_json::json!({});
@@ -509,6 +520,23 @@ impl GithubClient {
 
         Ok(PrState { number: pr_number, title, branch, base: base_branch, draft, approved, checks, threads, has_merge_conflict: false })
     }
+}
+
+/// Returns the repo's preferred merge method, using `cache` (keyed by "owner/repo") to avoid
+/// repeated API calls. Queries GitHub and populates cache on first call per repo.
+pub fn resolve_merge_method(
+    client: &GithubClient,
+    owner: &str,
+    repo: &str,
+    cache: &mut std::collections::HashMap<String, String>,
+) -> Result<String> {
+    let key = format!("{}/{}", owner, repo);
+    if let Some(cached) = cache.get(&key) {
+        return Ok(cached.clone());
+    }
+    let method = client.fetch_repo_merge_method(owner, repo)?;
+    cache.insert(key, method.clone());
+    Ok(method)
 }
 
 /// Resolve GitHub token: GITHUB_TOKEN env → gh CLI → hard error with enumerated remediation.
