@@ -1800,6 +1800,50 @@ mod tests {
         assert!(failed[0].details_url.is_some(), "expected details_url on failed check");
     }
 
+    // ADR-007: parse_gh_image_output extracts URL from gh image markdown output
+    #[test]
+    fn parse_gh_image_output_extracts_url() {
+        let output = "![screenshot.gif](https://github.com/user-attachments/assets/abc-123)\n";
+        let url = crate::github::parse_gh_image_output(output).unwrap();
+        assert_eq!(url, "https://github.com/user-attachments/assets/abc-123");
+    }
+
+    // ADR-007: parse_gh_image_output returns error on unexpected format
+    #[test]
+    fn parse_gh_image_output_errors_on_invalid() {
+        let output = "some unexpected output";
+        assert!(crate::github::parse_gh_image_output(output).is_err(),
+            "expected error on non-markdown output");
+    }
+
+    // ADR-007 bug fix: fetch_pr_body returns current PR body string
+    #[test]
+    fn fetch_pr_body_returns_current_body() {
+        let mut server = mockito::Server::new();
+        server.mock("GET", "/repos/owner/repo/pulls/42")
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body(r#"{"number": 42, "body": "existing PR description"}"#)
+            .create();
+        let client = mock_client(&server);
+        let body = client.fetch_pr_body("owner", "repo", 42).unwrap();
+        assert_eq!(body, "existing PR description", "expected current PR body");
+    }
+
+    // ADR-007 bug fix: fetch_pr_body returns empty string when body is null
+    #[test]
+    fn fetch_pr_body_returns_empty_when_null() {
+        let mut server = mockito::Server::new();
+        server.mock("GET", "/repos/owner/repo/pulls/42")
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body(r#"{"number": 42, "body": null}"#)
+            .create();
+        let client = mock_client(&server);
+        let body = client.fetch_pr_body("owner", "repo", 42).unwrap();
+        assert_eq!(body, "", "null body should return empty string");
+    }
+
     // ADR-007: update_pr sends PATCH with title and/or body fields
     #[test]
     fn update_pr_sends_patch_with_title_and_body() {
@@ -1942,5 +1986,65 @@ mod tests {
         let client = mock_client(&server);
         let method = client.fetch_repo_merge_method("owner", "repo").unwrap();
         assert_eq!(method, "squash", "expected squash preferred when multiple methods allowed");
+    }
+
+    // ADR-007: extract_github_session_from_browser with injected empty cookie list returns Err
+    #[test]
+    fn extract_github_session_from_browser_errors_when_no_github_cookie() {
+        let cookies: Vec<bench_scraper::Cookie> = vec![];
+        let result = crate::github::extract_session_from_cookies(&cookies);
+        assert!(result.is_err(), "expected Err when no github.com user_session cookie found");
+    }
+
+    // ADR-007: extract_github_session_from_browser with matching cookie returns value
+    #[test]
+    fn extract_github_session_from_browser_returns_value_when_cookie_present() {
+        use bench_scraper::Cookie;
+        let cookie = Cookie {
+            host: "github.com".to_string(),
+            path: "/".to_string(),
+            name: "user_session".to_string(),
+            value: "abc123".to_string(),
+            is_secure: true,
+            is_http_only: true,
+            creation_time: time::OffsetDateTime::now_utc(),
+            expiration_time: None,
+            same_site: None,
+            last_accessed: None,
+        };
+        let result = crate::github::extract_session_from_cookies(&[cookie]);
+        assert_eq!(result.unwrap(), "abc123");
+    }
+
+    // ADR-007: parse_upload_token extracts token from HTML
+    #[test]
+    fn parse_upload_token_extracts_token_from_html() {
+        let html = r#"<html><head>"uploadToken":"tok123"</head></html>"#;
+        let token = crate::github::parse_upload_token(html).unwrap();
+        assert_eq!(token, "tok123");
+    }
+
+    // ADR-007: parse_upload_token errors on missing token
+    #[test]
+    fn parse_upload_token_errors_on_missing() {
+        let html = "<html><body>no token here</body></html>";
+        assert!(crate::github::parse_upload_token(html).is_err());
+    }
+
+    // ADR-007: parse_upload_policy_response extracts upload fields
+    #[test]
+    fn parse_upload_policy_response_extracts_fields() {
+        let json = r#"{
+            "upload_url": "https://s3.example.com/upload",
+            "asset": {"id": 42, "href": "https://github.com/user-attachments/assets/abc"},
+            "form": {"key": "val1", "Content-Type": "image/png"},
+            "asset_upload_authenticity_token": "auth-tok-xyz"
+        }"#;
+        let policy = crate::github::parse_upload_policy_response(json).unwrap();
+        assert_eq!(policy.upload_url, "https://s3.example.com/upload");
+        assert_eq!(policy.asset_id, 42);
+        assert_eq!(policy.asset_href, "https://github.com/user-attachments/assets/abc");
+        assert_eq!(policy.asset_upload_authenticity_token, "auth-tok-xyz");
+        assert_eq!(policy.form_fields.get("key").map(|s| s.as_str()), Some("val1"));
     }
 }

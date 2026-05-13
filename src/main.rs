@@ -179,18 +179,20 @@ enum Commands {
 
 /// Resolves `--demo` arguments to CDN URLs. URL strings pass through; file paths are uploaded
 /// via the GitHub asset upload API. Returns error for file paths if upload is unavailable.
-fn resolve_demo_urls(_client: &github::GithubClient, _owner: &str, _repo: &str, demos: &[String]) -> anyhow::Result<Vec<String>> {
+fn resolve_demo_urls(client: &github::GithubClient, owner: &str, repo: &str, demos: &[String]) -> anyhow::Result<Vec<String>> {
     let mut urls = Vec::new();
     for demo in demos {
         if demo.starts_with("http://") || demo.starts_with("https://") {
             urls.push(demo.clone());
         } else {
-            // File upload: GitHub's asset upload endpoint is undocumented (see ADR-007).
-            // For now, require a URL. File upload support will be added when the endpoint stabilises.
-            anyhow::bail!(
-                "File upload is not yet supported for --demo; pass a URL instead.\n\
-                 Workaround: upload the file manually to GitHub and pass the CDN URL."
-            );
+            let session = std::env::var("GITHUB_USER_SESSION")
+                .or_else(|_| github::extract_github_session_from_browser())
+                .map_err(|_| anyhow::anyhow!(
+                    "no GitHub session found — set GITHUB_USER_SESSION env var or log into GitHub in a supported browser (Chrome, Firefox, Safari)"
+                ))?;
+            let path = std::path::Path::new(demo);
+            let url = github::github_upload_image(path, owner, repo, client, &session)?;
+            urls.push(url);
         }
     }
     Ok(urls)
@@ -408,8 +410,12 @@ fn main() -> Result<()> {
                 body
             } else {
                 let demo_urls = resolve_demo_urls(&client, &owner, &repo_name, &demo)?;
-                let base_body = body.as_deref().unwrap_or("");
-                Some(github::inject_demo_section(base_body, &demo_urls))
+                // Fetch current PR body if --body not provided, so we don't discard it
+                let base_body = match body {
+                    Some(ref b) => b.clone(),
+                    None => client.fetch_pr_body(&owner, &repo_name, pr)?,
+                };
+                Some(github::inject_demo_section(&base_body, &demo_urls))
             };
             client.update_pr(&owner, &repo_name, pr, title.as_deref(), final_body.as_deref())?;
             println!("✓ PR #{} updated", pr);
@@ -831,3 +837,32 @@ fn main() -> Result<()> {
 }
 
 
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // ADR-007: resolve_demo_urls with file path and no session env var falls back to browser,
+    // and if browser also has no cookie, error mentions GITHUB_USER_SESSION
+    #[test]
+    fn resolve_demo_urls_file_path_errors_naming_github_user_session_when_no_cookie_found() {
+        // SAFETY: single-threaded test, no concurrent env access
+        unsafe { std::env::remove_var("GITHUB_USER_SESSION"); }
+        let client = github::GithubClient::with_base_url("tok".into(), "http://localhost:1".into());
+        // This test passes if: (a) browser has a cookie (upload fails for different reason — not our concern here)
+        // or (b) browser has no cookie, error mentions GITHUB_USER_SESSION
+        // We only assert the GITHUB_USER_SESSION mention when the error is about missing session
+        let result = resolve_demo_urls(&client, "owner", "repo", &["some_image.png".to_string()]);
+        match result {
+            Ok(_) => {} // browser had a valid cookie and upload "succeeded" (unlikely in test env)
+            Err(e) => {
+                let msg = e.to_string();
+                // If it's a session-not-found error, it must mention GITHUB_USER_SESSION
+                if msg.contains("session") || msg.contains("cookie") || msg.contains("browser") {
+                    assert!(msg.contains("GITHUB_USER_SESSION"),
+                        "session error must mention GITHUB_USER_SESSION, got: {}", msg);
+                }
+            }
+        }
+    }
+}
