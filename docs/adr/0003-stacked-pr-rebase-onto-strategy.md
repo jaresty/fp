@@ -1,6 +1,6 @@
 # ADR-003: Stacked PR Rebase Strategy — `--onto` vs. Plain Rebase
 
-**Status:** Proposed
+**Status:** Accepted
 
 ## Context
 

@@ -1,6 +1,6 @@
 # ADR-007: PR Communication — Top-Level Comments, Description Editing, and Demo Upload
 
-**Status:** Proposed
+**Status:** Accepted
 
 ## Context
 

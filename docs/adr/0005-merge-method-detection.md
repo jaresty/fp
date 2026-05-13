@@ -1,6 +1,6 @@
 # ADR-005: `fp merge` — Preferred Merge Method Detection
 
-**Status:** Proposed
+**Status:** Accepted
 
 ## Context
 

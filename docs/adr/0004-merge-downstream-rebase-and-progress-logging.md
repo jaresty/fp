@@ -1,6 +1,6 @@
 # ADR-004: `fp merge` — Downstream Rebase on Merge + Progress Logging
 
-**Status:** Proposed
+**Status:** Accepted
 
 ## Context
 

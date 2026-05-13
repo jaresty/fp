@@ -1,6 +1,6 @@
 # ADR-006: Task Surface Completeness — Merge Conflicts, Linter Errors, and Pagination
 
-**Status:** Proposed
+**Status:** Partially Implemented — pagination done; `MergeConflict` task type + tests done; merge conflict detection (`has_merge_conflict` always false) and ESLint parsing not yet implemented.
 
 ## Context
 
