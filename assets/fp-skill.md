@@ -40,15 +40,23 @@ fp context <pr> <hint>                  # log tail for check, or thread body
 # Thread management
 fp reply <pr> <thread_id> "<message>"   # post reply, mark thread Addressed
 fp resolve <pr> <thread_id>             # mark Resolved locally (no GitHub post)
+fp comment <pr> "<text>"                # post top-level PR comment (not a thread reply)
 
 # Stack management
 fp rebase-stack                         # rebase each tracked branch onto parent tip
+fp merge <pr>                           # merge PR via GitHub API, auto-detect merge method,
+                                        # rebase full downstream stack after merge
 
-# PR creation and tracking
+# PR creation and editing
 fp create "<title>" [--base <branch>]   # create draft PR for current branch
+fp create "<title>" --demo <url>        # create PR and inject ## Demo section with image
+fp create "<title>" --demo <url> --demo <url2>  # multiple demos, numbered
+fp edit <pr> [--title "<t>"] [--body "<b>"]     # update PR title and/or body
+fp edit <pr> --demo <url>               # append/replace ## Demo section in PR body
 fp track <pr>                           # track PR (auto-fetches metadata via API)
 fp track <pr> --title "..." --branch "..."  # track PR manually
 fp untrack <pr>                         # stop tracking
+fp ready <pr>                           # mark draft PR as ready for review
 
 # Monitoring
 fp watch [--once] [--interval <secs>]   # poll tracked PRs, print task diffs
@@ -60,8 +68,10 @@ fp watch [--once] [--interval <secs>]   # poll tracked PRs, print task diffs
 |------|----------|---------|--------|
 | `FixCi` | **yes** | A required check is failing | `fp context <pr> <check>` → read log → fix → push |
 | `RespondThread` | **yes** | An open or stale review thread needs a response | `fp context <pr> thread:<id>` → `fp reply` or `fp resolve` |
+| `MergeConflict` | **yes** | PR has a merge conflict | Rebase branch locally, resolve conflicts, push |
 | `AwaitingCi` | no | A required check is pending | `fp watch --once` to re-check |
 | `AwaitingReview` | no | PR not approved yet | Wait |
+| `MarkReady` | no | Draft PR is green — suggest marking ready | `fp ready <pr>` |
 
 ## Decision Protocol
 

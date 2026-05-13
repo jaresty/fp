@@ -1800,6 +1800,74 @@ mod tests {
         assert!(failed[0].details_url.is_some(), "expected details_url on failed check");
     }
 
+    // ADR-007: update_pr sends PATCH with title and/or body fields
+    #[test]
+    fn update_pr_sends_patch_with_title_and_body() {
+        let mut server = mockito::Server::new();
+        let _m = server.mock("PATCH", "/repos/owner/repo/pulls/42")
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body(r#"{"number": 42}"#)
+            .match_body(mockito::Matcher::PartialJsonString(
+                r#"{"title":"new title","body":"new body"}"#.to_string()
+            ))
+            .create();
+        let client = mock_client(&server);
+        client.update_pr("owner", "repo", 42, Some("new title"), Some("new body")).unwrap();
+        _m.assert();
+    }
+
+    // ADR-007: update_pr with only body (no title) sends just body field
+    #[test]
+    fn update_pr_sends_patch_with_body_only() {
+        let mut server = mockito::Server::new();
+        let _m = server.mock("PATCH", "/repos/owner/repo/pulls/42")
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body(r#"{"number": 42}"#)
+            .match_body(mockito::Matcher::PartialJsonString(
+                r#"{"body":"updated body"}"#.to_string()
+            ))
+            .create();
+        let client = mock_client(&server);
+        client.update_pr("owner", "repo", 42, None, Some("updated body")).unwrap();
+        _m.assert();
+    }
+
+    // ADR-007: inject_demo_section appends ## Demo section when none exists
+    #[test]
+    fn inject_demo_section_appends_when_none_exists() {
+        let body = "existing description";
+        let urls = vec!["https://example.com/demo.gif".to_string()];
+        let result = crate::github::inject_demo_section(body, &urls);
+        assert!(result.contains("## Demo"), "expected ## Demo section");
+        assert!(result.contains("![Demo 1](https://example.com/demo.gif)"), "expected image markdown");
+        assert!(result.starts_with("existing description"), "original body should be preserved");
+    }
+
+    // ADR-007: inject_demo_section replaces existing ## Demo section
+    #[test]
+    fn inject_demo_section_replaces_existing_demo_section() {
+        let body = "description\n\n## Demo\n\n![Demo 1](old-url)\n";
+        let urls = vec!["https://example.com/new.gif".to_string()];
+        let result = crate::github::inject_demo_section(body, &urls);
+        assert!(!result.contains("old-url"), "old demo url should be replaced");
+        assert!(result.contains("![Demo 1](https://example.com/new.gif)"), "new url should be present");
+    }
+
+    // ADR-007: inject_demo_section with multiple URLs produces numbered entries
+    #[test]
+    fn inject_demo_section_numbers_multiple_demos() {
+        let body = "description";
+        let urls = vec![
+            "https://example.com/a.gif".to_string(),
+            "https://example.com/b.png".to_string(),
+        ];
+        let result = crate::github::inject_demo_section(body, &urls);
+        assert!(result.contains("![Demo 1](https://example.com/a.gif)"));
+        assert!(result.contains("![Demo 2](https://example.com/b.png)"));
+    }
+
     // ADR-005: resolve_merge_method uses cached value on second call (no second API hit)
     #[test]
     fn resolve_merge_method_uses_cache_on_second_call() {

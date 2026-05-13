@@ -131,12 +131,29 @@ enum Commands {
         /// PR description body
         #[arg(long)]
         body: Option<String>,
+        /// Attach a demo (URL or file path); repeatable
+        #[arg(long, value_name = "FILE_OR_URL")]
+        demo: Vec<String>,
         /// Insert current branch before this PR: rebase that PR onto current branch
         #[arg(long)]
         restack_before: Option<u64>,
         /// Insert current branch after this PR: rebase the PR that follows it onto current branch
         #[arg(long)]
         insert_after: Option<u64>,
+    },
+    /// Edit a PR's title and/or body
+    Edit {
+        /// PR number
+        pr: u64,
+        /// New title
+        #[arg(long)]
+        title: Option<String>,
+        /// New body
+        #[arg(long)]
+        body: Option<String>,
+        /// Attach a demo (URL or file path); repeatable
+        #[arg(long, value_name = "FILE_OR_URL")]
+        demo: Vec<String>,
     },
     /// Merge a PR via the GitHub API and rebase downstream tracked branches
     Merge {
@@ -158,6 +175,25 @@ enum Commands {
         #[arg(long)]
         path: Option<std::path::PathBuf>,
     },
+}
+
+/// Resolves `--demo` arguments to CDN URLs. URL strings pass through; file paths are uploaded
+/// via the GitHub asset upload API. Returns error for file paths if upload is unavailable.
+fn resolve_demo_urls(_client: &github::GithubClient, _owner: &str, _repo: &str, demos: &[String]) -> anyhow::Result<Vec<String>> {
+    let mut urls = Vec::new();
+    for demo in demos {
+        if demo.starts_with("http://") || demo.starts_with("https://") {
+            urls.push(demo.clone());
+        } else {
+            // File upload: GitHub's asset upload endpoint is undocumented (see ADR-007).
+            // For now, require a URL. File upload support will be added when the endpoint stabilises.
+            anyhow::bail!(
+                "File upload is not yet supported for --demo; pass a URL instead.\n\
+                 Workaround: upload the file manually to GitHub and pass the CDN URL."
+            );
+        }
+    }
+    Ok(urls)
 }
 
 /// Rebase `branch` onto `new_base`, cutting away `old_base`, then force-push.
@@ -363,6 +399,22 @@ fn main() -> Result<()> {
             println!("Comment posted: {}", url);
         }
 
+        Commands::Edit { pr, title, body, demo } => {
+            let token = resolve_github_token()?;
+            let (owner, repo_name) = detect_repo()
+                .context("could not detect GitHub repo from git remote")?;
+            let client = GithubClient::new(token);
+            let final_body: Option<String> = if demo.is_empty() {
+                body
+            } else {
+                let demo_urls = resolve_demo_urls(&client, &owner, &repo_name, &demo)?;
+                let base_body = body.as_deref().unwrap_or("");
+                Some(github::inject_demo_section(base_body, &demo_urls))
+            };
+            client.update_pr(&owner, &repo_name, pr, title.as_deref(), final_body.as_deref())?;
+            println!("✓ PR #{} updated", pr);
+        }
+
         Commands::Watch { once, interval } => {
             let mut prev_tasks: std::collections::HashMap<u64, Vec<tasks::Task>> = std::collections::HashMap::new();
             loop {
@@ -424,7 +476,7 @@ fn main() -> Result<()> {
             }
         }
 
-        Commands::Create { title, base, body, restack_before, insert_after } => {
+        Commands::Create { title, base, body, demo, restack_before, insert_after } => {
             let token = resolve_github_token()?;
             let (owner, repo_name) = detect_repo()
                 .context("could not detect GitHub repo from git remote")?;
@@ -438,7 +490,13 @@ fn main() -> Result<()> {
             let work_dir = stack::resolve_work_dir(std::path::Path::new(".git"))?;
 
             let client = GithubClient::new(token);
-            let pr_state = client.create_pr_with_body(&owner, &repo_name, &title, &head_branch, &base, true, body.as_deref())?;
+            let final_body = if demo.is_empty() {
+                body
+            } else {
+                let demo_urls = resolve_demo_urls(&client, &owner, &repo_name, &demo)?;
+                Some(github::inject_demo_section(body.as_deref().unwrap_or(""), &demo_urls))
+            };
+            let pr_state = client.create_pr_with_body(&owner, &repo_name, &title, &head_branch, &base, true, final_body.as_deref())?;
             store.track(TrackedPr {
                 number: pr_state.number,
                 title: pr_state.title.clone(),

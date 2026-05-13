@@ -247,6 +247,22 @@ impl GithubClient {
         Ok(resp["sha"].as_str().unwrap_or("").to_string())
     }
 
+    pub fn update_pr(&self, owner: &str, repo: &str, pr_number: u64, title: Option<&str>, body: Option<&str>) -> Result<()> {
+        let url = format!("{}/repos/{}/{}/pulls/{}", self.base_url, owner, repo, pr_number);
+        let mut payload = serde_json::json!({});
+        if let Some(t) = title { payload["title"] = serde_json::Value::String(t.to_string()); }
+        if let Some(b) = body  { payload["body"]  = serde_json::Value::String(b.to_string()); }
+        let resp = reqwest::blocking::Client::new()
+            .patch(&url)
+            .header("Authorization", format!("Bearer {}", self.token))
+            .header("Accept", "application/vnd.github+json")
+            .header("User-Agent", "fp/0.1")
+            .json(&payload)
+            .send()?;
+        anyhow::ensure!(resp.status().is_success(), "update_pr failed: {}", resp.status());
+        Ok(())
+    }
+
     pub fn update_pr_base(&self, owner: &str, repo: &str, pr_number: u64, new_base: &str) -> Result<()> {
         let url = format!("{}/repos/{}/{}/pulls/{}", self.base_url, owner, repo, pr_number);
         let payload = serde_json::json!({ "base": new_base });
@@ -519,6 +535,25 @@ impl GithubClient {
         let threads: Vec<Thread> = threads.into_iter().chain(review_body_threads).chain(issue_threads).collect();
 
         Ok(PrState { number: pr_number, title, branch, base: base_branch, draft, approved, checks, threads, has_merge_conflict: false })
+    }
+}
+
+/// Injects or replaces a `## Demo` section in a PR body with numbered image markdown entries.
+pub fn inject_demo_section(body: &str, urls: &[String]) -> String {
+    let demo_section = {
+        let images: String = urls.iter().enumerate()
+            .map(|(i, url)| format!("![Demo {}]({})", i + 1, url))
+            .collect::<Vec<_>>()
+            .join("\n");
+        format!("## Demo\n\n{}", images)
+    };
+    // Replace existing ## Demo section (and everything after it until next ## or end)
+    if let Some(pos) = body.find("\n## Demo") {
+        format!("{}\n\n{}", body[..pos].trim_end(), demo_section)
+    } else if body.contains("## Demo") && body.starts_with("## Demo") {
+        demo_section
+    } else {
+        format!("{}\n\n{}", body.trim_end(), demo_section)
     }
 }
 
