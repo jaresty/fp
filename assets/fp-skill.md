@@ -50,9 +50,11 @@ fp merge <pr>                           # merge PR via GitHub API, auto-detect m
 # PR creation and editing
 fp create "<title>" [--base <branch>]   # create draft PR for current branch
 fp create "<title>" --demo <url>        # create PR and inject ## Demo section with image
+fp create "<title>" --demo <file>       # upload local image file, inject URL into ## Demo
 fp create "<title>" --demo <url> --demo <url2>  # multiple demos, numbered
 fp edit <pr> [--title "<t>"] [--body "<b>"]     # update PR title and/or body
 fp edit <pr> --demo <url>               # append/replace ## Demo section in PR body
+fp edit <pr> --demo <file>              # upload local image file, inject into PR body
 fp track <pr>                           # track PR (auto-fetches metadata via API)
 fp track <pr> --title "..." --branch "..."  # track PR manually
 fp untrack <pr>                         # stop tracking
@@ -137,6 +139,7 @@ Conflicts are reported by branch name. Resolve manually, then re-run `fp rebase-
 
 - `GITHUB_TOKEN` — required for all API calls. If absent, tell the user to set it.
 - `BUILDKITE_TOKEN` — required for Buildkite log content. If a Buildkite check fails and this is unset, tell the user.
+- `GITHUB_USER_SESSION` — required for `--demo <file>` image uploads. fp auto-extracts this from Chrome/Firefox/Safari if unset. If upload fails with a session error, tell the user to set it from browser DevTools (Application → Cookies → github.com → user_session).
 
 ## Write to Disk
 
