@@ -39,6 +39,15 @@ pub struct Thread {
     pub line: Option<u32>,
 }
 
+#[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case", tag = "type")]
+pub enum CownershipEligibility {
+    #[default]
+    Verified,
+    Unverifiable { reviewer: String },
+    Ineligible { reviewer: String, required_team: String },
+}
+
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct PrState {
     pub number: u64,
@@ -51,4 +60,6 @@ pub struct PrState {
     pub threads: Vec<Thread>,
     #[serde(default)]
     pub has_merge_conflict: bool,
+    #[serde(default)]
+    pub codeowners_eligibility: CownershipEligibility,
 }

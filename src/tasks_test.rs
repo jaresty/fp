@@ -19,7 +19,7 @@ mod tests {
                 log_snippet: None,
             }],
             threads: vec![],
-            has_merge_conflict: false,
+            has_merge_conflict: false, codeowners_eligibility: Default::default(),
         }
     }
 
@@ -253,7 +253,7 @@ mod tests {
             approved: false,
             checks: vec![Check { name: "ci".into(), status: CheckStatus::Pass, required: true, details_url: None, log_snippet: None }],
             threads: vec![],
-            has_merge_conflict: false,
+            has_merge_conflict: false, codeowners_eligibility: Default::default(),
         };
         let tasks = generate_tasks(&pr);
         assert!(
@@ -275,7 +275,7 @@ mod tests {
             approved: false,
             checks: vec![Check { name: "ci".into(), status: CheckStatus::Pass, required: true, details_url: None, log_snippet: None }],
             threads: vec![],
-            has_merge_conflict: false,
+            has_merge_conflict: false, codeowners_eligibility: Default::default(),
         };
         let tasks = generate_tasks(&pr);
         assert!(
@@ -327,6 +327,54 @@ mod tests {
             !tasks.iter().any(|t| t.task_type == TaskType::MergeConflict),
             "expected no MergeConflict task when no conflict, got: {:?}", tasks
         );
+    }
+
+    // ADR-002 #8: unresolvable CODEOWNERS (Unverifiable) on approved PR produces ReadyUnverified task
+    #[test]
+    fn unverifiable_codeowners_produces_ready_unverified_task() {
+        let mut pr = pr_clean();
+        pr.codeowners_eligibility = CownershipEligibility::Unverifiable { reviewer: "alice".into() };
+        let tasks = generate_tasks(&pr);
+        assert!(
+            tasks.iter().any(|t| t.task_type == TaskType::ReadyUnverified),
+            "expected ReadyUnverified task when CODEOWNERS unverifiable, got: {:?}", tasks
+        );
+    }
+
+    // ADR-002 #8: ReadyUnverified task description names the reviewer
+    #[test]
+    fn ready_unverified_description_names_reviewer() {
+        let mut pr = pr_clean();
+        pr.codeowners_eligibility = CownershipEligibility::Unverifiable { reviewer: "bob".into() };
+        let tasks = generate_tasks(&pr);
+        let task = tasks.iter().find(|t| t.task_type == TaskType::ReadyUnverified).unwrap();
+        assert!(task.description.contains("bob"), "description should name reviewer, got: {}", task.description);
+    }
+
+    // ADR-002 #8: ineligible CODEOWNERS approver produces AwaitingReview naming the team
+    #[test]
+    fn ineligible_codeowners_approver_produces_awaiting_review_with_team() {
+        let mut pr = pr_clean();
+        pr.codeowners_eligibility = CownershipEligibility::Ineligible { reviewer: "carol".into(), required_team: "org/reviewers".into() };
+        let tasks = generate_tasks(&pr);
+        assert!(
+            tasks.iter().any(|t| t.task_type == TaskType::AwaitingReview),
+            "expected AwaitingReview when approver ineligible, got: {:?}", tasks
+        );
+        let task = tasks.iter().find(|t| t.task_type == TaskType::AwaitingReview).unwrap();
+        assert!(task.description.contains("org/reviewers"), "AwaitingReview should name required team, got: {}", task.description);
+    }
+
+    // ADR-002 #8: eligible CODEOWNERS produces no ReadyUnverified task (existing ready path unchanged)
+    #[test]
+    fn eligible_codeowners_produces_no_ready_unverified_task() {
+        let pr = pr_clean(); // codeowners_eligibility defaults to Verified
+        let tasks = generate_tasks(&pr);
+        assert!(
+            !tasks.iter().any(|t| t.task_type == TaskType::ReadyUnverified),
+            "Verified eligibility should not produce ReadyUnverified, got: {:?}", tasks
+        );
+        assert!(tasks.is_empty(), "clean PR with Verified eligibility should have no tasks, got: {:?}", tasks);
     }
 
     // DW3: task_diff returns empty when tasks unchanged

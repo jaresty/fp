@@ -1,6 +1,6 @@
 // Task generator — stub only
 
-use crate::model::{CheckStatus, PrState, ThreadState};
+use crate::model::{CheckStatus, CownershipEligibility, PrState, ThreadState};
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -11,6 +11,7 @@ pub enum TaskType {
     AwaitingCi,
     MarkReady,
     MergeConflict,
+    ReadyUnverified,
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
@@ -111,6 +112,29 @@ pub fn generate_tasks(pr: &PrState) -> Vec<Task> {
             description: "Resolve merge conflict".into(),
             context_hint: "merge_conflict".into(),
         });
+    }
+
+    // CODEOWNERS eligibility check
+    match &pr.codeowners_eligibility {
+        CownershipEligibility::Unverifiable { reviewer } => tasks.push(Task {
+            pr: pr.number,
+            task_type: TaskType::ReadyUnverified,
+            blocking: false,
+            description: format!(
+                "fp cannot verify CODEOWNERS eligibility for this approval. \
+                 Confirm that {} is a required reviewer for the changed files before merging.",
+                reviewer
+            ),
+            context_hint: "codeowners_unverified".into(),
+        }),
+        CownershipEligibility::Ineligible { reviewer: _, required_team } => tasks.push(Task {
+            pr: pr.number,
+            task_type: TaskType::AwaitingReview,
+            blocking: false,
+            description: format!("Approver is not eligible under CODEOWNERS; required team: {}", required_team),
+            context_hint: "codeowners_ineligible".into(),
+        }),
+        CownershipEligibility::Verified => {}
     }
 
     // Draft PR with all checks green and no open threads → suggest marking ready

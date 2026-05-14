@@ -328,7 +328,7 @@ fn main() -> Result<()> {
                             title: tracked.title.clone(),
                             branch: tracked.branch.clone(),
                             base: "".into(), draft: false, approved: false,
-                            checks: vec![], threads: vec![], has_merge_conflict: false,
+                            checks: vec![], threads: vec![], has_merge_conflict: false, codeowners_eligibility: Default::default(),
                         });
                     let tasks = generate_tasks(&pr_state);
                     if json {
@@ -351,7 +351,7 @@ fn main() -> Result<()> {
                         title: tracked.title.clone(),
                         branch: tracked.branch.clone(),
                         base: "".into(), draft: false, approved: false,
-                        checks: vec![], threads: vec![], has_merge_conflict: false,
+                        checks: vec![], threads: vec![], has_merge_conflict: false, codeowners_eligibility: Default::default(),
                     });
                 let task_list = generate_tasks(&pr_state);
 
@@ -475,7 +475,7 @@ fn main() -> Result<()> {
                             title: tracked.title.clone(),
                             branch: tracked.branch.clone(),
                             base: "".into(), draft: false, approved: false,
-                            checks: vec![], threads: vec![], has_merge_conflict: false,
+                            checks: vec![], threads: vec![], has_merge_conflict: false, codeowners_eligibility: Default::default(),
                         });
                     let curr = generate_tasks(&pr_state);
 
@@ -741,7 +741,7 @@ fn main() -> Result<()> {
                 title: tracked.title.clone(),
                 branch: tracked.branch.clone(),
                 base: "".into(), draft: false, approved: false,
-                checks: vec![], threads: vec![], has_merge_conflict: false,
+                checks: vec![], threads: vec![], has_merge_conflict: false, codeowners_eligibility: Default::default(),
             });
 
             if let Some(stripped) = hint.strip_prefix("thread:") {
@@ -828,7 +828,7 @@ fn main() -> Result<()> {
                     None
                 }.unwrap_or_else(|| model::PrState {
                     number: tracked.number, title: tracked.title.clone(), branch: tracked.branch.clone(),
-                    base: "".into(), draft: false, approved: false, checks: vec![], threads: vec![], has_merge_conflict: false,
+                    base: "".into(), draft: false, approved: false, checks: vec![], threads: vec![], has_merge_conflict: false, codeowners_eligibility: Default::default(),
                 });
                 let threads = fetch_open_threads(&pr_state.threads);
                 print!("{}", format_open_threads(pr, &threads, json));
