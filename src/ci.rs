@@ -222,7 +222,7 @@ pub struct BuildkiteLogResult {
     pub full_log_available: bool,
 }
 
-const ERROR_PATTERNS: &[&str] = &["Error:", "error:", "FAILED", "FAIL", "panic:", "exception", "Exception"];
+const ERROR_PATTERNS: &[&str] = &["Error:", "error:", "FAILED", "FAIL", "panic:", "exception", "Exception", "  error  "];
 
 /// Extract a structured summary from a raw Buildkite log for a named step.
 pub fn extract_buildkite_log(raw: &str, step: &str, log_url: &str) -> BuildkiteLogResult {

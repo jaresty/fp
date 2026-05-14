@@ -193,4 +193,42 @@ mod tests {
         assert!(result.contains("line 1\n"), "full log should contain line 1 (start), got {} chars", result.len());
         assert!(result.contains("line 200"), "full log should contain line 200 (end), got {} chars", result.len());
     }
+
+    // ADR-006: ESLint format lines are recognized in error_lines alongside existing patterns
+    #[test]
+    fn extract_buildkite_log_recognizes_eslint_errors() {
+        use crate::ci::extract_buildkite_log;
+        let raw_log = concat!(
+            "Starting lint step\n",
+            "src/index.js:10:5  error  'foo' is not defined  no-undef\n",
+            "src/utils.ts:42:1  error  Missing semicolon  semi\n",
+            "Error: lint failed\n",
+            "Done.",
+        );
+        let result = extract_buildkite_log(raw_log, "lint", "https://buildkite.com/x/y/builds/7");
+        assert!(
+            result.error_lines.iter().any(|l| l.contains("src/index.js")),
+            "error_lines should contain ESLint line for src/index.js, got: {:?}", result.error_lines
+        );
+        assert!(
+            result.error_lines.iter().any(|l| l.contains("src/utils.ts")),
+            "error_lines should contain ESLint line for src/utils.ts, got: {:?}", result.error_lines
+        );
+        assert!(
+            result.error_lines.iter().any(|l| l.contains("Error: lint failed")),
+            "error_lines should still contain existing Error: pattern, got: {:?}", result.error_lines
+        );
+    }
+
+    // ADR-006: non-ESLint, non-error lines are excluded from error_lines
+    #[test]
+    fn extract_buildkite_log_excludes_non_error_lines() {
+        use crate::ci::extract_buildkite_log;
+        let raw_log = "Starting step\nsrc/index.js:10:5  warning  foo  some-rule\nnormal output\nDone.";
+        let result = extract_buildkite_log(raw_log, "lint", "https://buildkite.com/x");
+        assert!(
+            result.error_lines.is_empty(),
+            "warning-only ESLint lines and normal lines should not appear in error_lines, got: {:?}", result.error_lines
+        );
+    }
 }
