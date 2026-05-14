@@ -104,113 +104,12 @@ impl CiLogClient {
         }
     }
 
-    pub fn fetch_logs(&self, provider: &CiProvider) -> Result<String> {
-        match provider {
-            CiProvider::GitHubActions { owner, repo, job_id } => {
-                self.fetch_github_actions_logs(owner, repo, *job_id)
-            }
-            CiProvider::Buildkite { org, pipeline, build_num } => {
-                self.fetch_buildkite_logs(org, pipeline, *build_num)
-            }
-            CiProvider::Unknown(url) => {
-                Ok(format!("Log URL: {}\n(Automatic log fetching not supported for this provider)", url))
-            }
-        }
-    }
-
-    fn fetch_github_actions_logs(&self, owner: &str, repo: &str, job_id: u64) -> Result<String> {
-        let url = format!("{}/repos/{}/{}/actions/jobs/{}/logs", self.github_base_url, owner, repo, job_id);
-        let resp = reqwest::blocking::Client::new()
-            .get(&url)
-            .header("Authorization", format!("Bearer {}", self.github_token))
-            .header("Accept", "application/vnd.github+json")
-            .header("User-Agent", "fp/0.1")
-            .header("X-GitHub-Api-Version", "2022-11-28")
-            .send()?;
-
-        // GitHub returns 302 redirect to actual log content
-        if resp.status().is_redirection()
-            && let Some(location) = resp.headers().get("Location") {
-            let log_url = location.to_str()?;
-            let log_resp = reqwest::blocking::Client::new()
-                .get(log_url)
-                .send()?
-                .error_for_status()?;
-            let text = log_resp.text()?;
-            return Ok(tail_lines_with_hint(&text, 100));
-        }
-
-        let text = resp.error_for_status()?.text()?;
-        Ok(tail_lines_with_hint(&text, 100))
-    }
-
-    fn fetch_buildkite_logs(&self, org: &str, pipeline: &str, build_num: u64) -> Result<String> {
-        let token = std::env::var("BUILDKITE_TOKEN").ok();
-        if let Some(tok) = token {
-            let url = format!(
-                "https://api.buildkite.com/v2/organizations/{}/pipelines/{}/builds/{}",
-                org, pipeline, build_num
-            );
-            let resp = reqwest::blocking::Client::new()
-                .get(&url)
-                .header("Authorization", format!("Bearer {}", tok))
-                .header("User-Agent", "fp/0.1")
-                .send()?
-                .error_for_status()?
-                .json::<serde_json::Value>()?;
-
-            // Collect structured extraction from failed jobs
-            let build_url = format!("https://buildkite.com/{}/{}/builds/{}", org, pipeline, build_num);
-            let mut results: Vec<BuildkiteLogResult> = Vec::new();
-            if let Some(jobs) = resp["jobs"].as_array() {
-                for job in jobs {
-                    if job["state"].as_str() == Some("failed") {
-                        let name = job["name"].as_str().unwrap_or("unknown").to_string();
-                        let job_url = job["web_url"].as_str().unwrap_or(&build_url).to_string();
-                        let raw_log = if let Some(log_url) = job["raw_log_url"].as_str() {
-                            reqwest::blocking::Client::new()
-                                .get(log_url)
-                                .header("Authorization", format!("Bearer {}", tok))
-                                .send()
-                                .ok()
-                                .and_then(|r| r.text().ok())
-                                .unwrap_or_default()
-                        } else {
-                            String::new()
-                        };
-                        results.push(extract_buildkite_log(&raw_log, &name, &job_url));
-                    }
-                }
-            }
-            if results.is_empty() {
-                Ok(format!("Build #{} — no failed jobs with logs found\nBuild URL: {}", build_num, build_url))
-            } else {
-                Ok(serde_json::to_string_pretty(&results).unwrap_or_else(|_| format!("{} failed jobs", results.len())))
-            }
-        } else {
-            Ok(format!(
-                "Log URL: https://buildkite.com/{}/{}/builds/{}\nSet BUILDKITE_TOKEN to fetch logs automatically.",
-                org, pipeline, build_num
-            ))
-        }
-    }
 }
 
 fn tail_lines(text: &str, n: usize) -> String {
     let lines: Vec<&str> = text.lines().collect();
     let start = lines.len().saturating_sub(n);
     lines[start..].join("\n")
-}
-
-fn tail_lines_with_hint(text: &str, n: usize) -> String {
-    let lines: Vec<&str> = text.lines().collect();
-    let truncated = lines.len() > n;
-    let start = lines.len().saturating_sub(n);
-    let mut out = lines[start..].join("\n");
-    if truncated {
-        out.push_str("\n(log truncated — use --full-log flag for the complete output)");
-    }
-    out
 }
 
 #[derive(Debug, serde::Serialize)]
@@ -223,6 +122,26 @@ pub struct BuildkiteLogResult {
 }
 
 const ERROR_PATTERNS: &[&str] = &["Error:", "error:", "FAILED", "FAIL", "panic:", "exception", "Exception", "  error  "];
+
+pub fn format_context_output(result: BuildkiteLogResult) -> String {
+    let mut out = String::new();
+    if !result.error_lines.is_empty() {
+        out.push_str("Errors:\n");
+        for line in &result.error_lines {
+            out.push_str(&format!("  {}\n", line));
+        }
+        out.push('\n');
+    }
+    out.push_str("Context (last lines):\n");
+    for line in &result.context_lines {
+        out.push_str(&format!("  {}\n", line));
+    }
+    out.push_str(&format!("\nLog: {}\n", result.log_url));
+    if result.full_log_available {
+        out.push_str("(use --full-log for complete output)\n");
+    }
+    out
+}
 
 /// Extract a structured summary from a raw Buildkite log for a named step.
 pub fn extract_buildkite_log(raw: &str, step: &str, log_url: &str) -> BuildkiteLogResult {

@@ -765,21 +765,18 @@ fn main() -> Result<()> {
                         let provider = ci::parse_ci_provider(url);
                         let token = resolve_github_token().unwrap_or_default();
                         let log_client = ci::CiLogClient::new(token);
-                        if full_log {
-                            // Write the full raw log to a temp file
-                            match log_client.fetch_raw_log(&provider) {
-                                Ok(raw) => {
+                        match log_client.fetch_raw_log(&provider) {
+                            Ok(raw) => {
+                                if full_log {
                                     let tmp = std::env::temp_dir().join(format!("fp-log-{}-{}.txt", pr, hint.replace('/', "-")));
                                     std::fs::write(&tmp, &raw)?;
                                     println!("full_log_path: {}", tmp.display());
+                                } else {
+                                    let structured = ci::extract_buildkite_log(&raw, &check.name, url);
+                                    print!("{}", ci::format_context_output(structured));
                                 }
-                                Err(e) => println!("  Log URL: {}\n  (fetch failed: {})", url, e),
                             }
-                        } else {
-                            match log_client.fetch_logs(&provider) {
-                                Ok(logs) => println!("{}", logs),
-                                Err(e) => println!("  Log URL: {}\n  (fetch failed: {})", url, e),
-                            }
+                            Err(e) => println!("  Log URL: {}\n  (fetch failed: {})", url, e),
                         }
                     } else {
                         println!("  No details URL available");

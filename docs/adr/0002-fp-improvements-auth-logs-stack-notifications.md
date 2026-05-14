@@ -1,6 +1,6 @@
 # ADR 0002: fp Improvements — Auth, CI Logs, Stack Management, Notifications, and Agent-Native Compliance
 
-**Status:** Partially Implemented — gh auth fallback (#1), check deduplication (#3), empty branch auto-fetch (#4), rebase-stack API inference (#5), macOS notifications (#7) done. Resolved threads subcommand (#2), Buildkite log pipeline (#6), CODEOWNERS/ready-unverified (#8), agent-native audit (#9) not yet implemented.
+**Status:** Partially Implemented — gh auth fallback (#1), check deduplication (#3), empty branch auto-fetch (#4), rebase-stack API inference (#5), macOS notifications (#7), resolved threads subcommand (#2), Buildkite log pipeline (#6) done. CODEOWNERS/ready-unverified (#8), agent-native audit (#9) not yet implemented.
 **Date:** 2026-05-06
 
 ---

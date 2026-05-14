@@ -55,12 +55,10 @@ mod tests {
         assert_eq!(provider, CiProvider::Unknown(url.into()));
     }
 
-    // C4: GitHub Actions fetch_logs calls correct API endpoint
+    // C4: GitHub Actions fetch_raw_log follows redirect and returns full log text
     #[test]
-    fn github_actions_fetch_logs_calls_correct_endpoint() {
+    fn github_actions_fetch_raw_log_follows_redirect() {
         let mut server = mockito::Server::new();
-        // GitHub Actions /logs endpoint returns a redirect (302) to the actual log URL.
-        // The client should follow the redirect and return the log text.
         let log_url = format!("{}/log-content", server.url());
         server.mock("GET", "/repos/owner/repo/actions/jobs/789/logs")
             .with_status(302)
@@ -73,37 +71,30 @@ mod tests {
             .create();
 
         let client = crate::ci::CiLogClient::with_base_url("test-token".into(), server.url());
-        let logs = client.fetch_logs(&CiProvider::GitHubActions {
-            owner: "owner".into(),
-            repo: "repo".into(),
-            job_id: 789,
+        let raw = client.fetch_raw_log(&CiProvider::GitHubActions {
+            owner: "owner".into(), repo: "repo".into(), job_id: 789,
         }).unwrap();
-        assert!(logs.contains("ERROR: build failed"));
+        assert!(raw.contains("ERROR: build failed"));
     }
 
-    // C5: Buildkite fetch_logs returns URL string when no BUILDKITE_TOKEN
+    // C5: Buildkite fetch_raw_log returns Err when no BUILDKITE_TOKEN
     #[test]
-    fn buildkite_no_token_returns_url() {
-        // Ensure env var is not set for this test
+    fn buildkite_no_token_returns_err() {
         // SAFETY: test-only, single-threaded test context
         unsafe { std::env::remove_var("BUILDKITE_TOKEN"); }
         let client = crate::ci::CiLogClient::with_base_url("github-token".into(), "http://unused".into());
-        let result = client.fetch_logs(&CiProvider::Buildkite {
-            org: "org".into(),
-            pipeline: "pipe".into(),
-            build_num: 1,
+        let result = client.fetch_raw_log(&CiProvider::Buildkite {
+            org: "org".into(), pipeline: "pipe".into(), build_num: 1,
         });
-        // Should return Ok with a message about the URL, not an error
-        let text = result.unwrap();
-        assert!(text.contains("buildkite.com") || text.contains("BUILDKITE_TOKEN"));
+        assert!(result.is_err(), "fetch_raw_log for Buildkite without token should return Err");
     }
 
-    // C3: Unknown provider fetch_logs returns URL only
+    // C3: Unknown provider fetch_raw_log returns URL in message
     #[test]
     fn unknown_provider_returns_url() {
         let client = crate::ci::CiLogClient::with_base_url("token".into(), "http://unused".into());
         let url = "https://example.com/build/123";
-        let result = client.fetch_logs(&CiProvider::Unknown(url.into())).unwrap();
+        let result = client.fetch_raw_log(&CiProvider::Unknown(url.into())).unwrap();
         assert!(result.contains(url));
     }
 
@@ -130,42 +121,24 @@ mod tests {
         assert!(result.error_lines.is_empty());
     }
 
-    // D6-c: truncated logs include a --full-log hint; short logs do not
+    // D6-c: fetch_raw_log returns full log content without truncation
     #[test]
-    fn truncation_hint_present_iff_log_was_truncated() {
+    fn fetch_raw_log_returns_full_content() {
         let mut server = mockito::Server::new();
-
-        // 200-line log → truncated → hint must appear
-        let long_log_url = format!("{}/long-log", server.url());
-        server.mock("GET", "/repos/owner/repo/actions/jobs/10/logs")
-            .with_status(302).with_header("Location", &long_log_url).create();
-        let long_log: String = (1..=200).map(|i| format!("line {}", i)).collect::<Vec<_>>().join("\n");
-        server.mock("GET", "/long-log")
+        let log_url = format!("{}/full-log", server.url());
+        server.mock("GET", "/repos/owner/repo/actions/jobs/42/logs")
+            .with_status(302).with_header("Location", &log_url).create();
+        let full_log: String = (1..=200).map(|i| format!("line {}", i)).collect::<Vec<_>>().join("\n");
+        server.mock("GET", "/full-log")
             .with_status(200).with_header("content-type", "text/plain")
-            .with_body(&long_log).create();
-
-        // 50-line log → not truncated → no hint
-        let short_log_url = format!("{}/short-log", server.url());
-        server.mock("GET", "/repos/owner/repo/actions/jobs/11/logs")
-            .with_status(302).with_header("Location", &short_log_url).create();
-        let short_log: String = (1..=50).map(|i| format!("line {}", i)).collect::<Vec<_>>().join("\n");
-        server.mock("GET", "/short-log")
-            .with_status(200).with_header("content-type", "text/plain")
-            .with_body(&short_log).create();
+            .with_body(&full_log).create();
 
         let client = crate::ci::CiLogClient::with_base_url("tok".into(), server.url());
-
-        let long_result = client.fetch_logs(&CiProvider::GitHubActions {
-            owner: "owner".into(), repo: "repo".into(), job_id: 10,
+        let result = client.fetch_raw_log(&CiProvider::GitHubActions {
+            owner: "owner".into(), repo: "repo".into(), job_id: 42,
         }).unwrap();
-        assert!(long_result.contains("--full-log"),
-            "truncated log (200 lines) should contain --full-log hint, got: {}", long_result);
-
-        let short_result = client.fetch_logs(&CiProvider::GitHubActions {
-            owner: "owner".into(), repo: "repo".into(), job_id: 11,
-        }).unwrap();
-        assert!(!short_result.contains("--full-log"),
-            "short log (50 lines) should NOT contain --full-log hint, got: {}", short_result);
+        assert!(result.contains("line 1\n"), "full log should contain line 1 (start), got {} chars", result.len());
+        assert!(result.contains("line 200"), "full log should contain line 200 (end), got {} chars", result.len());
     }
 
     // D6-b (fetch_raw_log): GitHub Actions fetch_raw_log returns full untruncated log (not tail)
@@ -230,5 +203,66 @@ mod tests {
             result.error_lines.is_empty(),
             "warning-only ESLint lines and normal lines should not appear in error_lines, got: {:?}", result.error_lines
         );
+    }
+
+    // ADR-002 #6: format_context_output includes --full-log hint when full_log_available
+    #[test]
+    fn format_context_output_includes_full_log_hint_when_available() {
+        use crate::ci::{format_context_output, BuildkiteLogResult};
+        let result = BuildkiteLogResult {
+            step: "test".into(), error_lines: vec![], context_lines: vec!["line".into()],
+            log_url: "https://buildkite.com/x".into(), full_log_available: true,
+        };
+        let out = format_context_output(result);
+        assert!(out.contains("--full-log"), "output should hint --full-log when full_log_available=true, got: {}", out);
+    }
+
+    // ADR-002 #6: format_context_output shows error_lines before context_lines
+    #[test]
+    fn format_context_output_shows_error_lines_before_context() {
+        use crate::ci::{format_context_output, BuildkiteLogResult};
+        let result = BuildkiteLogResult {
+            step: "rspec".into(),
+            error_lines: vec!["Error: test failed".into()],
+            context_lines: vec!["context line 1".into(), "context line 2".into()],
+            log_url: "https://buildkite.com/x/y/1".into(),
+            full_log_available: true,
+        };
+        let out = format_context_output(result);
+        let err_pos = out.find("Error: test failed").expect("error line must appear in output");
+        let ctx_pos = out.find("context line 1").expect("context line must appear in output");
+        assert!(err_pos < ctx_pos, "error_lines must appear before context_lines, positions: err={} ctx={}", err_pos, ctx_pos);
+    }
+
+    // ADR-002 #6: format_context_output always includes log_url
+    #[test]
+    fn format_context_output_includes_log_url() {
+        use crate::ci::{format_context_output, BuildkiteLogResult};
+        let result = BuildkiteLogResult {
+            step: "build".into(),
+            error_lines: vec![],
+            context_lines: vec!["some output".into()],
+            log_url: "https://buildkite.com/org/pipe/builds/42".into(),
+            full_log_available: true,
+        };
+        let out = format_context_output(result);
+        assert!(out.contains("https://buildkite.com/org/pipe/builds/42"),
+            "output must contain log_url, got: {}", out);
+    }
+
+    // ADR-002 #6: format_context_output with empty error_lines omits errors section
+    #[test]
+    fn format_context_output_empty_error_lines_omits_errors_section() {
+        use crate::ci::{format_context_output, BuildkiteLogResult};
+        let result = BuildkiteLogResult {
+            step: "build".into(),
+            error_lines: vec![],
+            context_lines: vec!["clean output".into()],
+            log_url: "https://buildkite.com/x".into(),
+            full_log_available: true,
+        };
+        let out = format_context_output(result);
+        assert!(!out.contains("Errors:"), "empty error_lines should omit Errors: section, got: {}", out);
+        assert!(out.contains("clean output"), "context lines must still appear, got: {}", out);
     }
 }
