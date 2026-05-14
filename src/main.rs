@@ -760,27 +760,24 @@ fn main() -> Result<()> {
                 }
             } else {
                 if let Some(check) = pr_state.checks.iter().find(|c| c.name == hint) {
-                    println!("Check: {} ({:?})", check.name, check.status);
-                    if let Some(url) = &check.details_url {
+                    let status = format!("{:?}", check.status);
+                    let output = if let Some(url) = &check.details_url {
                         let provider = ci::parse_ci_provider(url);
                         let token = resolve_github_token().unwrap_or_default();
                         let log_client = ci::CiLogClient::new(token);
                         match log_client.fetch_raw_log(&provider) {
-                            Ok(raw) => {
-                                if full_log {
-                                    let tmp = std::env::temp_dir().join(format!("fp-log-{}-{}.txt", pr, hint.replace('/', "-")));
-                                    std::fs::write(&tmp, &raw)?;
-                                    println!("full_log_path: {}", tmp.display());
-                                } else {
-                                    let structured = ci::extract_buildkite_log(&raw, &check.name, url);
-                                    print!("{}", ci::format_context_output(structured));
-                                }
+                            Ok(raw) if full_log => {
+                                let tmp = std::env::temp_dir().join(format!("fp-log-{}-{}.txt", pr, hint.replace('/', "-")));
+                                std::fs::write(&tmp, &raw)?;
+                                ci::format_check_output(&check.name, &status, None, Some(&tmp.to_string_lossy()), None)
                             }
-                            Err(e) => println!("  Log URL: {}\n  (fetch failed: {})", url, e),
+                            Ok(raw) => ci::format_check_output(&check.name, &status, Some(&raw), None, None),
+                            Err(e) => ci::format_check_output(&check.name, &status, None, None, Some(&e.to_string())),
                         }
                     } else {
-                        println!("  No details URL available");
-                    }
+                        format!("Check: {} ({})\n  No details URL available\n", check.name, status)
+                    };
+                    print!("{}", output);
                 } else {
                     println!("Check '{}' not found in PR #{}", hint, pr);
                 }

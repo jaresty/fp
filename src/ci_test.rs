@@ -205,6 +205,40 @@ mod tests {
         );
     }
 
+    // ADR-002 #6: format_check_output shows check name and status
+    #[test]
+    fn format_check_output_shows_check_name() {
+        use crate::ci::format_check_output;
+        let out = format_check_output("ci/test", "Failure", Some("log line"), None, None);
+        assert!(out.contains("ci/test"), "output must contain check name, got: {}", out);
+    }
+
+    // ADR-002 #6: format_check_output with full_log_path shows path line
+    #[test]
+    fn format_check_output_shows_full_log_path() {
+        use crate::ci::format_check_output;
+        let out = format_check_output("ci/test", "Failure", None, Some("/tmp/fp-log.txt"), None);
+        assert!(out.contains("full_log_path:"), "output must contain full_log_path: label, got: {}", out);
+        assert!(out.contains("/tmp/fp-log.txt"), "output must contain the path, got: {}", out);
+    }
+
+    // ADR-002 #6: format_check_output with fetch_error shows error message
+    #[test]
+    fn format_check_output_shows_fetch_error() {
+        use crate::ci::format_check_output;
+        let out = format_check_output("ci/build", "Failure", None, None, Some("connection refused"));
+        assert!(out.contains("connection refused"), "output must contain error message, got: {}", out);
+    }
+
+    // ADR-002 #6: format_check_output with raw_log produces structured output
+    #[test]
+    fn format_check_output_with_raw_log_produces_structured_output() {
+        use crate::ci::format_check_output;
+        let raw = "Starting step\nError: something broke\nDone.";
+        let out = format_check_output("ci/test", "Failure", Some(raw), None, None);
+        assert!(out.contains("Error: something broke"), "output must contain error line from log, got: {}", out);
+    }
+
     // ADR-002 #6: format_context_output includes --full-log hint when full_log_available
     #[test]
     fn format_context_output_includes_full_log_hint_when_available() {

@@ -123,6 +123,25 @@ pub struct BuildkiteLogResult {
 
 const ERROR_PATTERNS: &[&str] = &["Error:", "error:", "FAILED", "FAIL", "panic:", "exception", "Exception", "  error  "];
 
+pub fn format_check_output(
+    check_name: &str,
+    status: &str,
+    raw_log: Option<&str>,
+    full_log_path: Option<&str>,
+    fetch_error: Option<&str>,
+) -> String {
+    let mut out = format!("Check: {} ({})\n", check_name, status);
+    if let Some(path) = full_log_path {
+        out.push_str(&format!("full_log_path: {}\n", path));
+    } else if let Some(e) = fetch_error {
+        out.push_str(&format!("(fetch failed: {})\n", e));
+    } else if let Some(raw) = raw_log {
+        let structured = extract_buildkite_log(raw, check_name, "");
+        out.push_str(&format_context_output(structured));
+    }
+    out
+}
+
 pub fn format_context_output(result: BuildkiteLogResult) -> String {
     let mut out = String::new();
     if !result.error_lines.is_empty() {
