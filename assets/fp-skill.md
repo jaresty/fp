@@ -36,6 +36,10 @@ fp status --all [--json]                # all tracked PRs
 fp context <pr> <hint>                  # log tail for check, or thread body
                                         # hint: exact check name (e.g. ci/test)
                                         #       or thread:<id> (e.g. thread:42)
+fp context <pr> <check> --full-log      # write full raw log to temp file, print path
+fp checks <sha>                         # show check run results for a specific commit SHA
+fp threads <pr> [--resolved] [--json]   # list review threads (open by default)
+fp agent-context [--json]               # print capability manifest with tracked PRs
 
 # Thread management
 fp reply <pr> <thread_id> "<message>"   # post reply, mark thread Addressed
@@ -62,6 +66,13 @@ fp ready <pr>                           # mark draft PR as ready for review
 
 # Monitoring
 fp watch [--once] [--interval <secs>]   # poll tracked PRs, print task diffs
+fp watch --json                         # emit JSON event objects per cycle
+fp watch --wait-for ci-pass             # block until all CI tasks cleared
+fp watch --wait-for ready               # block until no blocking tasks remain
+
+# Auth and config profiles
+fp profile save <name> --token <tok> --repo <owner/repo>  # save named auth+repo bundle
+fp profile load <name>                                     # print export commands for profile
 ```
 
 ## Task Types
@@ -74,6 +85,7 @@ fp watch [--once] [--interval <secs>]   # poll tracked PRs, print task diffs
 | `AwaitingCi` | no | A required check is pending | `fp watch --once` to re-check |
 | `AwaitingReview` | no | PR not approved yet | Wait |
 | `MarkReady` | no | Draft PR is green — suggest marking ready | `fp ready <pr>` |
+| `ReadyUnverified` | no | PR looks ready but CODEOWNERS eligibility unverifiable | Confirm reviewer manually before merging |
 
 ## Decision Protocol
 
@@ -119,6 +131,20 @@ fp watch --once
 # Output: ✓ PR #7 resolved RespondThread: Respond to thread #88
 ```
 
+## Waiting for CI in Agentic Loops
+
+Use `--wait-for` to block until a terminal state rather than polling manually:
+
+```sh
+# Push a fix, then wait for CI to pass before continuing
+git push
+fp watch --wait-for ci-pass --interval 30
+# fp exits when no FixCi or AwaitingCi tasks remain
+
+# Wait until PR is fully ready to merge (no blocking tasks)
+fp watch --wait-for ready
+```
+
 ## Stack Workflow
 
 All branches in the stack must be tracked first:
@@ -135,9 +161,23 @@ fp rebase-stack
 
 Conflicts are reported by branch name. Resolve manually, then re-run `fp rebase-stack`.
 
+## Agent-Context Manifest
+
+`fp agent-context --json` returns a machine-readable manifest:
+```json
+{
+  "name": "fp",
+  "auth_required": "GITHUB_TOKEN env var or gh CLI",
+  "commands": [...],
+  "tracked_prs": [{"number": 7, "title": "feat: ...", "branch": "feat/..."}]
+}
+```
+
+Use this to introspect fp capabilities and current state programmatically.
+
 ## Environment Variables
 
-- `GITHUB_TOKEN` — required for all API calls. If absent, tell the user to set it.
+- `GITHUB_TOKEN` — required for all API calls. If absent, fp falls back to `gh auth token`. If both absent, fp errors with remediation options.
 - `BUILDKITE_TOKEN` — required for Buildkite log content. If a Buildkite check fails and this is unset, tell the user.
 - `GITHUB_USER_SESSION` — required for `--demo <file>` image uploads. fp auto-extracts this from Chrome/Firefox/Safari if unset. If upload fails with a session error, tell the user to set it from browser DevTools (Application → Cookies → github.com → user_session).
 
