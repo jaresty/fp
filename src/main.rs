@@ -22,7 +22,7 @@ use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
 use std::path::PathBuf;
 
-use github::{GithubClient, detect_repo, resolve_github_token, resolve_track_branch, fetch_resolved_threads, fetch_open_threads, agent_context_manifest};
+use github::{GithubClient, detect_repo, resolve_github_token, resolve_track_branch, fetch_open_threads, format_open_threads, format_resolved_threads, agent_context_manifest};
 use store::{Store, TrackedPr};
 use tasks::{generate_tasks, task_diff};
 
@@ -818,36 +818,26 @@ fn main() -> Result<()> {
             let tracked = state.prs.get(&pr)
                 .with_context(|| format!("PR #{} is not tracked. Run `fp track {}`", pr, pr))?;
 
-            let pr_state = if let (Some(tok), Some((owner, repo_name))) = (token, repo) {
-                let client = GithubClient::new(tok);
-                client.fetch_pr(&owner, &repo_name, pr).ok()
-            } else {
-                None
-            }.unwrap_or_else(|| model::PrState {
-                number: tracked.number, title: tracked.title.clone(), branch: tracked.branch.clone(),
-                base: "".into(), draft: false, approved: false, checks: vec![], threads: vec![], has_merge_conflict: false,
-            });
-
-            let threads: Vec<&model::Thread> = if resolved {
-                fetch_resolved_threads(&pr_state.threads)
-            } else {
-                fetch_open_threads(&pr_state.threads)
-            };
-
-            if json {
-                println!("{}", serde_json::to_string_pretty(&threads)?);
-            } else {
-                let label = if resolved { "resolved" } else { "open" };
-                if threads.is_empty() {
-                    println!("No {} threads on PR #{}.", label, pr);
+            if resolved {
+                if let (Some(tok), Some((owner, repo_name))) = (token, repo) {
+                    let client = GithubClient::new(tok);
+                    let threads = client.fetch_resolved_threads_graphql(&owner, &repo_name, pr)?;
+                    print!("{}", format_resolved_threads(pr, &threads, json));
                 } else {
-                    println!("PR #{} — {} {} thread(s):", pr, threads.len(), label);
-                    for t in threads {
-                        print!("  #{} ({:?})", t.id, t.state);
-                        if let (Some(f), Some(l)) = (&t.file, t.line) { print!(" {}:{}", f, l); }
-                        println!("\n    {}", t.body);
-                    }
+                    println!("No GitHub credentials — cannot fetch resolved threads.");
                 }
+            } else {
+                let pr_state = if let (Some(tok), Some((owner, repo_name))) = (token, repo) {
+                    let client = GithubClient::new(tok);
+                    client.fetch_pr(&owner, &repo_name, pr).ok()
+                } else {
+                    None
+                }.unwrap_or_else(|| model::PrState {
+                    number: tracked.number, title: tracked.title.clone(), branch: tracked.branch.clone(),
+                    base: "".into(), draft: false, approved: false, checks: vec![], threads: vec![], has_merge_conflict: false,
+                });
+                let threads = fetch_open_threads(&pr_state.threads);
+                print!("{}", format_open_threads(pr, &threads, json));
             }
         }
 

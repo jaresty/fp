@@ -1260,35 +1260,249 @@ mod tests {
             "expected first (most recent) status entry to win");
     }
 
-    // D2-a: fetch_resolved_threads returns threads with resolved state
+
+    // RT-D1: parse_resolved_review_threads_from_graphql returns resolved_by
     #[test]
-    fn fetch_resolved_threads_returns_resolved() {
-        use crate::github::fetch_resolved_threads;
-        // A resolved thread: root comment with resolved_at set (GitHub marks via pull_request_review_threads API)
-        // fp models resolved threads as ThreadState::Resolved
-        let threads = vec![
-            crate::model::Thread {
-                id: 1,
-                state: crate::model::ThreadState::Resolved,
-                author: "".to_string(),
-                body: "please fix this".to_string(),
-                replies: vec![],
-                file: Some("src/main.rs".to_string()),
-                line: Some(42),
-            },
-            crate::model::Thread {
-                id: 2,
-                state: crate::model::ThreadState::Open,
-                author: "".to_string(),
-                body: "another issue".to_string(),
-                replies: vec![],
-                file: None,
-                line: None,
-            },
+    fn parse_resolved_threads_returns_resolver() {
+        use crate::github::parse_resolved_review_threads_from_graphql;
+        let json = r#"{
+            "data": {
+                "repository": {
+                    "pullRequest": {
+                        "reviewThreads": {
+                            "nodes": [
+                                {
+                                    "id": "PRRT_abc",
+                                    "isResolved": true,
+                                    "resolvedBy": { "login": "alice" },
+                                    "comments": {
+                                        "nodes": [
+                                            { "createdAt": "2024-01-01T10:00:00Z", "body": "Fix this", "path": "src/main.rs", "line": 42 }
+                                        ]
+                                    }
+                                }
+                            ]
+                        },
+                        "commits": { "nodes": [] }
+                    }
+                }
+            }
+        }"#;
+        let threads = parse_resolved_review_threads_from_graphql(json).unwrap();
+        assert_eq!(threads.len(), 1, "expected 1 resolved thread");
+        assert_eq!(threads[0].resolved_by.as_deref(), Some("alice"), "expected resolver alice");
+    }
+
+    // RT-D2: parse_resolved_review_threads_from_graphql returns resolved_at timestamp
+    #[test]
+    fn parse_resolved_threads_returns_resolved_at() {
+        use crate::github::parse_resolved_review_threads_from_graphql;
+        let json = r#"{
+            "data": {
+                "repository": {
+                    "pullRequest": {
+                        "reviewThreads": {
+                            "nodes": [
+                                {
+                                    "id": "PRRT_abc",
+                                    "isResolved": true,
+                                    "resolvedBy": { "login": "alice" },
+                                    "comments": {
+                                        "nodes": [
+                                            { "createdAt": "2024-01-01T10:00:00Z", "body": "Fix this", "path": null, "line": null }
+                                        ]
+                                    }
+                                }
+                            ]
+                        },
+                        "commits": { "nodes": [] }
+                    }
+                }
+            }
+        }"#;
+        let threads = parse_resolved_review_threads_from_graphql(json).unwrap();
+        assert_eq!(threads[0].created_at.as_deref(), Some("2024-01-01T10:00:00Z"), "expected created_at timestamp");
+    }
+
+    // RT-D3: parse_resolved_review_threads_from_graphql returns first commit after thread opened
+    #[test]
+    fn parse_resolved_threads_returns_first_commit_after_opened() {
+        use crate::github::parse_resolved_review_threads_from_graphql;
+        let json = r#"{
+            "data": {
+                "repository": {
+                    "pullRequest": {
+                        "reviewThreads": {
+                            "nodes": [
+                                {
+                                    "id": "PRRT_abc",
+                                    "isResolved": true,
+                                    "resolvedBy": { "login": "alice" },
+                                    "comments": {
+                                        "nodes": [
+                                            { "createdAt": "2024-01-02T10:00:00Z", "body": "Fix this", "path": null, "line": null }
+                                        ]
+                                    }
+                                }
+                            ]
+                        },
+                        "commits": {
+                            "nodes": [
+                                { "commit": { "abbreviatedOid": "aaa1111", "committedDate": "2024-01-01T09:00:00Z", "messageHeadline": "before thread" } },
+                                { "commit": { "abbreviatedOid": "bbb2222", "committedDate": "2024-01-03T11:00:00Z", "messageHeadline": "after thread" } }
+                            ]
+                        }
+                    }
+                }
+            }
+        }"#;
+        let threads = parse_resolved_review_threads_from_graphql(json).unwrap();
+        assert_eq!(
+            threads[0].first_commit_after_opened.as_deref(),
+            Some("bbb2222 after thread"),
+            "expected commit pushed after thread opened"
+        );
+    }
+
+    // RT-D4: parse_resolved_review_threads_from_graphql excludes non-resolved threads
+    #[test]
+    fn parse_resolved_threads_excludes_open_threads() {
+        use crate::github::parse_resolved_review_threads_from_graphql;
+        let json = r#"{
+            "data": {
+                "repository": {
+                    "pullRequest": {
+                        "reviewThreads": {
+                            "nodes": [
+                                {
+                                    "id": "PRRT_open",
+                                    "isResolved": false,
+                                    "resolvedBy": null,
+                                    "comments": {
+                                        "nodes": [
+                                            { "createdAt": "2024-01-01T10:00:00Z", "body": "Still open", "path": null, "line": null }
+                                        ]
+                                    }
+                                },
+                                {
+                                    "id": "PRRT_resolved",
+                                    "isResolved": true,
+                                    "resolvedBy": { "login": "bob" },
+                                    "comments": {
+                                        "nodes": [
+                                            { "createdAt": "2024-01-01T10:00:00Z", "body": "Resolved", "path": null, "line": null }
+                                        ]
+                                    }
+                                }
+                            ]
+                        },
+                        "commits": { "nodes": [] }
+                    }
+                }
+            }
+        }"#;
+        let threads = parse_resolved_review_threads_from_graphql(json).unwrap();
+        assert_eq!(threads.len(), 1, "expected only 1 resolved thread, got {}", threads.len());
+        assert_eq!(threads[0].resolved_by.as_deref(), Some("bob"));
+    }
+
+    // FMT-1: format_open_threads returns "no threads" message when empty
+    #[test]
+    fn format_open_threads_empty_returns_no_threads_message() {
+        use crate::github::format_open_threads;
+        let out = format_open_threads(5, &[], false);
+        assert!(out.contains("No open threads on PR #5"), "expected no-threads message, got: {}", out);
+    }
+
+    // FMT-2: format_open_threads returns thread body and id for non-empty
+    #[test]
+    fn format_open_threads_shows_thread_body() {
+        use crate::github::{format_open_threads, fetch_open_threads};
+        use crate::model::{Thread, ThreadState};
+        let threads_data = vec![
+            Thread { id: 42, state: ThreadState::Open, author: "alice".into(), body: "needs a test".into(), replies: vec![], file: Some("src/lib.rs".into()), line: Some(10) },
         ];
-        let resolved = fetch_resolved_threads(&threads);
-        assert_eq!(resolved.len(), 1, "expected only 1 resolved thread, got: {}", resolved.len());
-        assert_eq!(resolved[0].id, 1);
+        let open: Vec<&Thread> = fetch_open_threads(&threads_data);
+        let out = format_open_threads(7, &open, false);
+        assert!(out.contains("needs a test"), "expected thread body in output, got: {}", out);
+        assert!(out.contains("#42"), "expected thread id in output, got: {}", out);
+    }
+
+    // FMT-3: format_open_threads returns JSON when json=true
+    #[test]
+    fn format_open_threads_json_mode() {
+        use crate::github::{format_open_threads, fetch_open_threads};
+        use crate::model::{Thread, ThreadState};
+        let threads_data = vec![
+            Thread { id: 99, state: ThreadState::Open, author: "bob".into(), body: "json body".into(), replies: vec![], file: None, line: None },
+        ];
+        let open: Vec<&Thread> = fetch_open_threads(&threads_data);
+        let out = format_open_threads(3, &open, true);
+        let parsed: serde_json::Value = serde_json::from_str(&out).expect("json output must be valid JSON");
+        assert!(parsed.is_array(), "expected JSON array");
+    }
+
+    // FMT-4: format_resolved_threads returns "no resolved threads" when empty
+    #[test]
+    fn format_resolved_threads_empty_returns_no_threads_message() {
+        use crate::github::format_resolved_threads;
+        let out = format_resolved_threads(8, &[], false);
+        assert!(out.contains("No resolved threads on PR #8"), "expected no-resolved-threads message, got: {}", out);
+    }
+
+    // FMT-5: format_resolved_threads shows resolver identity
+    #[test]
+    fn format_resolved_threads_shows_resolver() {
+        use crate::github::{format_resolved_threads, ResolvedThreadInfo};
+        let threads = vec![ResolvedThreadInfo {
+            body: "fix the thing".into(), file: None, line: None,
+            resolved_by: Some("dave".into()), created_at: Some("2024-03-01T00:00:00Z".into()),
+            first_commit_after_opened: Some("abc1234 add fix".into()),
+        }];
+        let out = format_resolved_threads(11, &threads, false);
+        assert!(out.contains("dave"), "expected resolver name in output, got: {}", out);
+        assert!(out.contains("fix the thing"), "expected thread body in output, got: {}", out);
+    }
+
+    // RT-D5: fetch_resolved_threads_graphql calls GraphQL endpoint and returns resolved threads
+    #[test]
+    fn fetch_resolved_threads_graphql_returns_resolved_threads() {
+        use crate::github::GithubClient;
+        let mut server = mockito::Server::new();
+        let graphql_response = serde_json::json!({
+            "data": {
+                "repository": {
+                    "pullRequest": {
+                        "reviewThreads": {
+                            "nodes": [
+                                {
+                                    "id": "PRRT_xyz",
+                                    "isResolved": true,
+                                    "resolvedBy": { "login": "carol" },
+                                    "comments": {
+                                        "nodes": [
+                                            { "createdAt": "2024-02-01T12:00:00Z", "body": "Please add a test", "path": "src/lib.rs", "line": 10 }
+                                        ]
+                                    }
+                                }
+                            ]
+                        },
+                        "commits": { "nodes": [] }
+                    }
+                }
+            }
+        });
+        server.mock("POST", "/graphql")
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body(graphql_response.to_string())
+            .create();
+        let client = GithubClient::with_base_url("token".into(), server.url());
+        let threads = client.fetch_resolved_threads_graphql("owner", "repo", 1).unwrap();
+        assert_eq!(threads.len(), 1, "expected 1 resolved thread from graphql");
+        assert_eq!(threads[0].resolved_by.as_deref(), Some("carol"));
+        assert_eq!(threads[0].created_at.as_deref(), Some("2024-02-01T12:00:00Z"));
+        assert_eq!(threads[0].file.as_deref(), Some("src/lib.rs"));
     }
 
     // G2: agent_context_manifest returns JSON with required top-level keys
