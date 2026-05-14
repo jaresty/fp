@@ -1,6 +1,7 @@
 use anyhow::Result;
 use std::collections::HashSet;
 use crate::model::{Check, CheckStatus, PrState, Thread, ThreadState};
+use crate::store::TrackedPr;
 
 fn parse_next_link(link_header: &str) -> Option<String> {
     // Link: <url>; rel="next", <url>; rel="last"
@@ -816,6 +817,15 @@ pub fn agent_context_manifest() -> serde_json::Value {
             {"name": "agent-context", "description": "This manifest", "json": true}
         ]
     })
+}
+
+pub fn agent_context_manifest_with_prs(prs: &[TrackedPr]) -> serde_json::Value {
+    let mut manifest = agent_context_manifest();
+    manifest["tracked_prs"] = serde_json::json!(prs
+        .iter()
+        .map(|p| serde_json::json!({"number": p.number, "title": p.title, "branch": p.branch}))
+        .collect::<Vec<_>>());
+    manifest
 }
 
 pub fn format_open_threads(pr: u64, threads: &[&crate::model::Thread], json: bool) -> String {

@@ -4,6 +4,7 @@ mod store;
 mod github;
 mod ci;
 mod stack;
+mod profile;
 
 #[cfg(test)]
 mod tasks_test;
@@ -17,12 +18,14 @@ mod ci_test;
 mod stack_test;
 #[cfg(test)]
 mod notify_test;
+#[cfg(test)]
+mod agent_test;
 
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
 use std::path::PathBuf;
 
-use github::{GithubClient, detect_repo, resolve_github_token, resolve_track_branch, fetch_open_threads, format_open_threads, format_resolved_threads, agent_context_manifest};
+use github::{GithubClient, detect_repo, resolve_github_token, resolve_track_branch, fetch_open_threads, format_open_threads, format_resolved_threads};
 use store::{Store, TrackedPr};
 use tasks::{generate_tasks, task_diff};
 
@@ -71,6 +74,12 @@ enum Commands {
         /// Poll interval in seconds (default: 30)
         #[arg(long, default_value = "30")]
         interval: u64,
+        /// Emit JSON event objects per cycle
+        #[arg(long)]
+        json: bool,
+        /// Block until condition is met: ci-pass, ready
+        #[arg(long)]
+        wait_for: Option<String>,
     },
     /// Mark a draft PR as ready for review
     Ready {
@@ -117,6 +126,19 @@ enum Commands {
     AgentContext {
         #[arg(long)]
         json: bool,
+    },
+    /// Save or load a named profile (auth + repo config bundle)
+    Profile {
+        /// save <name> or load <name>
+        action: String,
+        /// Profile name
+        name: String,
+        /// GitHub token (required for save)
+        #[arg(long)]
+        token: Option<String>,
+        /// Repository (owner/repo, required for save)
+        #[arg(long)]
+        repo: Option<String>,
     },
     /// Show check run results for a specific commit SHA (useful for reviewing failures after pushing a new commit)
     Checks {
@@ -246,6 +268,24 @@ pub fn watch_notification_messages(
     msgs
 }
 
+
+pub fn format_watch_event_json(pr: u64, new: &[tasks::Task], resolved: &[tasks::Task]) -> String {
+    serde_json::to_string(&serde_json::json!({
+        "pr": pr,
+        "new": new,
+        "resolved": resolved,
+    })).unwrap_or_default()
+}
+
+pub fn is_wait_condition_met(condition: &str, task_list: &[tasks::Task]) -> bool {
+    match condition {
+        "ci-pass" => !task_list.iter().any(|t| matches!(
+            t.task_type, tasks::TaskType::FixCi | tasks::TaskType::AwaitingCi
+        )),
+        "ready" => !task_list.iter().any(|t| t.blocking),
+        _ => false,
+    }
+}
 
 fn notify_macos_titled(title: &str, msg: &str) {
     let script = format!(
@@ -449,7 +489,7 @@ fn main() -> Result<()> {
             println!("✓ PR #{} updated", pr);
         }
 
-        Commands::Watch { once, interval } => {
+        Commands::Watch { once, interval, json, wait_for } => {
             let mut prev_tasks: std::collections::HashMap<u64, Vec<tasks::Task>> = std::collections::HashMap::new();
             loop {
                 let state = store.load()?;
@@ -468,6 +508,7 @@ fn main() -> Result<()> {
                         std::collections::HashMap::new()
                     };
 
+                let mut all_tasks: Vec<tasks::Task> = Vec::new();
                 for tracked in &prs {
                     let pr_state = fetched.get(&tracked.number).cloned()
                         .unwrap_or_else(|| model::PrState {
@@ -478,22 +519,27 @@ fn main() -> Result<()> {
                             checks: vec![], threads: vec![], has_merge_conflict: false, codeowners_eligibility: Default::default(),
                         });
                     let curr = generate_tasks(&pr_state);
+                    all_tasks.extend(curr.clone());
 
                     let prev = prev_tasks.get(&tracked.number).map(|v| v.as_slice()).unwrap_or(&[]);
                     let (new, resolved) = task_diff(prev, &curr);
 
                     if prev_tasks.contains_key(&tracked.number) {
-                        for t in &new {
-                            let flag = if t.blocking { "[blocking]" } else { "[waiting]" };
-                            println!("+ PR #{} {} {:?}: {}", tracked.number, flag, t.task_type, t.description);
+                        if json {
+                            println!("{}", format_watch_event_json(tracked.number, &new, &resolved));
+                        } else {
+                            for t in &new {
+                                let flag = if t.blocking { "[blocking]" } else { "[waiting]" };
+                                println!("+ PR #{} {} {:?}: {}", tracked.number, flag, t.task_type, t.description);
+                            }
+                            for t in &resolved {
+                                println!("✓ PR #{} resolved {:?}: {}", tracked.number, t.task_type, t.description);
+                            }
+                            for (title, msg) in watch_notification_messages(tracked.number, &new, &resolved) {
+                                notify_macos_titled(&title, &msg);
+                            }
                         }
-                        for t in &resolved {
-                            println!("✓ PR #{} resolved {:?}: {}", tracked.number, t.task_type, t.description);
-                        }
-                        for (title, msg) in watch_notification_messages(tracked.number, &new, &resolved) {
-                            notify_macos_titled(&title, &msg);
-                        }
-                    } else {
+                    } else if !json {
                         if curr.is_empty() {
                             println!("PR #{} {} — ready", tracked.number, tracked.title);
                         } else {
@@ -507,8 +553,14 @@ fn main() -> Result<()> {
                     prev_tasks.insert(tracked.number, curr);
                 }
 
-                if once { break; }
-                std::thread::sleep(std::time::Duration::from_secs(interval));
+                if let Some(ref condition) = wait_for {
+                    if is_wait_condition_met(condition, &all_tasks) {
+                        break;
+                    }
+                } else if once {
+                    break;
+                }
+                if !once { std::thread::sleep(std::time::Duration::from_secs(interval)); }
             }
         }
 
@@ -836,18 +888,47 @@ fn main() -> Result<()> {
         }
 
         Commands::AgentContext { json } => {
-            let manifest = agent_context_manifest();
+            let state = store.load()?;
+            let prs: Vec<_> = state.prs.values().cloned().collect();
+            let manifest = github::agent_context_manifest_with_prs(&prs);
             if json {
                 println!("{}", serde_json::to_string_pretty(&manifest)?);
             } else {
                 println!("fp agent-context — run with --json for machine-readable output");
                 println!("auth: GITHUB_TOKEN or gh auth login");
                 println!("commands: ls, status, track, untrack, watch, reply, context, threads, create, rebase-stack");
+                println!("tracked PRs: {}", prs.len());
+            }
+        }
+
+        Commands::Profile { action, name, token, repo } => {
+            let profiles_path = dirs_path();
+            match action.as_str() {
+                "save" => {
+                    let tok = token.ok_or_else(|| anyhow::anyhow!("--token required for profile save"))?;
+                    let r = repo.ok_or_else(|| anyhow::anyhow!("--repo required for profile save"))?;
+                    profile::save_profile(&profiles_path, &name, &tok, &r)?;
+                    println!("Profile '{}' saved.", name);
+                }
+                "load" => {
+                    let p = profile::load_profile(&profiles_path, &name)?;
+                    println!("export GITHUB_TOKEN={}", p.github_token);
+                    println!("# repo: {}", p.repo);
+                }
+                _ => anyhow::bail!("unknown profile action '{}'; use save or load", action),
             }
         }
     }
 
     Ok(())
+}
+
+fn dirs_path() -> std::path::PathBuf {
+    dirs::home_dir()
+        .unwrap_or_else(|| std::path::PathBuf::from("."))
+        .join(".config")
+        .join("fp")
+        .join("profiles.json")
 }
 
 
