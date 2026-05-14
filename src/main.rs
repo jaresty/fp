@@ -15,6 +15,8 @@ mod github_test;
 mod ci_test;
 #[cfg(test)]
 mod stack_test;
+#[cfg(test)]
+mod notify_test;
 
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
@@ -220,10 +222,36 @@ fn rebase_branch_onto(branch: &str, old_base: &str, new_base: &str, dir: &std::p
 /// headless environments where notifications are unavailable.
 /// Falsify exemption: fire-and-forget subprocess with no observable return value in the test
 /// process — no artifact type can detect absence of the osascript call without a subprocess harness.
-fn notify_macos(message: &str) {
+pub fn watch_notification_messages(
+    pr: u64,
+    new: &[tasks::Task],
+    resolved: &[tasks::Task],
+) -> Vec<(String, String)> {
+    let title = format!("fp: #{}", pr);
+    let mut msgs = Vec::new();
+    for t in resolved {
+        match t.task_type {
+            tasks::TaskType::FixCi => msgs.push((title.clone(), format!("CI passing: {}", t.context_hint))),
+            tasks::TaskType::AwaitingReview => msgs.push((title.clone(), "PR approved".into())),
+            _ => {}
+        }
+    }
+    for t in new {
+        match t.task_type {
+            tasks::TaskType::RespondThread => msgs.push((title.clone(), format!("New review thread: {}", t.description))),
+            tasks::TaskType::FixCi => msgs.push((title.clone(), format!("CI failing: {}", t.context_hint))),
+            _ => {}
+        }
+    }
+    msgs
+}
+
+
+fn notify_macos_titled(title: &str, msg: &str) {
     let script = format!(
-        r#"display notification "{}" with title "fp""#,
-        message.replace('"', "'")
+        r#"display notification "{}" with title "{}""#,
+        msg.replace('"', "'"),
+        title.replace('"', "'")
     );
     let _ = std::process::Command::new("osascript")
         .args(["-e", &script])
@@ -458,10 +486,12 @@ fn main() -> Result<()> {
                         for t in &new {
                             let flag = if t.blocking { "[blocking]" } else { "[waiting]" };
                             println!("+ PR #{} {} {:?}: {}", tracked.number, flag, t.task_type, t.description);
-                            notify_macos(&format!("PR #{}: {}", tracked.number, t.description));
                         }
                         for t in &resolved {
                             println!("✓ PR #{} resolved {:?}: {}", tracked.number, t.task_type, t.description);
+                        }
+                        for (title, msg) in watch_notification_messages(tracked.number, &new, &resolved) {
+                            notify_macos_titled(&title, &msg);
                         }
                     } else {
                         if curr.is_empty() {
@@ -865,4 +895,5 @@ mod tests {
             }
         }
     }
+
 }
