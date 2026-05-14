@@ -2047,4 +2047,50 @@ mod tests {
         assert_eq!(policy.asset_upload_authenticity_token, "auth-tok-xyz");
         assert_eq!(policy.form_fields.get("key").map(|s| s.as_str()), Some("val1"));
     }
+
+    fn pr_mock_with_mergeable(server: &mut mockito::Server, mergeable: &str) {
+        server.mock("GET", "/repos/owner/repo/pulls/1")
+            .with_status(200).with_header("content-type", "application/json")
+            .with_body(format!(r#"{{"number":1,"title":"t","draft":false,"head":{{"ref":"b"}},"base":{{"ref":"main"}},"mergeable":{}}}"#, mergeable))
+            .create();
+        server.mock("GET", "/repos/owner/repo/commits/b/check-runs")
+            .with_status(200).with_header("content-type", "application/json")
+            .with_body(r#"{"check_runs":[]}"#).create();
+        server.mock("GET", "/repos/owner/repo/branches/b/protection")
+            .with_status(200).with_header("content-type", "application/json")
+            .with_body(r#"{"required_status_checks":{"contexts":[]}}"#).create();
+        server.mock("GET", "/repos/owner/repo/pulls/1/reviews?per_page=100&page=1")
+            .with_status(200).with_header("content-type", "application/json").with_body(r#"[]"#).create();
+        server.mock("GET", "/repos/owner/repo/pulls/1/comments?per_page=100&page=1")
+            .with_status(200).with_header("content-type", "application/json").with_body(r#"[]"#).create();
+        server.mock("GET", "/repos/owner/repo/issues/1/comments?per_page=100&page=1")
+            .with_status(200).with_header("content-type", "application/json").with_body(r#"[]"#).create();
+    }
+
+    // ADR-006: mergeable=false sets has_merge_conflict=true
+    #[test]
+    fn fetch_pr_sets_has_merge_conflict_when_mergeable_false() {
+        let mut server = mockito::Server::new();
+        pr_mock_with_mergeable(&mut server, "false");
+        let pr = mock_client(&server).fetch_pr("owner", "repo", 1).unwrap();
+        assert!(pr.has_merge_conflict, "expected has_merge_conflict=true when mergeable=false");
+    }
+
+    // ADR-006: mergeable=true sets has_merge_conflict=false
+    #[test]
+    fn fetch_pr_clears_has_merge_conflict_when_mergeable_true() {
+        let mut server = mockito::Server::new();
+        pr_mock_with_mergeable(&mut server, "true");
+        let pr = mock_client(&server).fetch_pr("owner", "repo", 1).unwrap();
+        assert!(!pr.has_merge_conflict, "expected has_merge_conflict=false when mergeable=true");
+    }
+
+    // ADR-006: mergeable=null (not computed) sets has_merge_conflict=false
+    #[test]
+    fn fetch_pr_clears_has_merge_conflict_when_mergeable_null() {
+        let mut server = mockito::Server::new();
+        pr_mock_with_mergeable(&mut server, "null");
+        let pr = mock_client(&server).fetch_pr("owner", "repo", 1).unwrap();
+        assert!(!pr.has_merge_conflict, "expected has_merge_conflict=false when mergeable=null");
+    }
 }

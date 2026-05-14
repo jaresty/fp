@@ -539,7 +539,8 @@ impl GithubClient {
         }
         let threads: Vec<Thread> = threads.into_iter().chain(review_body_threads).chain(issue_threads).collect();
 
-        Ok(PrState { number: pr_number, title, branch, base: base_branch, draft, approved, checks, threads, has_merge_conflict: false })
+        let has_merge_conflict = pr_json["mergeable"].as_bool() == Some(false);
+        Ok(PrState { number: pr_number, title, branch, base: base_branch, draft, approved, checks, threads, has_merge_conflict })
     }
 }
 
