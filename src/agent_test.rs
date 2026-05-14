@@ -1,5 +1,51 @@
 #[cfg(test)]
 mod tests {
+    // D1/D2: format_watch_initial_state with json=true returns JSON with pr and initial_tasks
+    #[test]
+    fn format_watch_initial_state_json_contains_pr_and_tasks() {
+        use crate::tasks::{Task, TaskType};
+        let tasks = vec![Task {
+            pr: 5, task_type: TaskType::FixCi, blocking: true,
+            description: "Fix ci/test".into(), context_hint: "ci/test".into(),
+        }];
+        let out = crate::format_watch_initial_state(5, "my PR", &tasks, true);
+        let parsed: serde_json::Value = serde_json::from_str(&out)
+            .expect("json=true must return valid JSON");
+        assert_eq!(parsed["pr"], 5, "JSON must contain pr number, got: {}", out);
+        assert!(parsed["initial_tasks"].is_array(), "JSON must contain initial_tasks array, got: {}", out);
+    }
+
+    // D3: format_watch_initial_state with json=false and no tasks returns ready line
+    #[test]
+    fn format_watch_initial_state_text_empty_tasks_shows_ready() {
+        let out = crate::format_watch_initial_state(7, "cool feature", &[], false);
+        assert!(out.contains("ready"), "empty tasks should show 'ready', got: {}", out);
+        assert!(out.contains("cool feature"), "output should contain PR title, got: {}", out);
+    }
+
+    // D4: format_watch_initial_state with json=false and tasks shows task count
+    #[test]
+    fn format_watch_initial_state_text_with_tasks_shows_count() {
+        use crate::tasks::{Task, TaskType};
+        let tasks = vec![
+            Task { pr: 3, task_type: TaskType::FixCi, blocking: true, description: "Fix ci/lint".into(), context_hint: "ci/lint".into() },
+            Task { pr: 3, task_type: TaskType::AwaitingReview, blocking: false, description: "Waiting for approval".into(), context_hint: "approval".into() },
+        ];
+        let out = crate::format_watch_initial_state(3, "refactor", &tasks, false);
+        assert!(out.contains("2 task"), "should show 2 tasks, got: {}", out);
+    }
+
+    // D5: format_watch_initial_state with json=false and tasks shows each task description
+    #[test]
+    fn format_watch_initial_state_text_with_tasks_shows_each_task() {
+        use crate::tasks::{Task, TaskType};
+        let tasks = vec![
+            Task { pr: 3, task_type: TaskType::FixCi, blocking: true, description: "Fix ci/lint".into(), context_hint: "ci/lint".into() },
+        ];
+        let out = crate::format_watch_initial_state(3, "refactor", &tasks, false);
+        assert!(out.contains("Fix ci/lint"), "output should contain task description, got: {}", out);
+    }
+
     // ADR-002 #9 D2: format_watch_event_json returns valid JSON with new and resolved arrays
     #[test]
     fn format_watch_event_json_contains_new_and_resolved() {

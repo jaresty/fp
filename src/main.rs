@@ -269,6 +269,24 @@ pub fn watch_notification_messages(
 }
 
 
+pub fn format_watch_initial_state(pr: u64, title: &str, task_list: &[tasks::Task], json: bool) -> String {
+    if json {
+        return serde_json::to_string(&serde_json::json!({
+            "pr": pr,
+            "initial_tasks": task_list,
+        })).unwrap_or_default();
+    }
+    if task_list.is_empty() {
+        return format!("PR #{} {} — ready\n", pr, title);
+    }
+    let mut out = format!("PR #{} {} — {} task(s)\n", pr, title, task_list.len());
+    for t in task_list {
+        let flag = if t.blocking { "[blocking]" } else { "[waiting]" };
+        out.push_str(&format!("  {} {:?}: {}\n", flag, t.task_type, t.description));
+    }
+    out
+}
+
 pub fn format_watch_event_json(pr: u64, new: &[tasks::Task], resolved: &[tasks::Task]) -> String {
     serde_json::to_string(&serde_json::json!({
         "pr": pr,
@@ -539,16 +557,8 @@ fn main() -> Result<()> {
                                 notify_macos_titled(&title, &msg);
                             }
                         }
-                    } else if !json {
-                        if curr.is_empty() {
-                            println!("PR #{} {} — ready", tracked.number, tracked.title);
-                        } else {
-                            println!("PR #{} {} — {} task(s)", tracked.number, tracked.title, curr.len());
-                            for t in &curr {
-                                let flag = if t.blocking { "[blocking]" } else { "[waiting]" };
-                                println!("  {} {:?}: {}", flag, t.task_type, t.description);
-                            }
-                        }
+                    } else {
+                        print!("{}", format_watch_initial_state(tracked.number, &tracked.title, &curr, json));
                     }
                     prev_tasks.insert(tracked.number, curr);
                 }
