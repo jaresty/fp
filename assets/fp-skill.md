@@ -65,6 +65,10 @@ fp untrack <pr>                         # stop tracking (also removes worktree i
 fp ready <pr>                           # mark draft PR as ready for review
 fp switch <pr>                          # print worktree path for PR (create if needed); use shell wrapper to cd
 fp switch <pr> --force                  # skip dirty-check on current worktree
+fp root                                 # print main repo root (works from inside a worktree)
+fp install-shell                        # install fps shell function (auto-detects fish/zsh/bash)
+fp install-shell --shell fish           # install for specific shell
+fp install-shell --print                # print function to stdout without writing
 
 # Monitoring
 fp watch [--once] [--interval <secs>]   # poll tracked PRs, print task diffs
@@ -188,11 +192,12 @@ Use this to introspect fp capabilities and current state programmatically.
 `fp switch <pr>` manages git worktrees so multiple PRs can be worked on in parallel without manual checkout.
 
 ```sh
-# Shell wrapper (add to fish/zsh/bash config):
-function fps { cd "$(fp switch $1)" }
+# One-time setup: install the fps shell function
+fp install-shell        # auto-detects fish/zsh/bash and writes the function
 
 fps 42      # enter worktree for PR #42 (created if needed)
 fps 87      # switch to PR #87 worktree
+fps root    # return to main repo root from anywhere
 fp status --all   # shows 🔒 lock indicator next to PRs with active worktrees
 fp watch          # also shows lock status per PR
 fp untrack 42     # removes worktree + cleans up lock

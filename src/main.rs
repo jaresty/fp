@@ -202,6 +202,17 @@ enum Commands {
         #[arg(long)]
         force: bool,
     },
+    /// Print the main repo root directory (works from inside a worktree)
+    Root,
+    /// Install the fps shell function for the current shell (fish, zsh, or bash)
+    InstallShell {
+        /// Shell to install for (default: auto-detect from $SHELL)
+        #[arg(long)]
+        shell: Option<String>,
+        /// Print the function to stdout instead of writing to disk
+        #[arg(long)]
+        print: bool,
+    },
     /// Install the fp Claude Code skill into ~/.claude/skills/fp/SKILL.md
     InstallSkills {
         /// Alternative output path (overrides default ~/.claude/skills/fp/SKILL.md)
@@ -286,6 +297,48 @@ pub fn watch_notification_messages(
 }
 
 
+/// Returns the fps shell function content for the given shell.
+pub fn fps_function_content(shell: &str) -> Option<String> {
+    match shell {
+        "fish" => Some(r#"function fps
+    if test "$argv[1]" = root
+        cd (fp root)
+    else
+        set dir (fp switch $argv)
+        and cd $dir
+    end
+end"#.to_string()),
+        "zsh" | "bash" => Some(r#"fps() {
+    if [ "$1" = root ]; then
+        cd "$(fp root)"
+    else
+        local dir
+        dir=$(fp switch "$@") && cd "$dir"
+    fi
+}"#.to_string()),
+        _ => None,
+    }
+}
+
+/// Returns the path where the fps function file should be written for the given shell.
+pub fn fps_install_path(shell: &str) -> Option<std::path::PathBuf> {
+    let home = dirs::home_dir()?;
+    match shell {
+        "fish" => Some(home.join(".config/fish/functions/fps.fish")),
+        "zsh" => Some(home.join(".zshrc")),
+        "bash" => Some(home.join(".bashrc")),
+        _ => None,
+    }
+}
+
+/// Detects the current shell from $SHELL env var, returning the basename.
+pub fn detect_shell() -> String {
+    std::env::var("SHELL")
+        .ok()
+        .and_then(|s| std::path::Path::new(&s).file_name().map(|n| n.to_string_lossy().to_string()))
+        .unwrap_or_else(|| "fish".to_string())
+}
+
 pub fn format_watch_initial_state(pr: u64, title: &str, task_list: &[tasks::Task], json: bool, lock: Option<&str>) -> String {
     if json {
         return serde_json::to_string(&serde_json::json!({
@@ -311,6 +364,14 @@ pub fn format_watch_event_json(pr: u64, new: &[tasks::Task], resolved: &[tasks::
         "new": new,
         "resolved": resolved,
     })).unwrap_or_default()
+}
+
+pub fn format_conflict_hint(branch: &str, prs: &std::collections::HashMap<u64, store::TrackedPr>) -> String {
+    if let Some(pr) = prs.values().find(|p| p.branch == branch) {
+        format!("  Tip: fps {} to switch to its worktree", pr.number)
+    } else {
+        String::new()
+    }
 }
 
 pub fn is_wait_condition_met(condition: &str, task_list: &[tasks::Task]) -> bool {
@@ -697,6 +758,40 @@ fn main() -> Result<()> {
             }
         }
 
+        Commands::Root => {
+            println!("{}", repo_root()?.display());
+        }
+
+        Commands::InstallShell { shell, print } => {
+            let shell_name = shell.unwrap_or_else(detect_shell);
+            let content = fps_function_content(&shell_name)
+                .ok_or_else(|| anyhow::anyhow!("unsupported shell: {}. Supported: fish, zsh, bash", shell_name))?;
+            if print {
+                println!("{}", content);
+            } else {
+                let dest = fps_install_path(&shell_name)
+                    .ok_or_else(|| anyhow::anyhow!("cannot determine install path for shell: {}", shell_name))?;
+                if shell_name == "fish" {
+                    if let Some(parent) = dest.parent() {
+                        std::fs::create_dir_all(parent)?;
+                    }
+                    std::fs::write(&dest, content)?;
+                    println!("Installed fps to {}", dest.display());
+                } else {
+                    // For zsh/bash append to rc file only if not already present
+                    let existing = std::fs::read_to_string(&dest).unwrap_or_default();
+                    if existing.contains("fps()") {
+                        println!("fps already installed in {}", dest.display());
+                    } else {
+                        let mut f = std::fs::OpenOptions::new().append(true).create(true).open(&dest)?;
+                        use std::io::Write;
+                        writeln!(f, "\n{}", content)?;
+                        println!("Appended fps to {}", dest.display());
+                    }
+                }
+            }
+        }
+
         Commands::InstallSkills { path } => {
             let skill_path = match path {
                 Some(p) => p,
@@ -836,6 +931,8 @@ fn main() -> Result<()> {
             }
             for branch in &result.conflicts {
                 println!("✗ conflict on {} — resolve manually", branch);
+                let hint = format_conflict_hint(branch, &state.prs);
+                if !hint.is_empty() { println!("{}", hint); }
             }
             if let Some(status) = &result.status_output {
                 println!("\ngit status:\n{}", status);
@@ -1027,6 +1124,36 @@ mod tests {
         let msg = result.unwrap_err().to_string();
         assert!(msg.contains("GITHUB_USER_SESSION"),
             "error must mention GITHUB_USER_SESSION, got: {}", msg);
+    }
+
+    #[test]
+    fn fps_function_fish_contains_root_dispatch() {
+        let content = fps_function_content("fish").expect("fish must be supported");
+        assert!(content.contains("fp root"), "fps fish function must dispatch 'root' to fp root, got: {}", content);
+        assert!(content.contains("fp switch"), "fps fish function must dispatch other args to fp switch, got: {}", content);
+    }
+
+    #[test]
+    fn fps_function_zsh_contains_root_dispatch() {
+        let content = fps_function_content("zsh").expect("zsh must be supported");
+        assert!(content.contains("fp root"), "fps zsh function must dispatch 'root' to fp root, got: {}", content);
+        assert!(content.contains("fp switch"), "fps zsh function must dispatch other args to fp switch, got: {}", content);
+    }
+
+    #[test]
+    fn install_shell_fish_path_is_functions_dir() {
+        let path = fps_install_path("fish").expect("fish install path must exist");
+        assert!(
+            path.to_string_lossy().contains(".config/fish/functions/fps.fish"),
+            "fish install path must be ~/.config/fish/functions/fps.fish, got: {}",
+            path.display()
+        );
+    }
+
+    #[test]
+    fn install_shell_unsupported_returns_none() {
+        assert!(fps_function_content("ksh").is_none(), "unsupported shell must return None");
+        assert!(fps_install_path("ksh").is_none(), "unsupported shell install path must return None");
     }
 
 }
