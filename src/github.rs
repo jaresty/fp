@@ -1016,15 +1016,24 @@ pub fn resolve_github_token() -> Result<String> {
     resolve_github_token_with(env_token, gh_token)
 }
 
-/// Detect owner/repo from `git remote get-url origin`
-pub fn detect_repo() -> Option<(String, String)> {
+/// Detect owner/repo from `git remote get-url origin` using the given directory.
+pub fn detect_repo_with_cwd(cwd: &std::path::Path) -> Option<(String, String)> {
     let output = std::process::Command::new("git")
         .args(["remote", "get-url", "origin"])
+        .current_dir(cwd)
         .output()
         .ok()?;
     if !output.status.success() { return None; }
     let url = String::from_utf8(output.stdout).ok()?;
     parse_github_remote(url.trim())
+}
+
+/// Detect owner/repo from `git remote get-url origin`, always running from the main repo root.
+pub fn detect_repo() -> Option<(String, String)> {
+    let cwd = std::env::current_dir().ok()?;
+    let git_dir = crate::worktree::common_git_dir(&cwd).ok()?;
+    let repo_root = git_dir.parent()?;
+    detect_repo_with_cwd(repo_root)
 }
 
 #[cfg(test)]

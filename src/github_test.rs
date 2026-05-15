@@ -2365,4 +2365,28 @@ mod tests {
         assert!(result.unwrap_err().to_string().contains("could not determine PR author"),
             "error must mention 'could not determine PR author'");
     }
+
+    #[test]
+    fn detect_repo_works_from_worktree_subdirectory() {
+        use std::fs;
+        use tempfile::TempDir;
+        let base = TempDir::new().unwrap();
+        let repo = base.path().join("myrepo");
+        fs::create_dir_all(&repo).unwrap();
+        std::process::Command::new("git").args(["init"]).current_dir(&repo).output().unwrap();
+        std::process::Command::new("git")
+            .args(["remote", "add", "origin", "git@github.com:owner/repo.git"])
+            .current_dir(&repo).output().unwrap();
+        // Simulate calling from a worktree path that is a subdirectory sibling, not the repo root
+        let worktree = base.path().join("myrepo-worktrees").join("feat-branch");
+        fs::create_dir_all(&worktree).unwrap();
+        // worktree has no git config of its own — detect_repo must use main repo root
+        let result = crate::github::detect_repo_with_cwd(&repo);
+        assert_eq!(result, Some(("owner".to_string(), "repo".to_string())),
+            "detect_repo must return owner/repo from main repo root");
+        // Now verify it returns None from a path with no git repo
+        let result_from_worktree_sibling = crate::github::detect_repo_with_cwd(&worktree);
+        assert!(result_from_worktree_sibling.is_none(),
+            "detect_repo must return None from a non-git path: {:?}", result_from_worktree_sibling);
+    }
 }
