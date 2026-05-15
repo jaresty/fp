@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 use std::path::Path;
 use anyhow::Result;
+use crate::worktree;
 
 pub fn stack_order(branches: &[String], parent_of: &HashMap<String, Option<String>>) -> Vec<String> {
     let branch_set: std::collections::HashSet<&str> = branches.iter().map(String::as_str).collect();
@@ -106,14 +107,18 @@ pub fn rebase_stack(branches: &[String], parent_of: &HashMap<String, Option<Stri
                 .unwrap_or_default()
         };
 
-        // Checkout the branch
-        let checkout = std::process::Command::new("git")
-            .args(["checkout", branch])
-            .current_dir(dir)
-            .output()?;
-        if !checkout.status.success() {
-            conflicts.push(format!("{}: checkout failed", branch));
-            continue;
+        // Ensure a worktree exists for this branch; create it if absent.
+        let wt_path = worktree::worktree_path(dir, branch);
+        if !wt_path.exists() {
+            let add = std::process::Command::new("git")
+                .args(["worktree", "add", wt_path.to_str().unwrap_or(""), branch])
+                .current_dir(dir)
+                .output()?;
+            if !add.status.success() {
+                conflicts.push(format!("{}: worktree add failed: {}", branch,
+                    String::from_utf8_lossy(&add.stderr).trim()));
+                continue;
+            }
         }
 
         // Detect whether the parent branch has been merged (and its remote branch deleted).
@@ -143,7 +148,7 @@ pub fn rebase_stack(branches: &[String], parent_of: &HashMap<String, Option<Stri
             }
         };
 
-        // Rebase onto parent
+        // Rebase onto parent — run from the branch's worktree so conflict state lands there.
         let rebase = if parent_merged_into_base {
             // Parent merged — use --onto to transplant only commits unique to this branch.
             // Find the oldest commit on branch not in origin/<base> — that's the former parent tip.
@@ -158,13 +163,13 @@ pub fn rebase_stack(branches: &[String], parent_of: &HashMap<String, Option<Stri
                 .unwrap_or("")
                 .to_string();
             std::process::Command::new("git")
-                .args(["rebase", "--onto", &origin_base, &old_parent_sha, branch])
-                .current_dir(dir)
+                .args(["rebase", "--onto", &origin_base, &old_parent_sha])
+                .current_dir(&wt_path)
                 .output()?
         } else {
             std::process::Command::new("git")
                 .args(["rebase", parent])
-                .current_dir(dir)
+                .current_dir(&wt_path)
                 .output()?
         };
 
@@ -173,7 +178,7 @@ pub fn rebase_stack(branches: &[String], parent_of: &HashMap<String, Option<Stri
             let new_parent = if parent_merged_into_base { &origin_base } else { parent };
             let post_rebase_diff = std::process::Command::new("git")
                 .args(["diff", &format!("{}...{}", new_parent, branch), "--"])
-                .current_dir(dir).output().ok()
+                .current_dir(&wt_path).output().ok()
                 .map(|o| String::from_utf8_lossy(&o.stdout).to_string())
                 .unwrap_or_default();
             if !pre_rebase_diff.is_empty() && post_rebase_diff != pre_rebase_diff {
@@ -184,7 +189,7 @@ pub fn rebase_stack(branches: &[String], parent_of: &HashMap<String, Option<Stri
             progress(&format!("pushing {}", branch));
             let push = std::process::Command::new("git")
                 .args(["push", "origin", branch, "--force-with-lease"])
-                .current_dir(dir)
+                .current_dir(&wt_path)
                 .output()?;
             if push.status.success() {
                 rebased.push(branch.clone());
@@ -201,7 +206,7 @@ pub fn rebase_stack(branches: &[String], parent_of: &HashMap<String, Option<Stri
             eprintln!("  fp rebase-stack");
             let status = std::process::Command::new("git")
                 .args(["status"])
-                .current_dir(dir)
+                .current_dir(&wt_path)
                 .output()
                 .ok()
                 .map(|o| String::from_utf8_lossy(&o.stdout).to_string());

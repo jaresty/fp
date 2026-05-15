@@ -197,6 +197,9 @@ mod tests {
         git(&["commit", "-m", "C"]);
         git(&["push", "--set-upstream", "origin", "feat/top"]);
 
+        // Return to main before rebase_stack — worktree approach requires main worktree not on any PR branch
+        git(&["checkout", "main"]);
+
         let branches = vec!["feat/base".to_string(), "feat/top".to_string()];
         let mut parent_of = std::collections::HashMap::new();
         parent_of.insert("feat/base".to_string(), None);
@@ -291,7 +294,8 @@ mod tests {
         git(&["add", "."]);
         git(&["commit", "-m", "X"]);
         git(&["push", "origin", "main"]);
-        git(&["checkout", "feat/base"]);
+        // Return to main before rebase_stack — worktree approach requires main worktree not on any PR branch
+        git(&["checkout", "main"]);
 
         let branches = vec!["feat/base".to_string()];
         let mut parent_of = std::collections::HashMap::new();
@@ -302,9 +306,14 @@ mod tests {
         let result = rebase_stack(&branches, &parent_of, &base_of, path, &|_| {}).unwrap();
         assert_eq!(result.conflicts, vec!["feat/base"], "expected feat/base in conflicts");
 
-        // REBASE_HEAD must exist — rebase was NOT aborted
-        assert!(path.join(".git").join("REBASE_HEAD").exists(),
-            "expected REBASE_HEAD to exist (rebase left in progress, not aborted)");
+        // REBASE_HEAD must exist in the worktree admin dir — rebase was NOT aborted
+        let wt_admin = path.join(".git").join("worktrees");
+        let has_rebase_head = std::fs::read_dir(&wt_admin)
+            .map(|entries| entries.filter_map(|e| e.ok())
+                .any(|entry| entry.path().join("REBASE_HEAD").exists()))
+            .unwrap_or(false);
+        assert!(has_rebase_head,
+            "expected REBASE_HEAD in a worktree admin dir (rebase left in progress, not aborted)");
     }
 
     // RS6: rebase_stack fetches origin before rebasing so remote-only commits are picked up
@@ -356,7 +365,8 @@ mod tests {
         Command::new("git").args(["push", "origin", "main"]).current_dir(path2).output().unwrap();
 
         // Back in original repo: origin/main is stale (doesn't have commit X yet)
-        git(&["checkout", "feat/base"]);
+        // Return to main before rebase_stack
+        git(&["checkout", "main"]);
 
         let branches = vec!["feat/base".to_string()];
         let mut parent_of = std::collections::HashMap::new();
@@ -418,7 +428,8 @@ mod tests {
         git(&["add", "."]);
         git(&["commit", "-m", "X"]);
         git(&["push", "origin", "develop"]);
-        git(&["checkout", "feat/base"]);
+        // Return to develop before rebase_stack
+        git(&["checkout", "develop"]);
 
         let branches = vec!["feat/base".to_string()];
         let mut parent_of = std::collections::HashMap::new();
@@ -480,8 +491,8 @@ mod tests {
         git(&["commit", "-m", "X"]);
         git(&["push", "origin", "main"]);
 
-        // Go back to feat/base (it is behind origin/main by commit X)
-        git(&["checkout", "feat/base"]);
+        // Return to main before rebase_stack
+        git(&["checkout", "main"]);
 
         let branches = vec!["feat/base".to_string()];
         let mut parent_of = std::collections::HashMap::new();
@@ -543,6 +554,9 @@ mod tests {
         git(&["add", "."]);
         git(&["commit", "-m", "C"]);
         git(&["push", "--set-upstream", "origin", "feat/top"]);
+
+        // Return to main before rebase_stack
+        git(&["checkout", "main"]);
 
         // After rebase_stack, feat/top should be rebased onto feat/base
         let branches = vec!["feat/base".to_string(), "feat/top".to_string()];
@@ -701,7 +715,8 @@ mod tests {
         git(&["add", "."]);
         git(&["commit", "-m", "D"]);
         git(&["push", "origin", "main"]);
-        git(&["checkout", "feat/top"]);
+        // Return to main before rebase_stack
+        git(&["checkout", "main"]);
 
         let branches = vec!["feat/base".to_string(), "feat/top".to_string()];
         let mut parent_of = std::collections::HashMap::new();
@@ -820,6 +835,9 @@ mod tests {
         git(&["commit", "-m", "X"]);
         git(&["push", "--set-upstream", "origin", "feat/x"]);
 
+        // Return to main before rebase_stack
+        git(&["checkout", "main"]);
+
         let branches = vec!["feat/x".to_string()];
         let mut parent_of = std::collections::HashMap::new();
         parent_of.insert("feat/x".to_string(), None);
@@ -872,6 +890,9 @@ mod tests {
         git(&["commit", "-m", "X"]);
         // Deliberately push without --set-upstream (no upstream configured)
         git(&["push", "origin", "feat/x"]);
+
+        // Return to main before rebase_stack
+        git(&["checkout", "main"]);
 
         let branches = vec!["feat/x".to_string()];
         let mut parent_of = std::collections::HashMap::new();
@@ -1008,7 +1029,8 @@ mod tests {
         git(&["add", "."]);
         git(&["commit", "-m", "X"]);
         git(&["push", "origin", "main"]);
-        git(&["checkout", "feat/base"]);
+        // Return to main before rebase_stack
+        git(&["checkout", "main"]);
 
         let branches = vec!["feat/base".to_string()];
         let mut parent_of = std::collections::HashMap::new();
@@ -1183,6 +1205,9 @@ mod tests {
 
         let branches = vec!["feat/a".to_string(), "feat/b".to_string(), "feat/c".to_string()];
 
+        // Return to main before rebase_stack
+        git(&["checkout", "main"]);
+
         let result = crate::stack::rebase_stack(&branches, &parent_of, &base_of, path, &|_| {});
         let result = result.unwrap();
         assert!(result.conflicts.is_empty(), "expected no conflicts, got: {:?}", result.conflicts);
@@ -1205,5 +1230,112 @@ mod tests {
         ).unwrap();
         assert_eq!(post_splice_diff, pre_splice_diff,
             "C's semantic diff should be unchanged after splice rebase");
+    }
+
+    // DW1: rebase_stack does not checkout any branch in the main worktree
+    #[test]
+    fn rebase_stack_does_not_checkout_in_main_worktree() {
+        use std::process::Command;
+        use tempfile::TempDir;
+        use std::fs;
+
+        let base = TempDir::new().unwrap();
+        let path = base.path().join("repo");
+        fs::create_dir(&path).unwrap();
+        let remote_dir = base.path().join("remote");
+        fs::create_dir(&remote_dir).unwrap();
+
+        Command::new("git").args(["init", "--bare", "-b", "main"])
+            .current_dir(&remote_dir).output().unwrap();
+
+        let git = |args: &[&str]| Command::new("git").args(args).current_dir(&path).output().unwrap();
+        git(&["init", "-b", "main"]);
+        git(&["config", "user.email", "test@test.com"]);
+        git(&["config", "user.name", "Test"]);
+        git(&["remote", "add", "origin", remote_dir.to_str().unwrap()]);
+
+        fs::write(path.join("a.txt"), "a").unwrap();
+        git(&["add", "."]);
+        git(&["commit", "-m", "A"]);
+        git(&["push", "origin", "main"]);
+
+        git(&["checkout", "-b", "feat/wt-test"]);
+        fs::write(path.join("b.txt"), "b").unwrap();
+        git(&["add", "."]);
+        git(&["commit", "-m", "B"]);
+        git(&["push", "--set-upstream", "origin", "feat/wt-test"]);
+
+        // Return to main before calling rebase_stack
+        git(&["checkout", "main"]);
+
+        let head_before = String::from_utf8(
+            Command::new("git").args(["rev-parse", "--abbrev-ref", "HEAD"])
+                .current_dir(&path).output().unwrap().stdout
+        ).unwrap().trim().to_string();
+
+        let branches = vec!["feat/wt-test".to_string()];
+        let mut parent_of = std::collections::HashMap::new();
+        parent_of.insert("feat/wt-test".to_string(), None);
+        let mut base_of = std::collections::HashMap::new();
+        base_of.insert("feat/wt-test".to_string(), "main".to_string());
+
+        let result = rebase_stack(&branches, &parent_of, &base_of, &path, &|_| {}).unwrap();
+        assert!(result.conflicts.is_empty(), "expected no conflicts: {:?}", result.conflicts);
+
+        let head_after = String::from_utf8(
+            Command::new("git").args(["rev-parse", "--abbrev-ref", "HEAD"])
+                .current_dir(&path).output().unwrap().stdout
+        ).unwrap().trim().to_string();
+
+        assert_eq!(head_before, head_after,
+            "main worktree HEAD must not change during rebase_stack, was {} before, {} after",
+            head_before, head_after);
+    }
+
+    // DW2: rebase_stack creates a git worktree for each branch
+    #[test]
+    fn rebase_stack_creates_worktree_for_branch() {
+        use std::process::Command;
+        use tempfile::TempDir;
+        use std::fs;
+
+        let base = TempDir::new().unwrap();
+        let path = base.path().join("repo");
+        fs::create_dir(&path).unwrap();
+        let remote_dir = base.path().join("remote");
+        fs::create_dir(&remote_dir).unwrap();
+
+        Command::new("git").args(["init", "--bare", "-b", "main"])
+            .current_dir(&remote_dir).output().unwrap();
+
+        let git = |args: &[&str]| Command::new("git").args(args).current_dir(&path).output().unwrap();
+        git(&["init", "-b", "main"]);
+        git(&["config", "user.email", "test@test.com"]);
+        git(&["config", "user.name", "Test"]);
+        git(&["remote", "add", "origin", remote_dir.to_str().unwrap()]);
+
+        fs::write(path.join("a.txt"), "a").unwrap();
+        git(&["add", "."]);
+        git(&["commit", "-m", "A"]);
+        git(&["push", "origin", "main"]);
+
+        git(&["checkout", "-b", "feat/wt-create"]);
+        fs::write(path.join("b.txt"), "b").unwrap();
+        git(&["add", "."]);
+        git(&["commit", "-m", "B"]);
+        git(&["push", "--set-upstream", "origin", "feat/wt-create"]);
+        git(&["checkout", "main"]);
+
+        let branches = vec!["feat/wt-create".to_string()];
+        let mut parent_of = std::collections::HashMap::new();
+        parent_of.insert("feat/wt-create".to_string(), None);
+        let mut base_of = std::collections::HashMap::new();
+        base_of.insert("feat/wt-create".to_string(), "main".to_string());
+
+        let result = rebase_stack(&branches, &parent_of, &base_of, &path, &|_| {}).unwrap();
+        assert!(result.conflicts.is_empty(), "expected no conflicts: {:?}", result.conflicts);
+
+        let wt = crate::worktree::worktree_path(&path, "feat/wt-create");
+        assert!(wt.exists(), "worktree must be created at {:?}", wt);
     }
 }
