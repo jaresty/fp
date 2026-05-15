@@ -16,8 +16,9 @@ pub fn common_git_dir(cwd: &Path) -> anyhow::Result<PathBuf> {
         .output()?;
     anyhow::ensure!(out.status.success(), "not in a git repository");
     let raw = PathBuf::from(String::from_utf8(out.stdout)?.trim().to_string());
-    // git may return a relative path; resolve it against cwd
-    Ok(if raw.is_absolute() { raw } else { cwd.join(raw) })
+    // git may return a relative path; resolve and canonicalize so callers get an absolute path with no ".." components
+    let joined = if raw.is_absolute() { raw } else { cwd.join(raw) };
+    Ok(joined.canonicalize().unwrap_or(joined))
 }
 
 /// Returns the main repo root, even when called from inside a worktree.
@@ -228,6 +229,36 @@ mod tests {
             fs::canonicalize(&root_from_main).unwrap(),
             fs::canonicalize(&root_from_wt).unwrap(),
             "repo_root must equal main repo root from worktree"
+        );
+    }
+
+    #[test]
+    fn main_repo_root_from_subdirectory_matches_root() {
+        let base = TempDir::new().unwrap();
+        let repo = base.path().join("myrepo");
+        fs::create_dir_all(&repo).unwrap();
+        std::process::Command::new("git").args(["init"]).current_dir(&repo).output().unwrap();
+        std::process::Command::new("git").args(["config", "user.email", "t@t.com"]).current_dir(&repo).output().unwrap();
+        std::process::Command::new("git").args(["config", "user.name", "T"]).current_dir(&repo).output().unwrap();
+        fs::write(repo.join("f.txt"), "x").unwrap();
+        std::process::Command::new("git").args(["add", "."]).current_dir(&repo).output().unwrap();
+        std::process::Command::new("git").args(["commit", "-m", "init"]).current_dir(&repo).output().unwrap();
+        let subdir = repo.join("subdir");
+        fs::create_dir_all(&subdir).unwrap();
+
+        let from_root = main_repo_root(&repo).expect("main_repo_root must succeed from root");
+        let from_subdir = main_repo_root(&subdir).expect("main_repo_root must succeed from subdirectory");
+
+        // Must return canonical paths (no ".." components) so file_name() works correctly
+        assert_eq!(
+            from_root,
+            from_subdir,
+            "main_repo_root from subdirectory must equal main_repo_root from root without canonicalize"
+        );
+        assert_ne!(
+            from_subdir.file_name().unwrap_or_default(),
+            "..",
+            "main_repo_root must not return a path ending in '..'"
         );
     }
 
