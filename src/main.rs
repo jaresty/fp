@@ -5,6 +5,7 @@ mod github;
 mod ci;
 mod stack;
 mod profile;
+mod worktree;
 
 #[cfg(test)]
 mod tasks_test;
@@ -193,6 +194,14 @@ enum Commands {
     },
     /// Rebase all tracked PRs in stack order onto their parent branches
     RebaseStack,
+    /// Switch to the worktree for a tracked PR (creates if needed)
+    Switch {
+        /// PR number
+        pr: u64,
+        /// Skip dirty-check on current worktree
+        #[arg(long)]
+        force: bool,
+    },
     /// Install the fp Claude Code skill into ~/.claude/skills/fp/SKILL.md
     InstallSkills {
         /// Alternative output path (overrides default ~/.claude/skills/fp/SKILL.md)
@@ -277,17 +286,18 @@ pub fn watch_notification_messages(
 }
 
 
-pub fn format_watch_initial_state(pr: u64, title: &str, task_list: &[tasks::Task], json: bool) -> String {
+pub fn format_watch_initial_state(pr: u64, title: &str, task_list: &[tasks::Task], json: bool, lock: Option<&str>) -> String {
     if json {
         return serde_json::to_string(&serde_json::json!({
             "pr": pr,
             "initial_tasks": task_list,
         })).unwrap_or_default();
     }
+    let lock_suffix = lock.map(|s| format!("  {}", s)).unwrap_or_default();
     if task_list.is_empty() {
-        return format!("PR #{} {} — ready\n", pr, title);
+        return format!("PR #{} {} — ready{}\n", pr, title, lock_suffix);
     }
-    let mut out = format!("PR #{} {} — {} task(s)\n", pr, title, task_list.len());
+    let mut out = format!("PR #{} {} — {} task(s){}\n", pr, title, task_list.len(), lock_suffix);
     for t in task_list {
         let flag = if t.blocking { "[blocking]" } else { "[waiting]" };
         out.push_str(&format!("  {} {:?}: {}\n", flag, t.task_type, t.description));
@@ -327,6 +337,18 @@ fn notify_macos_titled(title: &str, msg: &str) {
 fn git_dir() -> Result<PathBuf> {
     let output = std::process::Command::new("git")
         .args(["rev-parse", "--git-dir"])
+        .output()
+        .context("failed to run git")?;
+    if !output.status.success() {
+        anyhow::bail!("not in a git repository");
+    }
+    let path = String::from_utf8(output.stdout)?.trim().to_string();
+    Ok(PathBuf::from(path))
+}
+
+fn repo_root() -> Result<PathBuf> {
+    let output = std::process::Command::new("git")
+        .args(["rev-parse", "--show-toplevel"])
         .output()
         .context("failed to run git")?;
     if !output.status.success() {
@@ -397,12 +419,15 @@ fn main() -> Result<()> {
                             checks: vec![], threads: vec![], has_merge_conflict: false, codeowners_eligibility: Default::default(),
                         });
                     let tasks = generate_tasks(&pr_state);
+                    let lock = worktree::lock_status(&git_dir, &tracked.branch)
+                        .map(|s| format!("  {}", s))
+                        .unwrap_or_default();
                     if json {
                         println!("{}", serde_json::to_string_pretty(&tasks).unwrap());
                     } else if tasks.is_empty() {
-                        println!("PR #{} {} — ready", tracked.number, tracked.title);
+                        println!("PR #{} {} — ready{}", tracked.number, tracked.title, lock);
                     } else {
-                        println!("PR #{} {} — {} task(s)", tracked.number, tracked.title, tasks.len());
+                        println!("PR #{} {} — {} task(s){}", tracked.number, tracked.title, tasks.len(), lock);
                     }
                 }
             } else {
@@ -461,8 +486,51 @@ fn main() -> Result<()> {
         }
 
         Commands::Untrack { pr } => {
+            let branch = {
+                let state = store.load()?;
+                state.prs.get(&pr).map(|t| t.branch.clone())
+            };
             store.untrack(pr)?;
+            if let Some(branch) = branch {
+                let wt_path = worktree::worktree_path(&repo_root()?, &branch);
+                if wt_path.exists() {
+                    let remove = std::process::Command::new("git")
+                        .args(["worktree", "remove", "--force", wt_path.to_str().unwrap_or("")])
+                        .output()?;
+                    if remove.status.success() {
+                        let _ = std::process::Command::new("git").args(["worktree", "prune"]).output();
+                    }
+                }
+                worktree::remove_lock(&worktree::lock_path(&git_dir, &branch))?;
+            }
             println!("Untracked PR #{}", pr);
+        }
+
+        Commands::Switch { pr, force } => {
+            let state = store.load()?;
+            let tracked = state.prs.get(&pr)
+                .with_context(|| format!("PR #{} is not tracked. Run `fp track {}`", pr, pr))?;
+            let branch = tracked.branch.clone();
+            let root = repo_root()?;
+
+            if !force && worktree::repo_is_dirty(&root)? {
+                anyhow::bail!("current worktree has uncommitted changes — commit, stash, or use --force to override");
+            }
+
+            worktree::check_target_lock(&git_dir, &branch)?;
+
+            let wt_path = worktree::worktree_path(&root, &branch);
+            if !wt_path.exists() {
+                let out = std::process::Command::new("git")
+                    .args(["worktree", "add", wt_path.to_str().unwrap_or(""), &branch])
+                    .output()?;
+                anyhow::ensure!(out.status.success(),
+                    "git worktree add failed: {}", String::from_utf8_lossy(&out.stderr));
+            }
+
+            let lp = worktree::lock_path(&git_dir, &branch);
+            worktree::write_lock(&lp, std::process::id(), "agent")?;
+            println!("{}", wt_path.display());
         }
 
         Commands::Reply { pr, thread_id, message } => {
@@ -566,7 +634,8 @@ fn main() -> Result<()> {
                             }
                         }
                     } else {
-                        print!("{}", format_watch_initial_state(tracked.number, &tracked.title, &curr, json));
+                        let lock = worktree::lock_status(&git_dir, &tracked.branch);
+                        print!("{}", format_watch_initial_state(tracked.number, &tracked.title, &curr, json, lock.as_deref()));
                     }
                     prev_tasks.insert(tracked.number, curr);
                 }

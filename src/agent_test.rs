@@ -8,7 +8,7 @@ mod tests {
             pr: 5, task_type: TaskType::FixCi, blocking: true,
             description: "Fix ci/test".into(), context_hint: "ci/test".into(),
         }];
-        let out = crate::format_watch_initial_state(5, "my PR", &tasks, true);
+        let out = crate::format_watch_initial_state(5, "my PR", &tasks, true, None);
         let parsed: serde_json::Value = serde_json::from_str(&out)
             .expect("json=true must return valid JSON");
         assert_eq!(parsed["pr"], 5, "JSON must contain pr number, got: {}", out);
@@ -18,7 +18,7 @@ mod tests {
     // D3: format_watch_initial_state with json=false and no tasks returns ready line
     #[test]
     fn format_watch_initial_state_text_empty_tasks_shows_ready() {
-        let out = crate::format_watch_initial_state(7, "cool feature", &[], false);
+        let out = crate::format_watch_initial_state(7, "cool feature", &[], false, None);
         assert!(out.contains("ready"), "empty tasks should show 'ready', got: {}", out);
         assert!(out.contains("cool feature"), "output should contain PR title, got: {}", out);
     }
@@ -31,7 +31,7 @@ mod tests {
             Task { pr: 3, task_type: TaskType::FixCi, blocking: true, description: "Fix ci/lint".into(), context_hint: "ci/lint".into() },
             Task { pr: 3, task_type: TaskType::AwaitingReview, blocking: false, description: "Waiting for approval".into(), context_hint: "approval".into() },
         ];
-        let out = crate::format_watch_initial_state(3, "refactor", &tasks, false);
+        let out = crate::format_watch_initial_state(3, "refactor", &tasks, false, None);
         assert!(out.contains("2 task"), "should show 2 tasks, got: {}", out);
     }
 
@@ -42,7 +42,7 @@ mod tests {
         let tasks = vec![
             Task { pr: 3, task_type: TaskType::FixCi, blocking: true, description: "Fix ci/lint".into(), context_hint: "ci/lint".into() },
         ];
-        let out = crate::format_watch_initial_state(3, "refactor", &tasks, false);
+        let out = crate::format_watch_initial_state(3, "refactor", &tasks, false, None);
         assert!(out.contains("Fix ci/lint"), "output should contain task description, got: {}", out);
     }
 
