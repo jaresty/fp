@@ -392,15 +392,15 @@ pub fn format_single_pr_status(pr: u64, tasks: &[tasks::Task], lock: Option<&str
     }
 }
 
-pub fn format_worktree_add_error(stderr: &str, _branch: &str) -> String {
+pub fn format_worktree_add_error(stderr: &str, _branch: &str, pr: u64) -> String {
     if let Some(path) = stderr.lines()
         .find(|l| l.contains("already used by worktree at"))
         .and_then(|l| l.split("worktree at '").nth(1))
         .and_then(|s| s.strip_suffix('\'').or_else(|| s.split('\'').next()))
     {
         format!(
-            "branch already has a worktree at {} — to relocate: git worktree remove {} && fps",
-            path, path
+            "branch already has a worktree at {} — to relocate: git worktree remove {} && fps {}",
+            path, path, pr
         )
     } else {
         format!("git worktree add failed: {}", stderr.trim())
@@ -607,7 +607,7 @@ fn main() -> Result<()> {
                     .args(["worktree", "add", wt_path.to_str().unwrap_or(""), &branch])
                     .output()?;
                 anyhow::ensure!(out.status.success(), "{}",
-                    format_worktree_add_error(&String::from_utf8_lossy(&out.stderr), &branch));
+                    format_worktree_add_error(&String::from_utf8_lossy(&out.stderr), &branch, pr));
             }
 
             let lp = worktree::lock_path(&git_dir, &branch);

@@ -262,17 +262,17 @@ mod tests {
     #[test]
     fn worktree_add_error_detects_already_used_path() {
         let stderr = "Preparing worktree (checking out 'feat/foo')\nfatal: 'feat/foo' is already used by worktree at '/private/tmp/my-wt'\n";
-        let msg = crate::format_worktree_add_error(stderr, "feat/foo");
+        let msg = crate::format_worktree_add_error(stderr, "feat/foo", 42);
         assert!(msg.contains("git worktree remove /private/tmp/my-wt"),
             "error must suggest git worktree remove with path, got: {}", msg);
-        assert!(msg.contains("fps"),
-            "error must mention fps to retry, got: {}", msg);
+        assert!(msg.contains("fps 42"),
+            "error must mention fps <pr> to retry, got: {}", msg);
     }
 
     #[test]
     fn worktree_add_error_generic_for_other_failures() {
         let stderr = "fatal: some other error\n";
-        let msg = crate::format_worktree_add_error(stderr, "feat/foo");
+        let msg = crate::format_worktree_add_error(stderr, "feat/foo", 42);
         assert!(msg.contains("git worktree add failed"),
             "non-already-used error must fall back to generic message, got: {}", msg);
     }
