@@ -392,6 +392,21 @@ pub fn format_single_pr_status(pr: u64, tasks: &[tasks::Task], lock: Option<&str
     }
 }
 
+pub fn format_worktree_add_error(stderr: &str, _branch: &str) -> String {
+    if let Some(path) = stderr.lines()
+        .find(|l| l.contains("already used by worktree at"))
+        .and_then(|l| l.split("worktree at '").nth(1))
+        .and_then(|s| s.strip_suffix('\'').or_else(|| s.split('\'').next()))
+    {
+        format!(
+            "branch already has a worktree at {} — to relocate: git worktree remove {} && fps",
+            path, path
+        )
+    } else {
+        format!("git worktree add failed: {}", stderr.trim())
+    }
+}
+
 pub fn format_conflict_hint(branch: &str, prs: &std::collections::HashMap<u64, store::TrackedPr>) -> String {
     if let Some(pr) = prs.values().find(|p| p.branch == branch) {
         format!("  Tip: fps {} to switch to its worktree", pr.number)
@@ -591,8 +606,8 @@ fn main() -> Result<()> {
                 let out = std::process::Command::new("git")
                     .args(["worktree", "add", wt_path.to_str().unwrap_or(""), &branch])
                     .output()?;
-                anyhow::ensure!(out.status.success(),
-                    "git worktree add failed: {}", String::from_utf8_lossy(&out.stderr));
+                anyhow::ensure!(out.status.success(), "{}",
+                    format_worktree_add_error(&String::from_utf8_lossy(&out.stderr), &branch));
             }
 
             let lp = worktree::lock_path(&git_dir, &branch);

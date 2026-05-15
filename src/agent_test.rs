@@ -258,4 +258,22 @@ mod tests {
         let out = crate::format_single_pr_status(7, &tasks, None);
         assert!(!out.contains("🔒"), "single-pr status must not show lock when absent, got: {}", out);
     }
+
+    #[test]
+    fn worktree_add_error_detects_already_used_path() {
+        let stderr = "Preparing worktree (checking out 'feat/foo')\nfatal: 'feat/foo' is already used by worktree at '/private/tmp/my-wt'\n";
+        let msg = crate::format_worktree_add_error(stderr, "feat/foo");
+        assert!(msg.contains("git worktree remove /private/tmp/my-wt"),
+            "error must suggest git worktree remove with path, got: {}", msg);
+        assert!(msg.contains("fps"),
+            "error must mention fps to retry, got: {}", msg);
+    }
+
+    #[test]
+    fn worktree_add_error_generic_for_other_failures() {
+        let stderr = "fatal: some other error\n";
+        let msg = crate::format_worktree_add_error(stderr, "feat/foo");
+        assert!(msg.contains("git worktree add failed"),
+            "non-already-used error must fall back to generic message, got: {}", msg);
+    }
 }
