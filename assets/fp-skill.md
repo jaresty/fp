@@ -61,8 +61,10 @@ fp edit <pr> --demo <url>               # append/replace ## Demo section in PR b
 fp edit <pr> --demo <file>              # upload local image file, inject into PR body
 fp track <pr>                           # track PR (auto-fetches metadata via API)
 fp track <pr> --title "..." --branch "..."  # track PR manually
-fp untrack <pr>                         # stop tracking
+fp untrack <pr>                         # stop tracking (also removes worktree if present)
 fp ready <pr>                           # mark draft PR as ready for review
+fp switch <pr>                          # print worktree path for PR (create if needed); use shell wrapper to cd
+fp switch <pr> --force                  # skip dirty-check on current worktree
 
 # Monitoring
 fp watch [--once] [--interval <secs>]   # poll tracked PRs, print task diffs
@@ -180,6 +182,28 @@ Use this to introspect fp capabilities and current state programmatically.
 - `GITHUB_TOKEN` — required for all API calls. If absent, fp falls back to `gh auth token`. If both absent, fp errors with remediation options.
 - `BUILDKITE_TOKEN` — required for Buildkite log content. If a Buildkite check fails and this is unset, tell the user.
 - `GITHUB_USER_SESSION` — required for `--demo <file>` image uploads. fp auto-extracts this from Chrome/Firefox/Safari if unset. If upload fails with a session error, tell the user to set it from browser DevTools (Application → Cookies → github.com → user_session).
+
+## Worktree Workflow
+
+`fp switch <pr>` manages git worktrees so multiple PRs can be worked on in parallel without manual checkout.
+
+```sh
+# Shell wrapper (add to fish/zsh/bash config):
+function fps { cd "$(fp switch $1)" }
+
+fps 42      # enter worktree for PR #42 (created if needed)
+fps 87      # switch to PR #87 worktree
+fp status --all   # shows 🔒 lock indicator next to PRs with active worktrees
+fp watch          # also shows lock status per PR
+fp untrack 42     # removes worktree + cleans up lock
+```
+
+Guards:
+- Aborts if current worktree has uncommitted changes (use `--force` to override)
+- Aborts if target worktree is locked by another live process (parallel agent collision prevention)
+- Stale locks (dead PID) are cleared automatically
+
+Lock files live in `.git/worktrees/<branch>/fp-lock` — never committed.
 
 ## Write to Disk
 
