@@ -210,6 +210,25 @@ Guards:
 
 Lock files live in `.git/worktrees/<branch>/fp-lock` — never committed.
 
+## Agent Worktree Protocol
+
+When an agent needs to work inside a PR's worktree (fix CI, edit code, run tests):
+
+1. Run `fp switch <pr> [--force]` — use `--force` when the current directory has untracked files.
+   - The command prints an absolute canonical path. Capture it directly — no `..` resolution needed.
+   - If the branch already has a worktree at a non-fp path, the error message says exactly how to relocate it.
+
+2. Call `EnterWorktree path=<printed-path>`.
+
+3. Do the work (fix CI, respond to review, run tests).
+
+4. When done, call `ExitWorktree action=keep` (or `action=remove` if the branch is merged).
+
+Anti-patterns:
+- Do **not** guess the worktree path — always run `fp switch` first to get the canonical path.
+- Do **not** try to resolve `..` segments — `fp switch` already prints an absolute path.
+- Do **not** use `git checkout` inside a worktree — the branch is already checked out there.
+
 ## Write to Disk
 
 This skill is written to `.claude/skills/fp/SKILL.md` inside the current git repository by running:
