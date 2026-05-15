@@ -198,9 +198,16 @@ enum Commands {
     Switch {
         /// PR number
         pr: u64,
+        /// Session identifier for the lock (e.g. agent name or session ID)
+        id: String,
         /// Skip dirty-check on current worktree
         #[arg(long)]
         force: bool,
+    },
+    /// Remove the lock on a worktree branch so it can be switched to again
+    Unlock {
+        /// Branch name (not PR number)
+        branch: String,
     },
     /// Print the main repo root directory (works from inside a worktree)
     Root,
@@ -587,7 +594,7 @@ fn main() -> Result<()> {
             println!("Untracked PR #{}", pr);
         }
 
-        Commands::Switch { pr, force } => {
+        Commands::Switch { pr, id, force } => {
             let state = store.load()?;
             let tracked = state.prs.get(&pr)
                 .with_context(|| format!("PR #{} is not tracked. Run `fp track {}`", pr, pr))?;
@@ -611,7 +618,7 @@ fn main() -> Result<()> {
             }
 
             let lp = worktree::lock_path(&git_dir, &branch);
-            worktree::write_lock(&lp, worktree::parent_pid(), "agent")?;
+            worktree::write_lock(&lp, worktree::session_anchor_pid(), "agent", &id)?;
             println!("{}", wt_path.display());
         }
 
@@ -795,6 +802,12 @@ fn main() -> Result<()> {
 
         Commands::Root => {
             println!("{}", repo_root()?.display());
+        }
+
+        Commands::Unlock { branch } => {
+            let lp = worktree::lock_path(&git_dir, &branch);
+            worktree::remove_lock(&lp)?;
+            println!("Unlocked branch '{}'", branch);
         }
 
         Commands::InstallShell { shell, print } => {

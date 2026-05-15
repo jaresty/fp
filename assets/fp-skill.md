@@ -69,8 +69,9 @@ fp track <pr>                           # track PR (auto-fetches metadata via AP
 fp track <pr> --title "..." --branch "..."  # track PR manually
 fp untrack <pr>                         # stop tracking (also removes worktree if present)
 fp ready <pr>                           # mark draft PR as ready for review
-fp switch <pr>                          # print worktree path for PR (create if needed); use shell wrapper to cd
-fp switch <pr> --force                  # skip dirty-check on current worktree
+fp switch <pr> <id>                     # print worktree path for PR (create if needed); <id> is a session label (e.g. "claude-session-1")
+fp switch <pr> <id> --force            # skip dirty-check on current worktree
+fp unlock <branch>                      # remove the lock on a worktree branch so it can be switched to again
 fp root                                 # print main repo root (works from inside a worktree)
 fp install-shell                        # install fps shell function (auto-detects fish/zsh/bash)
 fp install-shell --shell fish           # install for specific shell
@@ -149,7 +150,7 @@ User: "Reproduce the CI failure in PR #42 locally and fix it."
 
 ```sh
 # Step 1: get the worktree path (creates worktree if needed)
-fp switch 42 --force
+fp switch 42 claude-session-1 --force
 # Output: /Users/me/projects/myrepo-worktrees/feat/my-branch
 
 # Step 2: enter the worktree
@@ -223,24 +224,32 @@ Use this to introspect fp capabilities and current state programmatically.
 # One-time setup: install the fps shell function
 fp install-shell        # auto-detects fish/zsh/bash and writes the function
 
-fps 42      # enter worktree for PR #42 (created if needed)
-fps 87      # switch to PR #87 worktree
-fps root    # return to main repo root from anywhere
-fp status --all   # shows 🔒 lock indicator next to PRs with active worktrees
-fp watch          # also shows lock status per PR
-fp untrack 42     # removes worktree + cleans up lock
+fps 42 my-session   # enter worktree for PR #42 with session label (created if needed)
+fps 87 my-session   # switch to PR #87 worktree
+fps root            # return to main repo root from anywhere
+fp status --all     # shows 🔒 <id> (pid, alive/dead) next to locked PRs
+fp watch            # also shows lock status per PR
+fp unlock <branch>  # explicitly remove a lock (required — locks are never auto-cleared)
+fp untrack 42       # removes worktree + cleans up lock
 ```
 
 Guards:
 - Aborts if current worktree has uncommitted changes (use `--force` to override)
-- Aborts if target worktree is locked by another live process (parallel agent collision prevention)
-- Stale locks (dead PID) are cleared automatically
+- Aborts if target worktree has any lock (live or dead) — must run `fp unlock <branch>` to clear it
+- Lock PID is the session anchor: first ancestor with a TTY or first non-shell ancestor (durable across both terminal and agent contexts)
 
-Lock files live in `.git/worktrees/<branch>/fp-lock` — never committed.
+Lock files live in `.git/worktrees/<branch>/fp-lock` — never committed. Format: `{"pid": <n>, "kind": "agent", "id": "<session-label>"}`.
 
 ## Agent Worktree Protocol
 
-**Criterion:** Every entry into a PR branch worktree must go through `fp switch` — not `git worktree add` directly — so that lock files are written correctly, the path is canonical, and `fp status` shows the active lock. Non-compliance is observable: `fp status --all` will show no 🔒 lock for the PR.
+**Criterion:** Every entry into a PR branch worktree must go through `fp switch <pr> <id>` — not `git worktree add` directly — so that lock files are written correctly, the path is canonical, and `fp status` shows the active lock. Non-compliance is observable: `fp status --all` will show no 🔒 lock for the PR.
+
+**Lock lifecycle:**
+1. `fp switch <pr> <id>` — writes lock with session label and durable anchor PID
+2. Work in the worktree
+3. `fp unlock <branch>` — explicitly removes the lock when done (or before another agent can take over)
+
+If a lock shows `(dead)` in `fp status`, the previous session crashed — run `fp unlock <branch>` to clear it before switching.
 
 When an agent needs to work inside a PR's worktree (fix CI, edit code, run tests):
 

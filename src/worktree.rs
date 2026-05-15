@@ -5,6 +5,7 @@ use serde::{Deserialize, Serialize};
 pub struct LockInfo {
     pub pid: u32,
     pub kind: String,
+    pub id: String,
 }
 
 /// Returns the common (main) git dir for the repo, even when called from inside a worktree.
@@ -49,16 +50,66 @@ pub fn read_lock(lock_path: &Path) -> Option<LockInfo> {
     serde_json::from_str(&data).ok()
 }
 
-/// Returns the parent process ID (PPID) of the current process.
-pub fn parent_pid() -> u32 {
+const KNOWN_SHELLS: &[&str] = &["bash", "sh", "zsh", "fish", "dash", "ksh", "tcsh", "csh"];
+
+fn process_has_tty(pid: u32) -> bool {
     std::process::Command::new("ps")
-        .args(["-o", "ppid=", "-p", &std::process::id().to_string()])
+        .args(["-o", "tty=", "-p", &pid.to_string()])
+        .output()
+        .ok()
+        .and_then(|o| String::from_utf8(o.stdout).ok())
+        .map(|s| {
+            let t = s.trim();
+            !t.is_empty() && t != "??" && t != "?"
+        })
+        .unwrap_or(false)
+}
+
+fn process_comm(pid: u32) -> Option<String> {
+    std::process::Command::new("ps")
+        .args(["-o", "comm=", "-p", &pid.to_string()])
+        .output()
+        .ok()
+        .and_then(|o| String::from_utf8(o.stdout).ok())
+        .map(|s| s.trim().to_string())
+}
+
+fn ppid_of(pid: u32) -> Option<u32> {
+    std::process::Command::new("ps")
+        .args(["-o", "ppid=", "-p", &pid.to_string()])
         .output()
         .ok()
         .and_then(|o| String::from_utf8(o.stdout).ok())
         .and_then(|s| s.trim().parse().ok())
-        .unwrap_or(std::process::id())
 }
+
+fn is_known_shell(comm: &str) -> bool {
+    let base = std::path::Path::new(comm).file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or(comm);
+    KNOWN_SHELLS.contains(&base)
+}
+
+/// Returns the PID of the session anchor — the first ancestor that has a TTY or is not a known
+/// shell binary, making it durable across both terminal and agent (e.g. Claude) contexts.
+pub fn session_anchor_pid() -> u32 {
+    let mut candidate = ppid_of(std::process::id()).unwrap_or(std::process::id());
+    for _ in 0..16 {
+        if process_has_tty(candidate) {
+            return candidate;
+        }
+        if let Some(comm) = process_comm(candidate)
+            && !is_known_shell(&comm) {
+            return candidate;
+        }
+        match ppid_of(candidate) {
+            Some(p) if p != candidate && p > 1 => candidate = p,
+            _ => return candidate,
+        }
+    }
+    candidate
+}
+
 
 /// Returns true if the process with the given PID is running.
 pub fn pid_is_alive(pid: u32) -> bool {
@@ -75,11 +126,11 @@ pub fn lock_is_live(lock: &LockInfo) -> bool {
 }
 
 /// Writes a lock file at the given path, creating parent dirs as needed.
-pub fn write_lock(lock_path: &Path, pid: u32, kind: &str) -> anyhow::Result<()> {
+pub fn write_lock(lock_path: &Path, pid: u32, kind: &str, id: &str) -> anyhow::Result<()> {
     if let Some(parent) = lock_path.parent() {
         std::fs::create_dir_all(parent)?;
     }
-    let info = LockInfo { pid, kind: kind.to_string() };
+    let info = LockInfo { pid, kind: kind.to_string(), id: id.to_string() };
     std::fs::write(lock_path, serde_json::to_string(&info)?)?;
     Ok(())
 }
@@ -99,33 +150,24 @@ pub fn repo_is_dirty(repo_root: &Path) -> anyhow::Result<bool> {
     Ok(!out.stdout.is_empty())
 }
 
-/// Checks the target worktree lock; clears stale locks. Returns Err if a live lock exists.
+/// Checks the target worktree lock. Returns Err if any lock exists (live or stale).
+/// Callers must explicitly run `fp unlock <branch>` to clear a lock.
 pub fn check_target_lock(git_dir: &Path, branch: &str) -> anyhow::Result<()> {
     let lp = lock_path(git_dir, branch);
     if let Some(lock) = read_lock(&lp) {
-        if lock_is_live(&lock) {
-            anyhow::bail!("worktree for '{}' is locked by PID {} ({})", branch, lock.pid, lock.kind);
-        }
-        // Stale lock — remove it
-        remove_lock(&lp)?;
+        let liveness = if lock_is_live(&lock) { "alive" } else { "dead" };
+        anyhow::bail!("worktree for '{}' is locked by '{}' (pid {}, {}) — run `fp unlock` to clear", branch, lock.id, lock.pid, liveness);
     }
     Ok(())
 }
 
 /// Returns a short lock status string for display in watch/status output.
-/// Returns None if no lock file exists or lock is stale.
+/// Returns None only if no lock file exists. Shows alive/dead for all locks.
 pub fn lock_status(git_dir: &Path, branch: &str) -> Option<String> {
     let lp = lock_path(git_dir, branch);
     let lock = read_lock(&lp)?;
-    if !lock_is_live(&lock) {
-        return None;
-    }
-    let label = if lock.pid == std::process::id() {
-        "you".to_string()
-    } else {
-        format!("{} (pid {})", lock.kind, lock.pid)
-    };
-    Some(format!("🔒 {}", label))
+    let liveness = if lock_is_live(&lock) { "alive" } else { "dead" };
+    Some(format!("🔒 {} (pid {}, {})", lock.id, lock.pid, liveness))
 }
 
 #[cfg(test)]
@@ -169,17 +211,18 @@ mod tests {
     fn write_and_read_lock_roundtrip() {
         let dir = TempDir::new().unwrap();
         let lp = dir.path().join("worktrees").join("branch").join("fp-lock");
-        write_lock(&lp, 12345, "agent").unwrap();
+        write_lock(&lp, 12345, "agent", "myagent").unwrap();
         let lock = read_lock(&lp).expect("lock should be readable after write");
         assert_eq!(lock.pid, 12345);
         assert_eq!(lock.kind, "agent");
+        assert_eq!(lock.id, "myagent");
     }
 
     #[test]
     fn remove_lock_cleans_up() {
         let dir = TempDir::new().unwrap();
         let lp = dir.path().join("fp-lock");
-        write_lock(&lp, 9999, "watch").unwrap();
+        write_lock(&lp, 9999, "watch", "watch").unwrap();
         assert!(lp.exists());
         remove_lock(&lp).unwrap();
         assert!(!lp.exists());
@@ -197,13 +240,13 @@ mod tests {
 
     #[test]
     fn lock_is_live_with_current_pid() {
-        let lock = LockInfo { pid: std::process::id(), kind: "agent".into() };
+        let lock = LockInfo { pid: std::process::id(), kind: "agent".into(), id: "test".into() };
         assert!(lock_is_live(&lock));
     }
 
     #[test]
     fn lock_is_live_with_dead_pid() {
-        let lock = LockInfo { pid: 999_999_999, kind: "agent".into() };
+        let lock = LockInfo { pid: 999_999_999, kind: "agent".into(), id: "test".into() };
         assert!(!lock_is_live(&lock));
     }
 
@@ -323,23 +366,26 @@ mod tests {
     }
 
     #[test]
-    fn check_target_lock_clears_stale_lock() {
+    fn check_target_lock_errors_on_stale_lock() {
         let (_base, _repo, git_dir) = make_repo("myrepo");
         let lp = lock_path(&git_dir, "feat/auth");
-        write_lock(&lp, 999_999_999, "agent").unwrap();
-        check_target_lock(&git_dir, "feat/auth").expect("stale lock should be cleared");
-        assert!(!lp.exists(), "stale lock file must be removed");
+        write_lock(&lp, 999_999_999, "agent", "old-session").unwrap();
+        let result = check_target_lock(&git_dir, "feat/auth");
+        assert!(result.is_err(), "stale lock must still block switch");
+        assert!(lp.exists(), "stale lock file must NOT be auto-removed");
+        assert!(result.unwrap_err().to_string().contains("locked"),
+            "error must mention 'locked'");
     }
 
     #[test]
     fn check_target_lock_fails_when_live_lock() {
         let (_base, _repo, git_dir) = make_repo("myrepo");
         let lp = lock_path(&git_dir, "feat/auth");
-        write_lock(&lp, std::process::id(), "agent").unwrap();
+        write_lock(&lp, std::process::id(), "agent", "live-session").unwrap();
         let result = check_target_lock(&git_dir, "feat/auth");
         assert!(result.is_err(), "live lock must block switch");
-        assert!(result.unwrap_err().to_string().contains("locked by PID"),
-            "error must mention 'locked by PID'");
+        assert!(result.unwrap_err().to_string().contains("locked"),
+            "error must mention 'locked'");
     }
 
     #[test]
@@ -349,35 +395,42 @@ mod tests {
     }
 
     #[test]
-    fn lock_status_shows_you_for_current_pid() {
+    fn lock_status_shows_id_and_alive_for_live_pid() {
         let (_base, _repo, git_dir) = make_repo("myrepo");
         let lp = lock_path(&git_dir, "feat/auth");
-        write_lock(&lp, std::process::id(), "agent").unwrap();
-        let status = lock_status(&git_dir, "feat/auth").expect("lock status must be present");
-        assert!(status.contains("you"), "lock status for current pid must say 'you', got: {}", status);
-    }
-
-    #[test]
-    fn lock_status_shows_pid_for_other_process() {
-        let (_base, _repo, git_dir) = make_repo("myrepo");
-        let lp = lock_path(&git_dir, "feat/auth");
-        // Spawn a real child process and use its PID so kill -0 succeeds
         let mut child = std::process::Command::new("sleep").arg("10").spawn().unwrap();
         let child_pid = child.id();
-        write_lock(&lp, child_pid, "agent").unwrap();
+        write_lock(&lp, child_pid, "agent", "my-session").unwrap();
         let status = lock_status(&git_dir, "feat/auth").expect("lock status must be present");
         child.kill().ok();
-        assert!(status.contains(&format!("pid {}", child_pid)),
-            "lock status for other pid must show pid, got: {}", status);
+        assert!(status.contains("my-session"), "lock status must show id, got: {}", status);
+        assert!(status.contains(&format!("pid {}", child_pid)), "lock status must show pid, got: {}", status);
+        assert!(status.contains("alive"), "lock status must say 'alive' for live pid, got: {}", status);
     }
 
     #[test]
-    fn parent_pid_differs_from_self_pid() {
-        let ppid = crate::worktree::parent_pid();
+    fn lock_status_shows_id_and_dead_for_dead_pid() {
+        let (_base, _repo, git_dir) = make_repo("myrepo");
+        let lp = lock_path(&git_dir, "feat/auth");
+        write_lock(&lp, 999_999_999, "agent", "dead-session").unwrap();
+        let status = lock_status(&git_dir, "feat/auth").expect("lock status must be present for dead lock");
+        assert!(status.contains("dead-session"), "lock status must show id, got: {}", status);
+        assert!(status.contains("dead"), "lock status must say 'dead' for dead pid, got: {}", status);
+    }
+
+    #[test]
+    fn lock_status_none_when_no_lock_file() {
+        let (_base, _repo, git_dir) = make_repo("myrepo");
+        assert!(lock_status(&git_dir, "feat/auth").is_none());
+    }
+
+    #[test]
+    fn session_anchor_pid_returns_live_non_self_pid() {
+        let anchor = crate::worktree::session_anchor_pid();
         let self_pid = std::process::id();
-        assert_ne!(ppid, self_pid,
-            "parent_pid() must return PPID not self PID; got ppid={} self={}", ppid, self_pid);
-        assert!(crate::worktree::pid_is_alive(ppid),
-            "parent_pid() must return a live process, got: {}", ppid);
+        assert_ne!(anchor, self_pid,
+            "session_anchor_pid() must not return self PID; got anchor={} self={}", anchor, self_pid);
+        assert!(crate::worktree::pid_is_alive(anchor),
+            "session_anchor_pid() must return a live process, got: {}", anchor);
     }
 }
