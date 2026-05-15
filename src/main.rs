@@ -335,15 +335,8 @@ fn notify_macos_titled(title: &str, msg: &str) {
 }
 
 fn git_dir() -> Result<PathBuf> {
-    let output = std::process::Command::new("git")
-        .args(["rev-parse", "--git-dir"])
-        .output()
-        .context("failed to run git")?;
-    if !output.status.success() {
-        anyhow::bail!("not in a git repository");
-    }
-    let path = String::from_utf8(output.stdout)?.trim().to_string();
-    Ok(PathBuf::from(path))
+    let cwd = std::env::current_dir().context("failed to get current directory")?;
+    worktree::common_git_dir(&cwd).context("not in a git repository")
 }
 
 fn repo_root() -> Result<PathBuf> {

@@ -7,6 +7,19 @@ pub struct LockInfo {
     pub kind: String,
 }
 
+/// Returns the common (main) git dir for the repo, even when called from inside a worktree.
+/// Equivalent to `git rev-parse --git-common-dir`.
+pub fn common_git_dir(cwd: &Path) -> anyhow::Result<PathBuf> {
+    let out = std::process::Command::new("git")
+        .args(["rev-parse", "--git-common-dir"])
+        .current_dir(cwd)
+        .output()?;
+    anyhow::ensure!(out.status.success(), "not in a git repository");
+    let raw = PathBuf::from(String::from_utf8(out.stdout)?.trim().to_string());
+    // git may return a relative path; resolve it against cwd
+    Ok(if raw.is_absolute() { raw } else { cwd.join(raw) })
+}
+
 /// Returns the worktree directory for a branch: sibling to repo root named `<repo>-worktrees/<branch>`.
 pub fn worktree_path(repo_root: &Path, branch: &str) -> PathBuf {
     let name = repo_root.file_name().unwrap_or_default().to_string_lossy();
@@ -171,6 +184,33 @@ mod tests {
     fn lock_is_live_with_dead_pid() {
         let lock = LockInfo { pid: 999_999_999, kind: "agent".into() };
         assert!(!lock_is_live(&lock));
+    }
+
+    #[test]
+    fn common_git_dir_returns_main_git_from_worktree() {
+        let base = TempDir::new().unwrap();
+        let repo = base.path().join("myrepo");
+        fs::create_dir_all(&repo).unwrap();
+        std::process::Command::new("git").args(["init"]).current_dir(&repo).output().unwrap();
+        std::process::Command::new("git").args(["config", "user.email", "t@t.com"]).current_dir(&repo).output().unwrap();
+        std::process::Command::new("git").args(["config", "user.name", "T"]).current_dir(&repo).output().unwrap();
+        // Need at least one commit before creating a worktree
+        fs::write(repo.join("f.txt"), "x").unwrap();
+        std::process::Command::new("git").args(["add", "."]).current_dir(&repo).output().unwrap();
+        std::process::Command::new("git").args(["commit", "-m", "init"]).current_dir(&repo).output().unwrap();
+        std::process::Command::new("git").args(["branch", "feat"]).current_dir(&repo).output().unwrap();
+        let wt = base.path().join("wt");
+        std::process::Command::new("git").args(["worktree", "add", wt.to_str().unwrap(), "feat"]).current_dir(&repo).output().unwrap();
+
+        let from_main = common_git_dir(&repo).expect("common_git_dir must succeed from main repo");
+        let from_wt = common_git_dir(&wt).expect("common_git_dir must succeed from worktree");
+
+        // Both should resolve to the same directory (the main .git)
+        assert_eq!(
+            fs::canonicalize(&from_main).unwrap(),
+            fs::canonicalize(&from_wt).unwrap(),
+            "common_git_dir must return the same main .git from both main repo and worktree"
+        );
     }
 
     #[test]
