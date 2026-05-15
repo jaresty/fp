@@ -10,10 +10,19 @@ reqwest = { version = "0.12", features = ["blocking", "json", "rustls-tls", "mul
 clap = { version = "4", features = ["derive"] }
 anyhow = "1"
 dirs = "5"
-bench_scraper = "0.4"
 time = "0.3"
+aes = "0.8"
+cbc = { version = "0.1", features = ["alloc"] }
+pbkdf2 = "0.11"
+sha-1 = "0.10"
+hmac = "0.12"
+rusqlite = "0.28"
+
+[target.'cfg(target_os = "macos")'.dependencies]
+security-framework = "2"
 
 [dev-dependencies]
 tempfile = "3"
 mockito = "1"
 cargo-husky = { version = "1", default-features = false, features = ["user-hooks"] }
+rusqlite = "0.28"

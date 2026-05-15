@@ -210,7 +210,15 @@ fn resolve_demo_urls(client: &github::GithubClient, owner: &str, repo: &str, dem
             urls.push(demo.clone());
         } else {
             let session = std::env::var("GITHUB_USER_SESSION")
-                .or_else(|_| github::extract_github_session_from_browser())
+                .or_else(|_| {
+                    let db = std::env::var("CHROME_COOKIES_PATH")
+                        .map(std::path::PathBuf::from)
+                        .unwrap_or_else(|_| {
+                            dirs::home_dir().unwrap_or_default()
+                                .join("Library/Application Support/Google/Chrome/Default/Cookies")
+                        });
+                    github::extract_github_session_from_browser_with_chrome_db(&db)
+                })
                 .map_err(|_| anyhow::anyhow!(
                     "no GitHub session found — set GITHUB_USER_SESSION env var or log into GitHub in a supported browser (Chrome, Firefox, Safari)"
                 ))?;
@@ -952,23 +960,18 @@ mod tests {
     #[test]
     fn resolve_demo_urls_file_path_errors_naming_github_user_session_when_no_cookie_found() {
         // SAFETY: single-threaded test, no concurrent env access
-        unsafe { std::env::remove_var("GITHUB_USER_SESSION"); }
-        let client = github::GithubClient::with_base_url("tok".into(), "http://localhost:1".into());
-        // This test passes if: (a) browser has a cookie (upload fails for different reason — not our concern here)
-        // or (b) browser has no cookie, error mentions GITHUB_USER_SESSION
-        // We only assert the GITHUB_USER_SESSION mention when the error is about missing session
-        let result = resolve_demo_urls(&client, "owner", "repo", &["some_image.png".to_string()]);
-        match result {
-            Ok(_) => {} // browser had a valid cookie and upload "succeeded" (unlikely in test env)
-            Err(e) => {
-                let msg = e.to_string();
-                // If it's a session-not-found error, it must mention GITHUB_USER_SESSION
-                if msg.contains("session") || msg.contains("cookie") || msg.contains("browser") {
-                    assert!(msg.contains("GITHUB_USER_SESSION"),
-                        "session error must mention GITHUB_USER_SESSION, got: {}", msg);
-                }
-            }
+        unsafe {
+            std::env::remove_var("GITHUB_USER_SESSION");
+            // Point Chrome DB to nonexistent path so Keychain is never accessed in tests
+            std::env::set_var("CHROME_COOKIES_PATH", "/nonexistent/chrome/Cookies");
         }
+        let client = github::GithubClient::with_base_url("tok".into(), "http://localhost:1".into());
+        let result = resolve_demo_urls(&client, "owner", "repo", &["some_image.png".to_string()]);
+        unsafe { std::env::remove_var("CHROME_COOKIES_PATH"); }
+        assert!(result.is_err(), "expected error when no session and no Chrome DB");
+        let msg = result.unwrap_err().to_string();
+        assert!(msg.contains("GITHUB_USER_SESSION"),
+            "error must mention GITHUB_USER_SESSION, got: {}", msg);
     }
 
 }

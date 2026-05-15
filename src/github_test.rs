@@ -2202,32 +2202,58 @@ mod tests {
         assert_eq!(method, "squash", "expected squash preferred when multiple methods allowed");
     }
 
-    // ADR-007: extract_github_session_from_browser with injected empty cookie list returns Err
+    // ADR-007: extract_github_session_from_browser_with_chrome_db errors immediately when db path absent (no Keychain call)
     #[test]
-    fn extract_github_session_from_browser_errors_when_no_github_cookie() {
-        let cookies: Vec<bench_scraper::Cookie> = vec![];
-        let result = crate::github::extract_session_from_cookies(&cookies);
-        assert!(result.is_err(), "expected Err when no github.com user_session cookie found");
+    fn extract_github_session_with_absent_db_errors_without_keychain() {
+        let result = crate::github::extract_github_session_from_browser_with_chrome_db(
+            std::path::Path::new("/nonexistent/path/Cookies")
+        );
+        assert!(result.is_err(), "must return Err when Chrome DB path does not exist");
+        let msg = result.unwrap_err().to_string();
+        assert!(msg.contains("GITHUB_USER_SESSION") || msg.contains("Chrome"),
+            "error must mention GITHUB_USER_SESSION or Chrome, got: {}", msg);
     }
 
-    // ADR-007: extract_github_session_from_browser with matching cookie returns value
+    // ADR-007: derive_chrome_aes_key produces correct PBKDF2-SHA1 key
     #[test]
-    fn extract_github_session_from_browser_returns_value_when_cookie_present() {
-        use bench_scraper::Cookie;
-        let cookie = Cookie {
-            host: "github.com".to_string(),
-            path: "/".to_string(),
-            name: "user_session".to_string(),
-            value: "abc123".to_string(),
-            is_secure: true,
-            is_http_only: true,
-            creation_time: time::OffsetDateTime::now_utc(),
-            expiration_time: None,
-            same_site: None,
-            last_accessed: None,
-        };
-        let result = crate::github::extract_session_from_cookies(&[cookie]);
-        assert_eq!(result.unwrap(), "abc123");
+    fn derive_chrome_aes_key_produces_known_vector() {
+        let key = crate::github::derive_chrome_aes_key(b"testpassword");
+        // PBKDF2-SHA1(password="testpassword", salt="saltysalt", iterations=1003, dklen=16)
+        let expected: [u8; 16] = [0x6f, 0xbf, 0xc7, 0xe7, 0x02, 0x52, 0x90, 0xf4,
+                                   0x7d, 0x9c, 0x2a, 0x84, 0xd6, 0x7d, 0x5f, 0xd5];
+        assert_eq!(key, expected, "PBKDF2-SHA1 key must match known vector for password=testpassword");
+    }
+
+    // ADR-007: decrypt_chrome_cookie decrypts v10-prefixed AES-128-CBC value
+    #[test]
+    fn decrypt_chrome_cookie_decrypts_aes_cbc_value() {
+        let key = crate::github::derive_chrome_aes_key(b"testpassword");
+        // v10 + 16-space IV + AES-128-CBC ciphertext of "abc123\x0a*9" (PKCS7 padded to 16 bytes)
+        // Produced by: openssl enc -aes-128-cbc -K 6fbfc7e7025290f47d9c2a84d67d5fd5 -iv 20*16 -nosalt
+        // v10 prefix + ciphertext (IV is always 16 spaces, hardcoded, not stored)
+        let encrypted: Vec<u8> = vec![
+            0x76, 0x31, 0x30, // "v10"
+            0x78, 0xb5, 0xed, 0x43, 0x5d, 0xa3, 0xdd, 0x82, // ciphertext (16 bytes)
+            0x11, 0xaa, 0x51, 0xd4, 0xc1, 0x47, 0x1f, 0x01,
+        ];
+        let result = crate::github::decrypt_chrome_cookie(&encrypted, &key).unwrap();
+        assert_eq!(result, "abc123", "decrypted value must equal original plaintext");
+    }
+
+    // ADR-007: read_chrome_user_session_encrypted reads blob from Chrome cookie SQLite schema
+    #[test]
+    fn read_chrome_user_session_encrypted_reads_from_sqlite() {
+        use tempfile::NamedTempFile;
+        use rusqlite::Connection;
+        let f = NamedTempFile::new().unwrap();
+        let conn = Connection::open(f.path()).unwrap();
+        conn.execute_batch("CREATE TABLE cookies (host_key TEXT, name TEXT, encrypted_value BLOB)").unwrap();
+        conn.execute(
+            "INSERT INTO cookies (host_key, name, encrypted_value) VALUES ('github.com', 'user_session', ?1)",
+            rusqlite::params![b"testblob".as_ref()],
+        ).unwrap();
+        let blob = crate::github::read_chrome_user_session_encrypted(f.path()).unwrap();
+        assert_eq!(blob, b"testblob", "must return the encrypted_value blob from cookies table");
     }
 
     // ADR-007: parse_upload_token extracts token from HTML
