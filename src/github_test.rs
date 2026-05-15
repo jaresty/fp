@@ -21,7 +21,8 @@ mod tests {
                 "number": 42,
                 "title": "my PR",
                 "draft": false,
-                "head": { "ref": "fix/foo" }
+                "head": { "ref": "fix/foo" },
+                "user": { "login": "author" }
             }"#,
             )
             .create();
@@ -72,7 +73,7 @@ mod tests {
             .mock("GET", "/repos/owner/repo/pulls/1")
             .with_status(200)
             .with_header("content-type", "application/json")
-            .with_body(r#"{"number":1,"title":"draft","draft":true,"head":{"ref":"wip"}}"#)
+            .with_body(r#"{"number":1,"title":"draft","draft":true,"head":{"ref":"wip"},"user":{"login":"author"}}"#)
             .create();
         server
             .mock("GET", "/repos/owner/repo/commits/wip/check-runs")
@@ -109,7 +110,7 @@ mod tests {
         let mut server = mockito::Server::new();
         server.mock("GET", "/repos/owner/repo/pulls/5")
             .with_status(200).with_header("content-type","application/json")
-            .with_body(r#"{"number":5,"title":"t","draft":false,"head":{"ref":"mybranch","sha":""},"base":{"ref":"main"}}"#)
+            .with_body(r#"{"number":5,"title":"t","draft":false,"head":{"ref":"mybranch","sha":""},"base":{"ref":"main"},"user":{"login":"author"}}"#)
             .create();
         server
             .mock("GET", "/repos/owner/repo/commits/mybranch/check-runs")
@@ -168,7 +169,7 @@ mod tests {
         let mut server = mockito::Server::new();
         server.mock("GET", "/repos/owner/repo/pulls/55")
             .with_status(200).with_header("content-type","application/json")
-            .with_body(r#"{"number":55,"title":"t","draft":false,"head":{"ref":"br","sha":""},"base":{"ref":"main"}}"#)
+            .with_body(r#"{"number":55,"title":"t","draft":false,"head":{"ref":"br","sha":""},"base":{"ref":"main"},"user":{"login":"author"}}"#)
             .create();
         server.mock("GET", "/repos/owner/repo/commits/br/check-runs")
             .with_status(200).with_header("content-type","application/json")
@@ -206,7 +207,7 @@ mod tests {
             .mock("GET", "/repos/owner/repo/pulls/6")
             .with_status(200)
             .with_header("content-type", "application/json")
-            .with_body(r#"{"number":6,"title":"t","draft":false,"head":{"ref":"b"}}"#)
+            .with_body(r#"{"number":6,"title":"t","draft":false,"head":{"ref":"b"},"user":{"login":"author"}}"#)
             .create();
         server
             .mock("GET", "/repos/owner/repo/commits/b/check-runs")
@@ -475,7 +476,7 @@ mod tests {
             .mock("GET", "/repos/owner/repo/pulls/8")
             .with_status(200)
             .with_header("content-type", "application/json")
-            .with_body(r#"{"number":8,"title":"t","draft":false,"head":{"ref":"b"}}"#)
+            .with_body(r#"{"number":8,"title":"t","draft":false,"head":{"ref":"b"},"user":{"login":"author"}}"#)
             .create();
         server
             .mock("GET", "/repos/owner/repo/commits/b/check-runs")
@@ -514,7 +515,7 @@ mod tests {
             .mock("GET", "/repos/owner/repo/pulls/9")
             .with_status(200)
             .with_header("content-type", "application/json")
-            .with_body(r#"{"number":9,"title":"t","draft":false,"head":{"ref":"b"}}"#)
+            .with_body(r#"{"number":9,"title":"t","draft":false,"head":{"ref":"b"},"user":{"login":"author"}}"#)
             .create();
         server
             .mock("GET", "/repos/owner/repo/commits/b/check-runs")
@@ -566,7 +567,7 @@ mod tests {
             .mock("GET", "/repos/owner/repo/pulls/10")
             .with_status(200)
             .with_header("content-type", "application/json")
-            .with_body(r#"{"number":10,"title":"t","draft":false,"head":{"ref":"b"}}"#)
+            .with_body(r#"{"number":10,"title":"t","draft":false,"head":{"ref":"b"},"user":{"login":"author"}}"#)
             .create();
         server
             .mock("GET", "/repos/owner/repo/commits/b/check-runs")
@@ -823,7 +824,7 @@ mod tests {
             .with_status(200)
             .with_header("content-type", "application/json")
             .with_body(
-                r#"{"number":42,"title":"my feature","draft":false,"head":{"ref":"feat/thing"}}"#,
+                r#"{"number":42,"title":"my feature","draft":false,"head":{"ref":"feat/thing"},"user":{"login":"author"}}"#,
             )
             .create();
 
@@ -1761,7 +1762,7 @@ mod tests {
 
     fn minimal_pr_mocks(server: &mut mockito::Server, pr_number: u64, branch: &str) {
         let pr_body = format!(
-            r#"{{"number":{pr},"title":"t","draft":false,"head":{{"ref":"{br}","sha":""}},"base":{{"ref":"main"}}}}"#,
+            r#"{{"number":{pr},"title":"t","draft":false,"head":{{"ref":"{br}","sha":""}},"base":{{"ref":"main"}},"user":{{"login":"author"}}}}"#,
             pr = pr_number, br = branch
         );
         let encoded_branch = branch.replace('/', "%2F");
@@ -2295,7 +2296,7 @@ mod tests {
     fn pr_mock_with_mergeable(server: &mut mockito::Server, mergeable: &str) {
         server.mock("GET", "/repos/owner/repo/pulls/1")
             .with_status(200).with_header("content-type", "application/json")
-            .with_body(format!(r#"{{"number":1,"title":"t","draft":false,"head":{{"ref":"b"}},"base":{{"ref":"main"}},"mergeable":{}}}"#, mergeable))
+            .with_body(format!(r#"{{"number":1,"title":"t","draft":false,"head":{{"ref":"b"}},"base":{{"ref":"main"}},"user":{{"login":"author"}},"mergeable":{}}}"#, mergeable))
             .create();
         server.mock("GET", "/repos/owner/repo/commits/b/check-runs")
             .with_status(200).with_header("content-type", "application/json")
@@ -2336,5 +2337,32 @@ mod tests {
         pr_mock_with_mergeable(&mut server, "null");
         let pr = mock_client(&server).fetch_pr("owner", "repo", 1).unwrap();
         assert!(!pr.has_merge_conflict, "expected has_merge_conflict=false when mergeable=null");
+    }
+
+    #[test]
+    fn fetch_pr_errors_when_pr_author_missing() {
+        let mut server = mockito::Server::new();
+        server.mock("GET", "/repos/owner/repo/pulls/99").with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body(r#"{"number": 99, "title": "t", "draft": false, "head": {"ref": "branch", "sha": "abc"}, "base": {"ref": "main"}}"#)
+            .create();
+        server.mock("GET", "/repos/owner/repo/commits/branch/check-runs").with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body(r#"{"check_runs": []}"#).create();
+        server.mock("GET", "/repos/owner/repo/branches/main/protection").with_status(404).create();
+        server.mock("GET", "/repos/owner/repo/commits/abc/statuses").with_status(200)
+            .with_header("content-type", "application/json").with_body("[]").create();
+        server.mock("GET", "/repos/owner/repo/pulls/99/reviews?per_page=100&page=1").with_status(200)
+            .with_header("content-type", "application/json").with_body("[]").create();
+        server.mock("GET", "/repos/owner/repo/pulls/99/requested_reviewers").with_status(200)
+            .with_header("content-type", "application/json").with_body(r#"{"users":[],"teams":[]}"#).create();
+        server.mock("GET", "/repos/owner/repo/issues/99/comments?per_page=100&page=1").with_status(200)
+            .with_header("content-type", "application/json").with_body("[]").create();
+        server.mock("GET", "/repos/owner/repo/pulls/99/comments?per_page=100&page=1").with_status(200)
+            .with_header("content-type", "application/json").with_body("[]").create();
+        let result = mock_client(&server).fetch_pr("owner", "repo", 99);
+        assert!(result.is_err(), "fetch_pr must error when user.login is absent");
+        assert!(result.unwrap_err().to_string().contains("could not determine PR author"),
+            "error must mention 'could not determine PR author'");
     }
 }

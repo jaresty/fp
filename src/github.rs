@@ -462,6 +462,7 @@ impl GithubClient {
 
         // 4b. Review bodies → threads (CHANGES_REQUESTED/COMMENTED with non-empty body, non-bot, non-author)
         let pr_author = pr_json["user"]["login"].as_str().unwrap_or("").to_string();
+        anyhow::ensure!(!pr_author.is_empty(), "could not determine PR author from GitHub response");
 
         // Fetch issue comments early so we can use them for review body thread state too
         let issue_comments_json = self.get_paginated(&format!("/repos/{}/{}/issues/{}/comments", owner, repo, pr_number))?;
