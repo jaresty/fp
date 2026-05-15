@@ -596,7 +596,7 @@ fn main() -> Result<()> {
             }
 
             let lp = worktree::lock_path(&git_dir, &branch);
-            worktree::write_lock(&lp, std::process::id(), "agent")?;
+            worktree::write_lock(&lp, worktree::parent_pid(), "agent")?;
             println!("{}", wt_path.display());
         }
 

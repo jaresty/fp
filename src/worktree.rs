@@ -48,6 +48,17 @@ pub fn read_lock(lock_path: &Path) -> Option<LockInfo> {
     serde_json::from_str(&data).ok()
 }
 
+/// Returns the parent process ID (PPID) of the current process.
+pub fn parent_pid() -> u32 {
+    std::process::Command::new("ps")
+        .args(["-o", "ppid=", "-p", &std::process::id().to_string()])
+        .output()
+        .ok()
+        .and_then(|o| String::from_utf8(o.stdout).ok())
+        .and_then(|s| s.trim().parse().ok())
+        .unwrap_or(std::process::id())
+}
+
 /// Returns true if the process with the given PID is running.
 pub fn pid_is_alive(pid: u32) -> bool {
     std::process::Command::new("kill")
@@ -327,5 +338,15 @@ mod tests {
         child.kill().ok();
         assert!(status.contains(&format!("pid {}", child_pid)),
             "lock status for other pid must show pid, got: {}", status);
+    }
+
+    #[test]
+    fn parent_pid_differs_from_self_pid() {
+        let ppid = crate::worktree::parent_pid();
+        let self_pid = std::process::id();
+        assert_ne!(ppid, self_pid,
+            "parent_pid() must return PPID not self PID; got ppid={} self={}", ppid, self_pid);
+        assert!(crate::worktree::pid_is_alive(ppid),
+            "parent_pid() must return a live process, got: {}", ppid);
     }
 }
