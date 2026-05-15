@@ -513,7 +513,7 @@ fn main() -> Result<()> {
             let branch = tracked.branch.clone();
             let root = repo_root()?;
 
-            if !force && worktree::repo_is_dirty(&root)? {
+            if !force && worktree::repo_is_dirty(&std::env::current_dir()?)? {
                 anyhow::bail!("current worktree has uncommitted changes — commit, stash, or use --force to override");
             }
 

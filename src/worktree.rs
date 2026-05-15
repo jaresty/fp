@@ -174,6 +174,33 @@ mod tests {
     }
 
     #[test]
+    fn dirty_check_detects_dirty_worktree_path() {
+        let dir = TempDir::new().unwrap();
+        // Init a git repo in the tempdir
+        std::process::Command::new("git").args(["init"]).current_dir(dir.path()).output().unwrap();
+        std::process::Command::new("git").args(["config", "user.email", "t@t.com"]).current_dir(dir.path()).output().unwrap();
+        std::process::Command::new("git").args(["config", "user.name", "T"]).current_dir(dir.path()).output().unwrap();
+        // Create and stage a file to make it dirty
+        fs::write(dir.path().join("file.txt"), "hello").unwrap();
+        let is_dirty = repo_is_dirty(dir.path()).expect("repo_is_dirty must succeed on valid git repo");
+        assert!(is_dirty, "dirty_check must return true for a path with uncommitted changes");
+    }
+
+    #[test]
+    fn dirty_check_returns_false_for_clean_repo() {
+        let dir = TempDir::new().unwrap();
+        std::process::Command::new("git").args(["init"]).current_dir(dir.path()).output().unwrap();
+        std::process::Command::new("git").args(["config", "user.email", "t@t.com"]).current_dir(dir.path()).output().unwrap();
+        std::process::Command::new("git").args(["config", "user.name", "T"]).current_dir(dir.path()).output().unwrap();
+        // Commit a file so HEAD exists and tree is clean
+        fs::write(dir.path().join("file.txt"), "hello").unwrap();
+        std::process::Command::new("git").args(["add", "."]).current_dir(dir.path()).output().unwrap();
+        std::process::Command::new("git").args(["commit", "-m", "init"]).current_dir(dir.path()).output().unwrap();
+        let is_dirty = repo_is_dirty(dir.path()).expect("repo_is_dirty must succeed");
+        assert!(!is_dirty, "dirty_check must return false for a clean repo path");
+    }
+
+    #[test]
     fn check_target_lock_passes_when_no_lock() {
         let (_base, _repo, git_dir) = make_repo("myrepo");
         check_target_lock(&git_dir, "feat/auth").expect("no lock should pass");
