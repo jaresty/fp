@@ -582,6 +582,7 @@ impl GithubClient {
 }
 
 
+#[cfg(target_os = "macos")]
 pub fn derive_chrome_aes_key(password: &[u8]) -> [u8; 16] {
     use hmac::Hmac;
     use sha1::Sha1;
@@ -590,6 +591,7 @@ pub fn derive_chrome_aes_key(password: &[u8]) -> [u8; 16] {
     key
 }
 
+#[cfg(target_os = "macos")]
 pub fn decrypt_chrome_cookie(encrypted: &[u8], key: &[u8; 16]) -> Result<String> {
     use aes::cipher::{BlockDecrypt, KeyInit, generic_array::GenericArray};
     use aes::Aes128;
@@ -618,6 +620,7 @@ pub fn decrypt_chrome_cookie(encrypted: &[u8], key: &[u8; 16]) -> Result<String>
     Ok(String::from_utf8(plaintext)?)
 }
 
+#[cfg(target_os = "macos")]
 pub fn read_chrome_user_session_encrypted(db_path: &std::path::Path) -> Result<Vec<u8>> {
     let conn = rusqlite::Connection::open(db_path)?;
     let blob: Vec<u8> = conn.query_row(

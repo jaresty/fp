@@ -2203,6 +2203,7 @@ mod tests {
     }
 
     // ADR-007: extract_github_session_from_browser_with_chrome_db errors immediately when db path absent (no Keychain call)
+    #[cfg(target_os = "macos")]
     #[test]
     fn extract_github_session_with_absent_db_errors_without_keychain() {
         let result = crate::github::extract_github_session_from_browser_with_chrome_db(
@@ -2215,6 +2216,7 @@ mod tests {
     }
 
     // ADR-007: derive_chrome_aes_key produces correct PBKDF2-SHA1 key
+    #[cfg(target_os = "macos")]
     #[test]
     fn derive_chrome_aes_key_produces_known_vector() {
         let key = crate::github::derive_chrome_aes_key(b"testpassword");
@@ -2225,6 +2227,7 @@ mod tests {
     }
 
     // ADR-007: decrypt_chrome_cookie decrypts v10-prefixed AES-128-CBC value
+    #[cfg(target_os = "macos")]
     #[test]
     fn decrypt_chrome_cookie_decrypts_aes_cbc_value() {
         let key = crate::github::derive_chrome_aes_key(b"testpassword");
@@ -2241,6 +2244,7 @@ mod tests {
     }
 
     // ADR-007: read_chrome_user_session_encrypted reads blob from Chrome cookie SQLite schema
+    #[cfg(target_os = "macos")]
     #[test]
     fn read_chrome_user_session_encrypted_reads_from_sqlite() {
         use tempfile::NamedTempFile;
