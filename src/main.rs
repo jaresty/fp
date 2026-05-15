@@ -340,15 +340,8 @@ fn git_dir() -> Result<PathBuf> {
 }
 
 fn repo_root() -> Result<PathBuf> {
-    let output = std::process::Command::new("git")
-        .args(["rev-parse", "--show-toplevel"])
-        .output()
-        .context("failed to run git")?;
-    if !output.status.success() {
-        anyhow::bail!("not in a git repository");
-    }
-    let path = String::from_utf8(output.stdout)?.trim().to_string();
-    Ok(PathBuf::from(path))
+    let cwd = std::env::current_dir().context("failed to get current directory")?;
+    worktree::main_repo_root(&cwd).context("not in a git repository")
 }
 
 fn main() -> Result<()> {

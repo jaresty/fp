@@ -20,6 +20,15 @@ pub fn common_git_dir(cwd: &Path) -> anyhow::Result<PathBuf> {
     Ok(if raw.is_absolute() { raw } else { cwd.join(raw) })
 }
 
+/// Returns the main repo root, even when called from inside a worktree.
+/// Derived as the parent of common_git_dir(), so it always points to the main checkout.
+pub fn main_repo_root(cwd: &Path) -> anyhow::Result<PathBuf> {
+    let git_dir = common_git_dir(cwd)?;
+    git_dir.parent()
+        .map(|p| p.to_path_buf())
+        .ok_or_else(|| anyhow::anyhow!("git common dir has no parent"))
+}
+
 /// Returns the worktree directory for a branch: sibling to repo root named `<repo>-worktrees/<branch>`.
 pub fn worktree_path(repo_root: &Path, branch: &str) -> PathBuf {
     let name = repo_root.file_name().unwrap_or_default().to_string_lossy();
@@ -184,6 +193,31 @@ mod tests {
     fn lock_is_live_with_dead_pid() {
         let lock = LockInfo { pid: 999_999_999, kind: "agent".into() };
         assert!(!lock_is_live(&lock));
+    }
+
+    #[test]
+    fn repo_root_returns_main_root_from_worktree() {
+        let base = TempDir::new().unwrap();
+        let repo = base.path().join("myrepo");
+        fs::create_dir_all(&repo).unwrap();
+        std::process::Command::new("git").args(["init"]).current_dir(&repo).output().unwrap();
+        std::process::Command::new("git").args(["config", "user.email", "t@t.com"]).current_dir(&repo).output().unwrap();
+        std::process::Command::new("git").args(["config", "user.name", "T"]).current_dir(&repo).output().unwrap();
+        fs::write(repo.join("f.txt"), "x").unwrap();
+        std::process::Command::new("git").args(["add", "."]).current_dir(&repo).output().unwrap();
+        std::process::Command::new("git").args(["commit", "-m", "init"]).current_dir(&repo).output().unwrap();
+        std::process::Command::new("git").args(["branch", "feat"]).current_dir(&repo).output().unwrap();
+        let wt = base.path().join("wt");
+        std::process::Command::new("git").args(["worktree", "add", wt.to_str().unwrap(), "feat"]).current_dir(&repo).output().unwrap();
+
+        let root_from_main = main_repo_root(&repo).expect("main_repo_root must succeed from main repo");
+        let root_from_wt = main_repo_root(&wt).expect("main_repo_root must succeed from worktree");
+
+        assert_eq!(
+            fs::canonicalize(&root_from_main).unwrap(),
+            fs::canonicalize(&root_from_wt).unwrap(),
+            "repo_root must equal main repo root from worktree"
+        );
     }
 
     #[test]
