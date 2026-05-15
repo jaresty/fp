@@ -1,7 +1,12 @@
 ---
 name: fp
 description: Use fp (fixpoint) as the actuator when helping a user drive their PRs to merge. fp surfaces blocking tasks, fetches CI logs, manages review threads, and rebases stacked branches. Run fp commands to observe real state before advising on any PR work.
-when_to_use: "Is the user asking about PR status, CI failures, review threads, stacked branches, or how to get a PR merged?"
+when_to_use: |
+  Answer yes to any of:
+  - Is the agent about to navigate into, edit code in, or run tests inside a PR branch?
+  - Is the user asking about PR status, CI failures, review threads, or stacked branches?
+  - Is the user asking how to get a PR merged or marked ready?
+  - Is the agent about to use git worktree, git checkout, or cd to reach a PR branch?
 requires:
   - fp CLI installed and on PATH
   - GITHUB_TOKEN environment variable set
@@ -19,6 +24,7 @@ Running fp commands before giving any advice is **not optional**.
 - Do NOT advise on review threads without first running `fp status <pr>` to see open threads.
 - Do NOT recommend rebasing without first running `fp status --all` to see all tracked PRs.
 - Do NOT proceed if `GITHUB_TOKEN` is not set — tell the user to set it before running any fp command.
+- Do NOT enter a PR branch's worktree using `git worktree add` or `git checkout` directly — always use `fp switch <pr>` to get the canonical absolute path and create the worktree correctly.
 
 If you find yourself drafting advice without having run `fp status`, stop and run it first.
 
@@ -137,6 +143,28 @@ fp watch --once
 # Output: ✓ PR #7 resolved RespondThread: Respond to thread #88
 ```
 
+## Worked Example: Entering a Worktree to Fix Code
+
+User: "Reproduce the CI failure in PR #42 locally and fix it."
+
+```sh
+# Step 1: get the worktree path (creates worktree if needed)
+fp switch 42 --force
+# Output: /Users/me/projects/myrepo-worktrees/feat/my-branch
+
+# Step 2: enter the worktree
+EnterWorktree path=/Users/me/projects/myrepo-worktrees/feat/my-branch
+
+# Step 3: get the failing check details
+fp context 42 ci/test
+
+# Step 4: fix, commit, push — then confirm
+fp watch --wait-for ci-pass
+
+# Step 5: exit worktree when done
+ExitWorktree action=keep
+```
+
 ## Waiting for CI in Agentic Loops
 
 Use `--wait-for` to block until a terminal state rather than polling manually:
@@ -211,6 +239,8 @@ Guards:
 Lock files live in `.git/worktrees/<branch>/fp-lock` — never committed.
 
 ## Agent Worktree Protocol
+
+**Criterion:** Every entry into a PR branch worktree must go through `fp switch` — not `git worktree add` directly — so that lock files are written correctly, the path is canonical, and `fp status` shows the active lock. Non-compliance is observable: `fp status --all` will show no 🔒 lock for the PR.
 
 When an agent needs to work inside a PR's worktree (fix CI, edit code, run tests):
 
