@@ -200,4 +200,62 @@ mod tests {
         let hint = crate::format_conflict_hint("some-branch", &prs);
         assert!(!hint.contains("fps"), "no matching PR should produce no fps hint, got: {}", hint);
     }
+
+    // DM1: check_not_checked_out errors when branch matches current HEAD
+    #[test]
+    fn check_not_checked_out_errors_when_branch_is_current_head() {
+        use tempfile::TempDir;
+        use std::fs;
+        let dir = TempDir::new().unwrap();
+        let path = dir.path();
+        std::process::Command::new("git").args(["init", "-b", "feat/active"]).current_dir(path).output().unwrap();
+        std::process::Command::new("git").args(["config", "user.email", "t@t.com"]).current_dir(path).output().unwrap();
+        std::process::Command::new("git").args(["config", "user.name", "T"]).current_dir(path).output().unwrap();
+        fs::write(path.join("f.txt"), "x").unwrap();
+        std::process::Command::new("git").args(["add", "."]).current_dir(path).output().unwrap();
+        std::process::Command::new("git").args(["commit", "-m", "init"]).current_dir(path).output().unwrap();
+        let result = crate::check_not_checked_out_in_main("feat/active", path);
+        assert!(result.is_err(), "must error when branch is current HEAD");
+        let msg = format!("{}", result.unwrap_err());
+        assert!(msg.contains("checked out in main worktree"), "error must mention 'checked out in main worktree', got: {}", msg);
+        assert!(msg.contains("fps root"), "error must mention 'fps root', got: {}", msg);
+    }
+
+    // DM2: check_not_checked_out passes when branch differs from current HEAD
+    #[test]
+    fn check_not_checked_out_passes_when_branch_differs() {
+        use tempfile::TempDir;
+        use std::fs;
+        let dir = TempDir::new().unwrap();
+        let path = dir.path();
+        std::process::Command::new("git").args(["init", "-b", "main"]).current_dir(path).output().unwrap();
+        std::process::Command::new("git").args(["config", "user.email", "t@t.com"]).current_dir(path).output().unwrap();
+        std::process::Command::new("git").args(["config", "user.name", "T"]).current_dir(path).output().unwrap();
+        fs::write(path.join("f.txt"), "x").unwrap();
+        std::process::Command::new("git").args(["add", "."]).current_dir(path).output().unwrap();
+        std::process::Command::new("git").args(["commit", "-m", "init"]).current_dir(path).output().unwrap();
+        let result = crate::check_not_checked_out_in_main("feat/other", path);
+        assert!(result.is_ok(), "must pass when branch differs from HEAD, got: {:?}", result);
+    }
+
+    // DM3: format_single_pr_status includes lock string when lock present
+    #[test]
+    fn format_single_pr_status_includes_lock_when_present() {
+        use crate::tasks::{Task, TaskType};
+        let tasks = vec![Task {
+            pr: 7, task_type: TaskType::FixCi, blocking: true,
+            description: "Fix ci/test".into(), context_hint: "ci/test".into(),
+        }];
+        let out = crate::format_single_pr_status(7, &tasks, Some("🔒 you"));
+        assert!(out.contains("🔒") || out.contains("you"),
+            "single-pr status must include lock info when present, got: {}", out);
+    }
+
+    // DM3b: format_single_pr_status omits lock when None
+    #[test]
+    fn format_single_pr_status_omits_lock_when_absent() {
+        let tasks: Vec<crate::tasks::Task> = vec![];
+        let out = crate::format_single_pr_status(7, &tasks, None);
+        assert!(!out.contains("🔒"), "single-pr status must not show lock when absent, got: {}", out);
+    }
 }

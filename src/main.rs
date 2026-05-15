@@ -366,6 +366,32 @@ pub fn format_watch_event_json(pr: u64, new: &[tasks::Task], resolved: &[tasks::
     })).unwrap_or_default()
 }
 
+pub fn check_not_checked_out_in_main(branch: &str, dir: &std::path::Path) -> anyhow::Result<()> {
+    let out = std::process::Command::new("git")
+        .args(["rev-parse", "--abbrev-ref", "HEAD"])
+        .current_dir(dir)
+        .output()?;
+    let current = String::from_utf8(out.stdout)?.trim().to_string();
+    if current == branch {
+        anyhow::bail!("'{}' is checked out in main worktree — run fps root first, then fp rebase-stack", branch);
+    }
+    Ok(())
+}
+
+pub fn format_single_pr_status(pr: u64, tasks: &[tasks::Task], lock: Option<&str>) -> String {
+    let lock_str = lock.map(|s| format!("  {}", s)).unwrap_or_default();
+    if tasks.is_empty() {
+        format!("PR #{} is ready.{}", pr, lock_str)
+    } else {
+        let mut lines = vec![format!("PR #{} — {} task(s):{}", pr, tasks.len(), lock_str)];
+        for t in tasks {
+            let flag = if t.blocking { "[blocking]" } else { "[waiting]" };
+            lines.push(format!("  {} {:?}: {}", flag, t.task_type, t.description));
+        }
+        lines.join("\n")
+    }
+}
+
 pub fn format_conflict_hint(branch: &str, prs: &std::collections::HashMap<u64, store::TrackedPr>) -> String {
     if let Some(pr) = prs.values().find(|p| p.branch == branch) {
         format!("  Tip: fps {} to switch to its worktree", pr.number)
@@ -492,19 +518,12 @@ fn main() -> Result<()> {
                         checks: vec![], threads: vec![], has_merge_conflict: false, codeowners_eligibility: Default::default(),
                     });
                 let task_list = generate_tasks(&pr_state);
+                let lock = worktree::lock_status(&git_dir, &tracked.branch);
 
                 if json {
                     println!("{}", serde_json::to_string_pretty(&task_list)?);
                 } else {
-                    if task_list.is_empty() {
-                        println!("PR #{} is ready.", number);
-                    } else {
-                        println!("PR #{} — {} task(s):", number, task_list.len());
-                        for t in &task_list {
-                            let flag = if t.blocking { "[blocking]" } else { "[waiting]" };
-                            println!("  {} {:?}: {}", flag, t.task_type, t.description);
-                        }
-                    }
+                    println!("{}", format_single_pr_status(number, &task_list, lock.as_deref()));
                 }
             }
         }
@@ -564,6 +583,7 @@ fn main() -> Result<()> {
                 anyhow::bail!("current worktree has uncommitted changes — commit, stash, or use --force to override");
             }
 
+            check_not_checked_out_in_main(&branch, &root)?;
             worktree::check_target_lock(&git_dir, &branch)?;
 
             let wt_path = worktree::worktree_path(&root, &branch);
@@ -911,6 +931,9 @@ fn main() -> Result<()> {
             let branches: Vec<String> = state.prs.values().map(|p| p.branch.clone()).collect();
             if branches.is_empty() {
                 return Ok(());
+            }
+            for branch in &branches {
+                check_not_checked_out_in_main(branch, &work_dir)?;
             }
             let parent_of = stack::detect_parent_of(&branches, &work_dir)?;
 
