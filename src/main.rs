@@ -386,10 +386,11 @@ pub fn format_pr_status_all_entry(prefix: &str, number: u64, title: &str, tasks:
     if tasks.is_empty() {
         return format!("{}PR #{} {} — ready{}\n", prefix, number, title, lock);
     }
+    let task_prefix = prefix.replace("└─ ", "   ");
     let mut out = format!("{}PR #{} {} — {} task(s){}\n", prefix, number, title, tasks.len(), lock);
     for t in tasks {
         let flag = if t.blocking { "[blocking]" } else { "[waiting]" };
-        out.push_str(&format!("{}  {} {:?}: {}\n", prefix, flag, t.task_type, t.description));
+        out.push_str(&format!("{}  {} {:?}: {}\n", task_prefix, flag, t.task_type, t.description));
     }
     out
 }
@@ -1671,6 +1672,17 @@ mod tests {
         let tasks = vec![tasks::Task { pr: 4, task_type: tasks::TaskType::FixCi, description: "fix".into(), blocking: true, context_hint: "".into() }];
         let out = format_pr_status_all_entry("  └─ ", 4, "Child PR", &tasks, "");
         assert!(out.starts_with("  └─ "), "must start with prefix, got: {}", out);
+    }
+
+    #[test]
+    fn format_pr_status_all_entry_task_lines_do_not_start_with_tree_connector() {
+        let tasks = vec![tasks::Task { pr: 4, task_type: tasks::TaskType::FixCi, description: "fix".into(), blocking: true, context_hint: "".into() }];
+        let out = format_pr_status_all_entry("  └─ ", 4, "Child PR", &tasks, "");
+        let task_lines: Vec<&str> = out.lines().skip(1).collect();
+        assert!(!task_lines.is_empty(), "must have task lines");
+        for line in &task_lines {
+            assert!(!line.contains("└─"), "task lines must not contain tree connector, got: {}", line);
+        }
     }
 
     fn stack_tree_order_root_has_no_indent() {
