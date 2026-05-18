@@ -388,6 +388,20 @@ pub fn format_watch_event_json(pr: u64, new: &[tasks::Task], resolved: &[tasks::
     })).unwrap_or_default()
 }
 
+pub fn branch_in_main_worktree_warning(branch: &str, dir: &std::path::Path) -> Option<String> {
+    let out = std::process::Command::new("git")
+        .args(["rev-parse", "--abbrev-ref", "HEAD"])
+        .current_dir(dir)
+        .output()
+        .ok()?;
+    let current = String::from_utf8(out.stdout).ok()?.trim().to_string();
+    if current == branch {
+        Some(format!("⚠ skipping {} — checked out in main worktree; run: fp switch <pr> <session> --adopt", branch))
+    } else {
+        None
+    }
+}
+
 pub fn check_not_checked_out_in_main(branch: &str, dir: &std::path::Path) -> anyhow::Result<()> {
     let out = std::process::Command::new("git")
         .args(["rev-parse", "--abbrev-ref", "HEAD"])
@@ -1115,14 +1129,15 @@ fn main() -> Result<()> {
             if branches.is_empty() {
                 return Ok(());
             }
-            for branch in &branches {
-                check_not_checked_out_in_main(branch, &work_dir)?;
-            }
             let parent_of = stack::detect_parent_of(&branches, &work_dir)?;
 
-            // Skip locked branches and their descendants
+            // Skip branches checked out in main worktree (and locked branches) and their descendants
             let directly_locked: std::collections::HashSet<String> = branches.iter()
-                .filter_map(|b| check_branch_lock(&git_dir, b).map(|w| { println!("{}", w); b.clone() }))
+                .filter_map(|b| {
+                    branch_in_main_worktree_warning(b, &work_dir)
+                        .or_else(|| check_branch_lock(&git_dir, b))
+                        .map(|w| { println!("{}", w); b.clone() })
+                })
                 .collect();
             let also_blocked = locked_subtree(&directly_locked, &parent_of);
             for b in &also_blocked {
@@ -1434,6 +1449,26 @@ mod tests {
         ].into();
         let result = locked_subtree(&locked, &parent_of);
         assert!(result.is_empty(), "no descendants when nothing chains from locked");
+    }
+
+    #[test]
+    fn branch_in_main_worktree_warning_contains_adopt_hint() {
+        let tmp = tempfile::tempdir().unwrap();
+        std::process::Command::new("git").args(["init"]).current_dir(tmp.path()).output().unwrap();
+        std::process::Command::new("git").args(["commit", "--allow-empty", "-m", "init"]).current_dir(tmp.path()).env("GIT_AUTHOR_NAME", "t").env("GIT_AUTHOR_EMAIL", "t@t").env("GIT_COMMITTER_NAME", "t").env("GIT_COMMITTER_EMAIL", "t@t").output().unwrap();
+        let head = std::process::Command::new("git").args(["rev-parse", "--abbrev-ref", "HEAD"]).current_dir(tmp.path()).output().unwrap();
+        let branch = String::from_utf8(head.stdout).unwrap().trim().to_string();
+        let warn = branch_in_main_worktree_warning(&branch, tmp.path()).expect("should return Some when branch is checked out");
+        assert!(warn.contains("--adopt"), "warning must contain --adopt, got: {}", warn);
+        assert!(warn.contains(&branch), "warning must contain branch name, got: {}", warn);
+    }
+
+    #[test]
+    fn branch_in_main_worktree_warning_returns_none_when_not_checked_out() {
+        let tmp = tempfile::tempdir().unwrap();
+        std::process::Command::new("git").args(["init"]).current_dir(tmp.path()).output().unwrap();
+        std::process::Command::new("git").args(["commit", "--allow-empty", "-m", "init"]).current_dir(tmp.path()).env("GIT_AUTHOR_NAME", "t").env("GIT_AUTHOR_EMAIL", "t@t").env("GIT_COMMITTER_NAME", "t").env("GIT_COMMITTER_EMAIL", "t@t").output().unwrap();
+        assert!(branch_in_main_worktree_warning("feat/other-branch", tmp.path()).is_none());
     }
 
     #[test]
