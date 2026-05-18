@@ -163,6 +163,30 @@ pub fn check_target_lock(git_dir: &Path, branch: &str) -> anyhow::Result<()> {
 
 /// Returns a short lock status string for display in watch/status output.
 /// Returns None only if no lock file exists. Shows alive/dead for all locks.
+/// Parse `git worktree list --porcelain` output and return the checkout path for `branch`.
+pub fn parse_worktree_list(output: &str, branch: &str) -> Option<PathBuf> {
+    let target = format!("refs/heads/{}", branch);
+    let mut current_path: Option<PathBuf> = None;
+    for line in output.lines() {
+        if let Some(path) = line.strip_prefix("worktree ") {
+            current_path = Some(PathBuf::from(path));
+        } else if line == format!("branch {}", target) {
+            return current_path;
+        }
+    }
+    None
+}
+
+/// Find the worktree directory where `branch` is currently checked out, if any.
+pub fn find_worktree_path(branch: &str, repo_root: &Path) -> Option<PathBuf> {
+    let out = std::process::Command::new("git")
+        .args(["worktree", "list", "--porcelain"])
+        .current_dir(repo_root)
+        .output().ok()?;
+    let text = String::from_utf8(out.stdout).ok()?;
+    parse_worktree_list(&text, branch)
+}
+
 pub fn lock_status(git_dir: &Path, branch: &str) -> Option<String> {
     let lp = lock_path(git_dir, branch);
     let lock = read_lock(&lp)?;
@@ -422,6 +446,21 @@ mod tests {
     fn lock_status_none_when_no_lock_file() {
         let (_base, _repo, git_dir) = make_repo("myrepo");
         assert!(lock_status(&git_dir, "feat/auth").is_none());
+    }
+
+    #[test]
+    fn parse_worktree_list_returns_path_for_checked_out_branch() {
+        let output = "worktree /projects/main\nHEAD abc123\nbranch refs/heads/main\n\nworktree /projects/worktrees/feature/foo\nHEAD def456\nbranch refs/heads/feature/foo\n\n";
+        let result = parse_worktree_list(output, "feature/foo");
+        assert_eq!(result, Some(PathBuf::from("/projects/worktrees/feature/foo")),
+            "parse_worktree_list must return path for checked-out branch");
+    }
+
+    #[test]
+    fn parse_worktree_list_returns_none_for_absent_branch() {
+        let output = "worktree /projects/main\nHEAD abc123\nbranch refs/heads/main\n\n";
+        let result = parse_worktree_list(output, "feature/foo");
+        assert!(result.is_none(), "parse_worktree_list must return None for absent branch");
     }
 
     #[test]
