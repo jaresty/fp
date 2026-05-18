@@ -380,6 +380,20 @@ pub fn format_watch_initial_state(pr: u64, title: &str, task_list: &[tasks::Task
     out
 }
 
+/// Formats one PR's status line(s) for `fp status --all` output (non-JSON).
+/// Returns header + task detail lines when tasks are present, or a "ready" line when empty.
+pub fn format_pr_status_all_entry(prefix: &str, number: u64, title: &str, tasks: &[tasks::Task], lock: &str) -> String {
+    if tasks.is_empty() {
+        return format!("{}PR #{} {} — ready{}\n", prefix, number, title, lock);
+    }
+    let mut out = format!("{}PR #{} {} — {} task(s){}\n", prefix, number, title, tasks.len(), lock);
+    for t in tasks {
+        let flag = if t.blocking { "[blocking]" } else { "[waiting]" };
+        out.push_str(&format!("{}  {} {:?}: {}\n", prefix, flag, t.task_type, t.description));
+    }
+    out
+}
+
 pub fn format_watch_event_json(pr: u64, new: &[tasks::Task], resolved: &[tasks::Task]) -> String {
     serde_json::to_string(&serde_json::json!({
         "pr": pr,
@@ -675,10 +689,8 @@ fn main() -> Result<()> {
                         .unwrap_or_default();
                     if json {
                         println!("{}", serde_json::to_string_pretty(&tasks).unwrap());
-                    } else if tasks.is_empty() {
-                        println!("{}PR #{} {} — ready{}", prefix, tracked.number, tracked.title, lock);
                     } else {
-                        println!("{}PR #{} {} — {} task(s){}", prefix, tracked.number, tracked.title, tasks.len(), lock);
+                        print!("{}", format_pr_status_all_entry(&prefix, tracked.number, &tracked.title, &tasks, &lock));
                     }
                 }
             } else {
@@ -1624,6 +1636,34 @@ mod tests {
     }
 
     #[test]
+    #[test]
+    fn format_pr_status_all_entry_shows_tasks_inline() {
+        let tasks = vec![
+            tasks::Task { pr: 7, task_type: tasks::TaskType::FixCi, description: "Fix ci/test".into(), blocking: true, context_hint: "".into() },
+            tasks::Task { pr: 7, task_type: tasks::TaskType::AwaitingReview, description: "Waiting for review".into(), blocking: false, context_hint: "".into() },
+        ];
+        let out = format_pr_status_all_entry("", 7, "My PR", &tasks, "");
+        assert!(out.contains("PR #7"), "must contain PR number, got: {}", out);
+        assert!(out.contains("[blocking]"), "must show blocking flag, got: {}", out);
+        assert!(out.contains("Fix ci/test"), "must show task description, got: {}", out);
+        assert!(out.contains("[waiting]"), "must show waiting flag, got: {}", out);
+        assert!(out.contains("Waiting for review"), "must show waiting task, got: {}", out);
+    }
+
+    #[test]
+    fn format_pr_status_all_entry_shows_ready_when_no_tasks() {
+        let out = format_pr_status_all_entry("", 3, "Clean PR", &[], "");
+        assert!(out.contains("ready"), "must say ready when no tasks, got: {}", out);
+        assert!(!out.contains("[blocking]"), "must not show blocking when no tasks, got: {}", out);
+    }
+
+    #[test]
+    fn format_pr_status_all_entry_respects_prefix() {
+        let tasks = vec![tasks::Task { pr: 4, task_type: tasks::TaskType::FixCi, description: "fix".into(), blocking: true, context_hint: "".into() }];
+        let out = format_pr_status_all_entry("  └─ ", 4, "Child PR", &tasks, "");
+        assert!(out.starts_with("  └─ "), "must start with prefix, got: {}", out);
+    }
+
     fn stack_tree_order_root_has_no_indent() {
         let root = make_pr(1, "feature-a", "main");
         let prs = vec![&root];
