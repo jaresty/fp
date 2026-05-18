@@ -1116,6 +1116,8 @@ fn main() -> Result<()> {
             }
 
             let work_dir = stack::resolve_work_dir(&git_dir)?;
+            // main_root is always the main worktree root regardless of CWD (for HEAD checks)
+            let main_root = repo_root()?;
 
             // Handle merged PRs: rebase their children onto the merge target, then untrack
             if let (Ok(token), Some((owner, repo_name))) = (resolve_github_token(), detect_repo()) {
@@ -1160,7 +1162,7 @@ fn main() -> Result<()> {
             // Skip branches checked out in main worktree (and locked branches) and their descendants
             let directly_locked: std::collections::HashSet<String> = branches.iter()
                 .filter_map(|b| {
-                    branch_in_main_worktree_warning(b, &work_dir)
+                    branch_in_main_worktree_warning(b, &main_root)
                         .or_else(|| check_branch_lock(&git_dir, b))
                         .map(|w| { println!("{}", w); b.clone() })
                 })
