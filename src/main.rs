@@ -211,6 +211,9 @@ enum Commands {
         /// Skip dirty-check on current worktree
         #[arg(long)]
         force: bool,
+        /// Move branch from main worktree to an fp worktree (checks out main in main worktree)
+        #[arg(long)]
+        adopt: bool,
     },
     /// Remove the lock on a worktree branch so it can be switched to again
     Unlock {
@@ -392,7 +395,7 @@ pub fn check_not_checked_out_in_main(branch: &str, dir: &std::path::Path) -> any
         .output()?;
     let current = String::from_utf8(out.stdout)?.trim().to_string();
     if current == branch {
-        anyhow::bail!("'{}' is checked out in main worktree — run fps root first, then fp rebase-stack", branch);
+        anyhow::bail!("'{}' is checked out in main worktree — run fps root first, then fp rebase-stack, or re-run with --adopt to move it to an fp worktree automatically", branch);
     }
     Ok(())
 }
@@ -458,6 +461,10 @@ pub fn locked_subtree(
         }
     }
     blocked
+}
+
+pub fn format_adopt_message(branch: &str) -> String {
+    format!("Adopted {} — checked out main in main worktree, created fp worktree\n", branch)
 }
 
 pub fn format_new_worktree_output(wt_path: &std::path::Path, branch: &str) -> String {
@@ -698,7 +705,7 @@ fn main() -> Result<()> {
             println!("Untracked PR #{}", pr);
         }
 
-        Commands::Switch { pr, id, force } => {
+        Commands::Switch { pr, id, force, adopt } => {
             let state = store.load()?;
             let tracked = state.prs.get(&pr)
                 .with_context(|| format!("PR #{} is not tracked. Run `fp track {}`", pr, pr))?;
@@ -709,7 +716,26 @@ fn main() -> Result<()> {
                 anyhow::bail!("current worktree has uncommitted changes — commit, stash, or use --force to override");
             }
 
-            check_not_checked_out_in_main(&branch, &root)?;
+            // Check if branch is in main worktree
+            let head_out = std::process::Command::new("git")
+                .args(["rev-parse", "--abbrev-ref", "HEAD"])
+                .current_dir(&root)
+                .output()?;
+            let current_head = String::from_utf8(head_out.stdout)?.trim().to_string();
+            if current_head == branch {
+                if adopt {
+                    // Move branch to fp worktree: checkout main in main worktree first
+                    let checkout = std::process::Command::new("git")
+                        .args(["checkout", "main"])
+                        .current_dir(&root)
+                        .output()?;
+                    anyhow::ensure!(checkout.status.success(), "git checkout main failed: {}",
+                        String::from_utf8_lossy(&checkout.stderr));
+                    print!("{}", format_adopt_message(&branch));
+                } else {
+                    check_not_checked_out_in_main(&branch, &root)?;
+                }
+            }
             worktree::check_target_lock(&git_dir, &branch)?;
 
             let wt_path = worktree::worktree_path(&root, &branch);
@@ -1408,6 +1434,28 @@ mod tests {
         ].into();
         let result = locked_subtree(&locked, &parent_of);
         assert!(result.is_empty(), "no descendants when nothing chains from locked");
+    }
+
+    #[test]
+    fn checked_out_in_main_error_mentions_adopt() {
+        use std::path::PathBuf;
+        let tmp = tempfile::tempdir().unwrap();
+        // init a bare-minimum git repo with a branch checked out
+        std::process::Command::new("git").args(["init"]).current_dir(tmp.path()).output().unwrap();
+        std::process::Command::new("git").args(["commit", "--allow-empty", "-m", "init"]).current_dir(tmp.path()).env("GIT_AUTHOR_NAME", "t").env("GIT_AUTHOR_EMAIL", "t@t").env("GIT_COMMITTER_NAME", "t").env("GIT_COMMITTER_EMAIL", "t@t").output().unwrap();
+        // HEAD is main/master — use that branch name
+        let head = std::process::Command::new("git").args(["rev-parse", "--abbrev-ref", "HEAD"]).current_dir(tmp.path()).output().unwrap();
+        let branch = String::from_utf8(head.stdout).unwrap().trim().to_string();
+        let err = check_not_checked_out_in_main(&branch, tmp.path()).unwrap_err();
+        let msg = err.to_string();
+        assert!(msg.contains("--adopt"), "error must mention --adopt, got: {}", msg);
+    }
+
+    #[test]
+    fn format_adopt_message_contains_adopted_and_branch() {
+        let msg = format_adopt_message("feat/my-branch");
+        assert!(msg.contains("Adopted"), "must contain 'Adopted', got: {}", msg);
+        assert!(msg.contains("feat/my-branch"), "must contain branch name, got: {}", msg);
     }
 
     #[test]

@@ -76,6 +76,7 @@ fp untrack <pr>                         # stop tracking (also removes worktree i
 fp ready <pr>                           # mark draft PR as ready for review
 fp switch <pr> <id>                     # print worktree path for PR (create if needed); <id> is a session label (e.g. "claude-session-1")
 fp switch <pr> <id> --force            # skip dirty-check on current worktree
+fp switch <pr> <id> --adopt            # branch is checked out in main worktree — check out main there, create fp worktree
 fp unlock <branch>                      # remove the lock on a worktree branch so it can be switched to again
 fp root                                 # print main repo root (works from inside a worktree)
 fp install-shell                        # install fps shell function (auto-detects fish/zsh/bash)
