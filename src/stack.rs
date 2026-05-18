@@ -45,8 +45,11 @@ pub struct RebaseResult {
 /// Root branches (no parent) rebase onto origin/<base_of[branch]>.
 /// Fetches origin before rebasing to ensure remote refs are current.
 pub fn rebase_stack(branches: &[String], parent_of: &HashMap<String, Option<String>>, base_of: &HashMap<String, String>, dir: &Path, progress: &dyn Fn(&str)) -> Result<RebaseResult> {
-    // Bail if a rebase is already in progress — user must resolve first
-    if dir.join(".git").join("REBASE_HEAD").exists() {
+    // Bail if a rebase is already in progress — user must resolve first.
+    // Check rebase-merge/rebase-apply directories rather than REBASE_HEAD: on Apple Git 2.50+,
+    // REBASE_HEAD persists after a completed rebase, causing false positives.
+    let git_dir = dir.join(".git");
+    if git_dir.join("rebase-merge").exists() || git_dir.join("rebase-apply").exists() {
         anyhow::bail!("rebase in progress — resolve conflicts then run: git rebase --continue && fp rebase-stack");
     }
 
@@ -167,10 +170,56 @@ pub fn rebase_stack(branches: &[String], parent_of: &HashMap<String, Option<Stri
                 .current_dir(&wt_path)
                 .output()?
         } else {
-            std::process::Command::new("git")
-                .args(["rebase", parent])
+            // Check if parent is an ancestor of branch. If not, parent was rebased since this
+            // branch was created — use --onto with the oldest exclusive commit so we replay
+            // only this branch's own commits, not the stale parent commits that would conflict.
+            let parent_is_ancestor = std::process::Command::new("git")
+                .args(["merge-base", "--is-ancestor", parent, branch])
                 .current_dir(&wt_path)
-                .output()?
+                .output()?.status.success();
+            if !parent_is_ancestor {
+                // Find the oldest commit in branch not reachable from parent — that is the
+                // old parent tip (before parent was rebased). Use it as the --onto upstream
+                // so only commits unique to branch are replanted.
+                let rev_list_out = std::process::Command::new("git")
+                    .args(["rev-list", &format!("{}..{}", parent, branch)])
+                    .current_dir(&wt_path)
+                    .output()?;
+                let old_upstream = String::from_utf8_lossy(&rev_list_out.stdout)
+                    .lines()
+                    .last()
+                    .map(str::trim)
+                    .unwrap_or("")
+                    .to_string();
+                // Only use --onto if there are commits to replay after old_upstream.
+                // If replay_count == 0, old_upstream == branch tip (independent branch being
+                // newly stacked) — fall back to plain rebase which handles that correctly.
+                let replay_count = if !old_upstream.is_empty() {
+                    std::process::Command::new("git")
+                        .args(["rev-list", "--count", &format!("{}..{}", old_upstream, branch)])
+                        .current_dir(&wt_path)
+                        .output().ok()
+                        .and_then(|o| String::from_utf8(o.stdout).ok())
+                        .and_then(|s| s.trim().parse::<usize>().ok())
+                        .unwrap_or(0)
+                } else { 0 };
+                if !old_upstream.is_empty() && replay_count > 0 {
+                    std::process::Command::new("git")
+                        .args(["rebase", "--onto", parent, &old_upstream])
+                        .current_dir(&wt_path)
+                        .output()?
+                } else {
+                    std::process::Command::new("git")
+                        .args(["rebase", parent])
+                        .current_dir(&wt_path)
+                        .output()?
+                }
+            } else {
+                std::process::Command::new("git")
+                    .args(["rebase", parent])
+                    .current_dir(&wt_path)
+                    .output()?
+            }
         };
 
         if rebase.status.success() {

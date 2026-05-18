@@ -245,8 +245,8 @@ mod tests {
         git(&["commit", "-m", "A"]);
         git(&["push", "origin", "main"]);
 
-        // Simulate an in-progress rebase by creating the REBASE_HEAD file
-        std::fs::write(path.join(".git").join("REBASE_HEAD"), "fakasha").unwrap();
+        // Simulate an in-progress rebase by creating the rebase-merge directory
+        std::fs::create_dir_all(path.join(".git").join("rebase-merge")).unwrap();
 
         let branches = vec!["main".to_string()];
         let parent_of = std::collections::HashMap::new();
@@ -1140,6 +1140,217 @@ mod tests {
     /// 2. C's three-dot diff vs B equals C's original three-dot diff vs A
     ///    (semantic content unchanged; only base moves)
     #[test]
+    // RS14: rebase_stack rerun after parent conflict-resolution: child should not replay parent commits.
+    // Scenario (rerun case):
+    //   1. fp rebase-stack → feat/base conflicts with new main → user resolves → A' (different patch)
+    //   2. feat/base is now at A' (rebased, pushed). feat/child is still based on old A_orig.
+    //   3. fp rebase-stack reruns with both branches.
+    //      feat/base: already on origin/main → no-op.
+    //      feat/child: plain `git rebase feat/base` finds merge-base=M, replays A_orig+B → CONFLICT on A_orig.
+    //      With --onto fix: detects feat/base is not ancestor of feat/child, finds A_orig as oldest
+    //      exclusive commit, uses `git rebase --onto feat/base A_orig` → replays only B → SUCCESS.
+    #[test]
+    fn rebase_stack_rerun_after_parent_conflict_resolution() {
+        use std::process::Command;
+        use tempfile::TempDir;
+
+        let remote_dir = TempDir::new().unwrap();
+        Command::new("git").args(["init", "--bare", "-b", "main"])
+            .current_dir(remote_dir.path()).output().unwrap();
+
+        let dir = TempDir::new().unwrap();
+        let path = dir.path();
+        let git = |args: &[&str]| Command::new("git").args(args).current_dir(path).output().unwrap();
+        let git_env = |args: &[&str], env: &[(&str,&str)]| {
+            let mut c = Command::new("git");
+            c.args(args).current_dir(path);
+            for (k,v) in env { c.env(k,v); }
+            c.output().unwrap()
+        };
+        let env = [("GIT_AUTHOR_NAME","t"),("GIT_AUTHOR_EMAIL","t@t"),
+                   ("GIT_COMMITTER_NAME","t"),("GIT_COMMITTER_EMAIL","t@t")];
+        git(&["init", "-b", "main"]);
+        git(&["config", "user.email", "t@t.com"]);
+        git(&["config", "user.name", "T"]);
+        git(&["remote", "add", "origin", remote_dir.path().to_str().unwrap()]);
+
+        // main M: base.txt exists (so there's a file for the conflict), b.txt absent
+        std::fs::write(path.join("base.txt"), "original_content\n").unwrap();
+        git(&["add", "."]);
+        git_env(&["commit", "-m", "M"], &env);
+        git(&["push", "-u", "origin", "main"]);
+
+        // feat/base A_orig: modifies base.txt in a way that will conflict with M2
+        git(&["checkout", "-b", "feat/base"]);
+        std::fs::write(path.join("base.txt"), "original_content\nA_addition\n").unwrap();
+        git(&["add", "."]);
+        git_env(&["commit", "-m", "A"], &env);
+        git(&["push", "-u", "origin", "feat/base"]);
+
+        // feat/child B: creates an entirely separate file (no dependency on base.txt content)
+        git(&["checkout", "-b", "feat/child"]);
+        std::fs::write(path.join("base.txt"), "original_content\nA_addition\n").unwrap();
+        std::fs::write(path.join("b.txt"), "B_content\n").unwrap();
+        git(&["add", "."]);
+        git_env(&["commit", "-m", "B"], &env);
+        git(&["push", "-u", "origin", "feat/child"]);
+
+        // main M2: changes base.txt in a way that conflicts with A_orig's context
+        git(&["checkout", "main"]);
+        std::fs::write(path.join("base.txt"), "updated_content\n").unwrap();
+        git(&["add", "."]);
+        git_env(&["commit", "-m", "M2"], &env);
+        git(&["push", "origin", "main"]);
+
+        // === Simulate "previous fp rebase-stack run that conflicted on feat/base" ===
+        // User manually rebased feat/base with conflict resolution (keeping A_addition).
+        // This produces A' with DIFFERENT patch-id than A_orig (conflict changed context).
+        git(&["checkout", "feat/base"]);
+        git(&["fetch", "origin"]);
+        let rebase_out = git(&["rebase", "origin/main"]);
+        if !rebase_out.status.success() {
+            // Resolve: keep A_addition under new updated_content
+            std::fs::write(path.join("base.txt"), "updated_content\nA_addition\n").unwrap();
+            git(&["add", "base.txt"]);
+            git_env(&["rebase", "--continue"], &[
+                ("GIT_AUTHOR_NAME","t"),("GIT_AUTHOR_EMAIL","t@t"),
+                ("GIT_COMMITTER_NAME","t"),("GIT_COMMITTER_EMAIL","t@t"),
+                ("GIT_EDITOR","true"),
+            ]);
+        }
+        git(&["push", "--force-with-lease", "origin", "feat/base"]);
+
+        // Back to main for worktree creation
+        git(&["checkout", "main"]);
+
+        // === Rerun: call rebase_stack with BOTH branches (as fp rebase-stack would) ===
+        // feat/base is already rebased (A'), no-op rebase expected.
+        // feat/child is still based on A_orig — this is what needs --onto to succeed.
+        let parent_of: std::collections::HashMap<String, Option<String>> = [
+            ("feat/base".to_string(), None),
+            ("feat/child".to_string(), Some("feat/base".to_string())),
+        ].into_iter().collect();
+        let base_of: std::collections::HashMap<String, String> = [
+            ("feat/base".to_string(), "main".to_string()),
+            ("feat/child".to_string(), "main".to_string()),
+        ].into_iter().collect();
+        let branches = vec!["feat/base".to_string(), "feat/child".to_string()];
+
+        let result = crate::stack::rebase_stack(&branches, &parent_of, &base_of, path, &|_| {}).unwrap();
+        assert!(result.conflicts.is_empty(),
+            "rerun should succeed with no conflicts: {:?}", result.conflicts);
+
+        // feat/child should have exactly 1 commit on top of feat/base: B (not A+B)
+        let log = Command::new("git")
+            .args(["log", "--oneline", "feat/base..feat/child"])
+            .current_dir(path).output().unwrap();
+        let log_str = String::from_utf8_lossy(&log.stdout);
+        let commit_count = log_str.trim().lines().count();
+        assert_eq!(commit_count, 1,
+            "feat/child should have exactly 1 commit on top of feat/base (B only), got: {}", log_str);
+        assert!(log_str.contains(" B"), "the one commit should be B, got: {}", log_str);
+    }
+
+    // RS13: rebase_stack uses --onto <parent> <pre_parent_sha> to avoid replaying parent commits
+    // when the parent was rebased with conflict resolution (changing its patch-id).
+    // Without --onto, git falls back to merge-base(main), tries to replay A+B, and A conflicts
+    // because parent already contains a modified version A' with a different patch.
+    #[test]
+    fn rebase_stack_uses_onto_when_parent_was_force_pushed() {
+        use std::process::Command;
+        use tempfile::TempDir;
+
+        let remote_dir = TempDir::new().unwrap();
+        Command::new("git").args(["init", "--bare", "-b", "main"])
+            .current_dir(remote_dir.path()).output().unwrap();
+
+        let dir = TempDir::new().unwrap();
+        let path = dir.path();
+        let git = |args: &[&str]| Command::new("git").args(args).current_dir(path).output().unwrap();
+        let git_env = |args: &[&str], env: &[(&str,&str)]| {
+            let mut c = Command::new("git");
+            c.args(args).current_dir(path);
+            for (k,v) in env { c.env(k,v); }
+            c.output().unwrap()
+        };
+        let env = [("GIT_AUTHOR_NAME","t"),("GIT_AUTHOR_EMAIL","t@t"),("GIT_COMMITTER_NAME","t"),("GIT_COMMITTER_EMAIL","t@t")];
+        git(&["init", "-b", "main"]);
+        git(&["config", "user.email", "t@t.com"]);
+        git(&["config", "user.name", "T"]);
+        git(&["remote", "add", "origin", remote_dir.path().to_str().unwrap()]);
+
+        // main: shared.txt = "line1\nline2\n"
+        std::fs::write(path.join("shared.txt"), "line1\nline2\n").unwrap();
+        git(&["add", "."]);
+        git_env(&["commit", "-m", "M"], &env);
+        git(&["push", "-u", "origin", "main"]);
+
+        // feat/base: appends "A\n" to shared.txt (commit A)
+        git(&["checkout", "-b", "feat/base"]);
+        std::fs::write(path.join("shared.txt"), "line1\nline2\nA\n").unwrap();
+        git(&["add", "."]);
+        git_env(&["commit", "-m", "A"], &env);
+        git(&["push", "-u", "origin", "feat/base"]);
+
+        // feat/child stacked on feat/base: appends "B\n" (commit B)
+        git(&["checkout", "-b", "feat/child"]);
+        std::fs::write(path.join("shared.txt"), "line1\nline2\nA\nB\n").unwrap();
+        git(&["add", "."]);
+        git_env(&["commit", "-m", "B"], &env);
+        git(&["push", "-u", "origin", "feat/child"]);
+
+        // main advances: inserts "X\n" between line1 and line2 — causes conflict on rebase
+        git(&["checkout", "main"]);
+        std::fs::write(path.join("shared.txt"), "line1\nX\nline2\n").unwrap();
+        git(&["add", "."]);
+        git_env(&["commit", "-m", "M2"], &env);
+        git(&["push", "origin", "main"]);
+
+        // Rebase feat/base onto new main WITH CONFLICT RESOLUTION.
+        // The "A" commit originally added "A\n" after "line2\n".
+        // After conflict resolution the file becomes "line1\nX\nline2\nA\n" — different patch than original.
+        git(&["checkout", "feat/base"]);
+        git(&["fetch", "origin"]);
+        // Start the rebase — it will conflict on shared.txt
+        let rebase_out = git(&["rebase", "origin/main"]);
+        if !rebase_out.status.success() {
+            // Resolve conflict: accept the "A\n" line after new main content
+            std::fs::write(path.join("shared.txt"), "line1\nX\nline2\nA\n").unwrap();
+            git(&["add", "shared.txt"]);
+            git_env(&["rebase", "--continue"], &[
+                ("GIT_AUTHOR_NAME","t"),("GIT_AUTHOR_EMAIL","t@t"),
+                ("GIT_COMMITTER_NAME","t"),("GIT_COMMITTER_EMAIL","t@t"),
+                ("GIT_EDITOR","true"),
+            ]);
+        }
+        git(&["push", "--force-with-lease", "origin", "feat/base"]);
+
+        // Return to main so worktrees can be created
+        git(&["checkout", "main"]);
+
+        // Only rebase feat/child — feat/base is already done above
+        let parent_of: std::collections::HashMap<String, Option<String>> = [
+            ("feat/child".to_string(), Some("feat/base".to_string())),
+        ].into_iter().collect();
+        let base_of: std::collections::HashMap<String, String> = [
+            ("feat/child".to_string(), "main".to_string()),
+        ].into_iter().collect();
+        let branches = vec!["feat/child".to_string()];
+
+        let result = crate::stack::rebase_stack(&branches, &parent_of, &base_of, path, &|_| {}).unwrap();
+        assert!(result.conflicts.is_empty(), "no conflicts expected: {:?}", result.conflicts);
+
+        // feat/child should have exactly 1 commit on top of feat/base: B (not A+B)
+        let log = Command::new("git")
+            .args(["log", "--oneline", "feat/base..feat/child"])
+            .current_dir(path).output().unwrap();
+        let log_str = String::from_utf8_lossy(&log.stdout);
+        let commit_count = log_str.trim().lines().count();
+        assert_eq!(commit_count, 1,
+            "feat/child should have exactly 1 commit on top of feat/base (B only), got: {}", log_str);
+        assert!(log_str.contains(" B"), "the one commit should be B, got: {}", log_str);
+    }
+
     fn rebase_stack_splice_preserves_c_diff_after_inserting_b_between_a_and_c() {
         use std::process::Command;
         use tempfile::TempDir;
