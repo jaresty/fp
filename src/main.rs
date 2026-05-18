@@ -194,6 +194,14 @@ enum Commands {
     },
     /// Rebase all tracked PRs in stack order onto their parent branches
     RebaseStack,
+    /// Create a new branch and worktree without creating a PR (use fp create afterwards)
+    New {
+        /// New branch name
+        branch: String,
+        /// Base branch to branch from (default: main)
+        #[arg(long, default_value = "main")]
+        base: String,
+    },
     /// Switch to the worktree for a tracked PR (creates if needed)
     Switch {
         /// PR number
@@ -421,6 +429,10 @@ pub fn stack_tree_order(prs: &[&TrackedPr]) -> Vec<(u64, String)> {
         visit(&root.branch.clone(), prs, 0, &mut result);
     }
     result
+}
+
+pub fn format_new_worktree_output(wt_path: &std::path::Path, branch: &str) -> String {
+    format!("Created worktree at {}\nuse: fps {}\n", wt_path.display(), branch)
 }
 
 pub fn repo_header(owner: &str, repo: &str) -> String {
@@ -867,6 +879,19 @@ fn main() -> Result<()> {
             }
         }
 
+        Commands::New { branch, base } => {
+            let root = repo_root()?;
+            let wt_path = worktree::worktree_path(&root, &branch);
+            std::process::Command::new("git")
+                .args(["fetch", "origin", &base])
+                .output()?;
+            let out = std::process::Command::new("git")
+                .args(["worktree", "add", wt_path.to_str().unwrap_or(""), "-b", &branch, &format!("origin/{}", base)])
+                .output()?;
+            anyhow::ensure!(out.status.success(), "git worktree add failed: {}", String::from_utf8_lossy(&out.stderr));
+            print!("{}", format_new_worktree_output(&wt_path, &branch));
+        }
+
         Commands::Root => {
             println!("{}", repo_root()?.display());
         }
@@ -1276,6 +1301,15 @@ mod tests {
     fn install_shell_unsupported_returns_none() {
         assert!(fps_function_content("ksh").is_none(), "unsupported shell must return None");
         assert!(fps_install_path("ksh").is_none(), "unsupported shell install path must return None");
+    }
+
+    #[test]
+    fn format_new_worktree_output_contains_path_and_fps_hint() {
+        let path = std::path::Path::new("/projects/vivaa-worktrees/feature/foo");
+        let out = format_new_worktree_output(path, "feature/foo");
+        assert!(out.contains("Created worktree at"), "must contain 'Created worktree at', got: {}", out);
+        assert!(out.contains("/projects/vivaa-worktrees/feature/foo"), "must contain path, got: {}", out);
+        assert!(out.contains("fps feature/foo"), "must contain fps hint, got: {}", out);
     }
 
     fn make_pr(number: u64, branch: &str, base: &str) -> TrackedPr {
