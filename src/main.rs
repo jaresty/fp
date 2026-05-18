@@ -1486,18 +1486,21 @@ mod tests {
         cmd.args(["commit","--allow-empty","-m","init"]).current_dir(tmp.path());
         for (k,v) in &env { cmd.env(k,v); }
         cmd.output().unwrap();
+        // detect actual default branch name (main or master depending on git config)
+        let default_branch = String::from_utf8(
+            std::process::Command::new("git").args(["rev-parse","--abbrev-ref","HEAD"]).current_dir(tmp.path()).output().unwrap().stdout
+        ).unwrap().trim().to_string();
         // create and checkout feat/other so we can switch back
         std::process::Command::new("git").args(["checkout","-b","feat/other"]).current_dir(tmp.path()).output().unwrap();
         let mut cmd2 = std::process::Command::new("git");
         cmd2.args(["commit","--allow-empty","-m","other"]).current_dir(tmp.path());
         for (k,v) in &env { cmd2.env(k,v); }
         cmd2.output().unwrap();
-        // now worktree is on feat/other but we want main
         let head_before = std::process::Command::new("git").args(["rev-parse","--abbrev-ref","HEAD"]).current_dir(tmp.path()).output().unwrap();
         assert_eq!(String::from_utf8(head_before.stdout).unwrap().trim(), "feat/other");
-        fix_worktree_branch(tmp.path(), "main", false).unwrap();
+        fix_worktree_branch(tmp.path(), &default_branch, false).unwrap();
         let head_after = std::process::Command::new("git").args(["rev-parse","--abbrev-ref","HEAD"]).current_dir(tmp.path()).output().unwrap();
-        assert_eq!(String::from_utf8(head_after.stdout).unwrap().trim(), "main", "should have checked out main");
+        assert_eq!(String::from_utf8(head_after.stdout).unwrap().trim(), &default_branch, "should have checked out {}", default_branch);
     }
 
     #[test]
@@ -1505,13 +1508,16 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let env = [("GIT_AUTHOR_NAME","t"),("GIT_AUTHOR_EMAIL","t@t"),("GIT_COMMITTER_NAME","t"),("GIT_COMMITTER_EMAIL","t@t")];
         std::process::Command::new("git").args(["init"]).current_dir(tmp.path()).output().unwrap();
-        // create shared.txt on main
+        // create shared.txt on default branch
         std::fs::write(tmp.path().join("shared.txt"), "original").unwrap();
         std::process::Command::new("git").args(["add","shared.txt"]).current_dir(tmp.path()).output().unwrap();
         let mut cmd = std::process::Command::new("git");
         cmd.args(["commit","-m","init"]).current_dir(tmp.path());
         for (k,v) in &env { cmd.env(k,v); }
         cmd.output().unwrap();
+        let default_branch = String::from_utf8(
+            std::process::Command::new("git").args(["rev-parse","--abbrev-ref","HEAD"]).current_dir(tmp.path()).output().unwrap().stdout
+        ).unwrap().trim().to_string();
         std::process::Command::new("git").args(["checkout","-b","feat/other"]).current_dir(tmp.path()).output().unwrap();
         // commit a different version of shared.txt on feat/other so branches diverge
         std::fs::write(tmp.path().join("shared.txt"), "other-branch-content").unwrap();
@@ -1520,15 +1526,15 @@ mod tests {
         cmd2.args(["commit","-m","other"]).current_dir(tmp.path());
         for (k,v) in &env { cmd2.env(k,v); }
         cmd2.output().unwrap();
-        // now locally modify shared.txt — git checkout main will refuse (would overwrite local change)
+        // now locally modify shared.txt — git checkout will refuse (would overwrite local change)
         std::fs::write(tmp.path().join("shared.txt"), "local-modification").unwrap();
         // without force, checkout should fail (local modification conflicts)
-        let no_force = fix_worktree_branch(tmp.path(), "main", false);
+        let no_force = fix_worktree_branch(tmp.path(), &default_branch, false);
         assert!(no_force.is_err(), "should fail without --force when dirty");
         // with force, should succeed and discard changes
-        fix_worktree_branch(tmp.path(), "main", true).unwrap();
+        fix_worktree_branch(tmp.path(), &default_branch, true).unwrap();
         let head = std::process::Command::new("git").args(["rev-parse","--abbrev-ref","HEAD"]).current_dir(tmp.path()).output().unwrap();
-        assert_eq!(String::from_utf8(head.stdout).unwrap().trim(), "main");
+        assert_eq!(String::from_utf8(head.stdout).unwrap().trim(), &default_branch);
     }
 
     #[test]
