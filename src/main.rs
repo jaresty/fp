@@ -477,6 +477,29 @@ pub fn locked_subtree(
     blocked
 }
 
+/// Returns true if the worktree at wt_path is checked out to a different branch than expected.
+pub fn worktree_branch_mismatch(wt_path: &std::path::Path, expected_branch: &str) -> anyhow::Result<bool> {
+    let out = std::process::Command::new("git")
+        .args(["rev-parse", "--abbrev-ref", "HEAD"])
+        .current_dir(wt_path)
+        .output()?;
+    let current = String::from_utf8(out.stdout)?.trim().to_string();
+    Ok(current != expected_branch)
+}
+
+/// Checks out `branch` in an existing worktree. With `force`, discards uncommitted changes.
+pub fn fix_worktree_branch(wt_path: &std::path::Path, branch: &str, force: bool) -> anyhow::Result<()> {
+    let mut args = vec!["checkout"];
+    if force { args.push("-f"); }
+    args.push(branch);
+    let out = std::process::Command::new("git")
+        .args(&args)
+        .current_dir(wt_path)
+        .output()?;
+    anyhow::ensure!(out.status.success(), "git checkout failed: {}", String::from_utf8_lossy(&out.stderr));
+    Ok(())
+}
+
 pub fn format_adopt_message(branch: &str) -> String {
     format!("Adopted {} — checked out main in main worktree, created fp worktree\n", branch)
 }
@@ -759,6 +782,9 @@ fn main() -> Result<()> {
                     .output()?;
                 anyhow::ensure!(out.status.success(), "{}",
                     format_worktree_add_error(&String::from_utf8_lossy(&out.stderr), &branch, pr));
+            } else if worktree_branch_mismatch(&wt_path, &branch)? {
+                fix_worktree_branch(&wt_path, &branch, force)
+                    .with_context(|| format!("worktree at {} is on wrong branch — use --force to discard local changes and fix it", wt_path.display()))?;
             }
 
             let lp = worktree::lock_path(&git_dir, &branch);
@@ -1449,6 +1475,60 @@ mod tests {
         ].into();
         let result = locked_subtree(&locked, &parent_of);
         assert!(result.is_empty(), "no descendants when nothing chains from locked");
+    }
+
+    #[test]
+    fn fix_worktree_branch_checks_out_branch() {
+        let tmp = tempfile::tempdir().unwrap();
+        let env = [("GIT_AUTHOR_NAME","t"),("GIT_AUTHOR_EMAIL","t@t"),("GIT_COMMITTER_NAME","t"),("GIT_COMMITTER_EMAIL","t@t")];
+        std::process::Command::new("git").args(["init"]).current_dir(tmp.path()).output().unwrap();
+        let mut cmd = std::process::Command::new("git");
+        cmd.args(["commit","--allow-empty","-m","init"]).current_dir(tmp.path());
+        for (k,v) in &env { cmd.env(k,v); }
+        cmd.output().unwrap();
+        // create and checkout feat/other so we can switch back
+        std::process::Command::new("git").args(["checkout","-b","feat/other"]).current_dir(tmp.path()).output().unwrap();
+        let mut cmd2 = std::process::Command::new("git");
+        cmd2.args(["commit","--allow-empty","-m","other"]).current_dir(tmp.path());
+        for (k,v) in &env { cmd2.env(k,v); }
+        cmd2.output().unwrap();
+        // now worktree is on feat/other but we want main
+        let head_before = std::process::Command::new("git").args(["rev-parse","--abbrev-ref","HEAD"]).current_dir(tmp.path()).output().unwrap();
+        assert_eq!(String::from_utf8(head_before.stdout).unwrap().trim(), "feat/other");
+        fix_worktree_branch(tmp.path(), "main", false).unwrap();
+        let head_after = std::process::Command::new("git").args(["rev-parse","--abbrev-ref","HEAD"]).current_dir(tmp.path()).output().unwrap();
+        assert_eq!(String::from_utf8(head_after.stdout).unwrap().trim(), "main", "should have checked out main");
+    }
+
+    #[test]
+    fn fix_worktree_branch_with_force_discards_changes() {
+        let tmp = tempfile::tempdir().unwrap();
+        let env = [("GIT_AUTHOR_NAME","t"),("GIT_AUTHOR_EMAIL","t@t"),("GIT_COMMITTER_NAME","t"),("GIT_COMMITTER_EMAIL","t@t")];
+        std::process::Command::new("git").args(["init"]).current_dir(tmp.path()).output().unwrap();
+        // create shared.txt on main
+        std::fs::write(tmp.path().join("shared.txt"), "original").unwrap();
+        std::process::Command::new("git").args(["add","shared.txt"]).current_dir(tmp.path()).output().unwrap();
+        let mut cmd = std::process::Command::new("git");
+        cmd.args(["commit","-m","init"]).current_dir(tmp.path());
+        for (k,v) in &env { cmd.env(k,v); }
+        cmd.output().unwrap();
+        std::process::Command::new("git").args(["checkout","-b","feat/other"]).current_dir(tmp.path()).output().unwrap();
+        // commit a different version of shared.txt on feat/other so branches diverge
+        std::fs::write(tmp.path().join("shared.txt"), "other-branch-content").unwrap();
+        std::process::Command::new("git").args(["add","shared.txt"]).current_dir(tmp.path()).output().unwrap();
+        let mut cmd2 = std::process::Command::new("git");
+        cmd2.args(["commit","-m","other"]).current_dir(tmp.path());
+        for (k,v) in &env { cmd2.env(k,v); }
+        cmd2.output().unwrap();
+        // now locally modify shared.txt — git checkout main will refuse (would overwrite local change)
+        std::fs::write(tmp.path().join("shared.txt"), "local-modification").unwrap();
+        // without force, checkout should fail (local modification conflicts)
+        let no_force = fix_worktree_branch(tmp.path(), "main", false);
+        assert!(no_force.is_err(), "should fail without --force when dirty");
+        // with force, should succeed and discard changes
+        fix_worktree_branch(tmp.path(), "main", true).unwrap();
+        let head = std::process::Command::new("git").args(["rev-parse","--abbrev-ref","HEAD"]).current_dir(tmp.path()).output().unwrap();
+        assert_eq!(String::from_utf8(head.stdout).unwrap().trim(), "main");
     }
 
     #[test]
