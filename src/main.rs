@@ -431,6 +431,35 @@ pub fn stack_tree_order(prs: &[&TrackedPr]) -> Vec<(u64, String)> {
     result
 }
 
+/// Returns a skip-warning if branch has any lock (live or dead), None if clear.
+pub fn check_branch_lock(git_dir: &std::path::Path, branch: &str) -> Option<String> {
+    let lp = worktree::lock_path(git_dir, branch);
+    let lock = worktree::read_lock(&lp)?;
+    if worktree::lock_is_live(&lock) {
+        Some(format!("⚠ skipping {} — locked by {} (pid {}, alive)", branch, lock.id, lock.pid))
+    } else {
+        Some(format!("⚠ skipping {} — dead lock from {}; run: fp unlock {}", branch, lock.id, branch))
+    }
+}
+
+/// Returns all branches that are transitive descendants of any branch in `locked`.
+pub fn locked_subtree(
+    locked: &std::collections::HashSet<String>,
+    parent_of: &std::collections::HashMap<String, Option<String>>,
+) -> std::collections::HashSet<String> {
+    let mut blocked = std::collections::HashSet::new();
+    let mut frontier: Vec<&str> = locked.iter().map(|s| s.as_str()).collect();
+    while let Some(parent) = frontier.pop() {
+        for (branch, p) in parent_of {
+            if p.as_deref() == Some(parent) && !blocked.contains(branch.as_str()) {
+                blocked.insert(branch.clone());
+                frontier.push(branch.as_str());
+            }
+        }
+    }
+    blocked
+}
+
 pub fn format_new_worktree_output(wt_path: &std::path::Path, branch: &str) -> String {
     format!("Created worktree at {}\nuse: fps {}\n", wt_path.display(), branch)
 }
@@ -1035,6 +1064,10 @@ fn main() -> Result<()> {
                         // Find children of this branch and rebase them onto base_ref
                         for (branch, parent) in &parent_of {
                             if parent.as_deref() == Some(&pr.branch) {
+                                if let Some(warn) = check_branch_lock(&git_dir, branch) {
+                                    println!("{}", warn);
+                                    continue;
+                                }
                                 match stack::rebase_onto_after_merge(branch, &head_sha, &base_ref, &work_dir) {
                                     Ok(()) => println!("✓ rebased {} onto {} (merged PR #{})", branch, base_ref, pr.number),
                                     Err(e) => println!("✗ failed to rebase {} after merge: {}", branch, e),
@@ -1060,6 +1093,18 @@ fn main() -> Result<()> {
                 check_not_checked_out_in_main(branch, &work_dir)?;
             }
             let parent_of = stack::detect_parent_of(&branches, &work_dir)?;
+
+            // Skip locked branches and their descendants
+            let directly_locked: std::collections::HashSet<String> = branches.iter()
+                .filter_map(|b| check_branch_lock(&git_dir, b).map(|w| { println!("{}", w); b.clone() }))
+                .collect();
+            let also_blocked = locked_subtree(&directly_locked, &parent_of);
+            for b in &also_blocked {
+                println!("⚠ skipping {} — parent branch is locked", b);
+            }
+            let branches: Vec<String> = branches.into_iter()
+                .filter(|b| !directly_locked.contains(b) && !also_blocked.contains(b))
+                .collect();
 
             // Build base_of from parallel fetch (reuses PrState.base, no extra API calls)
             let rebase_pr_numbers: Vec<u64> = state.prs.keys().copied().collect();
@@ -1301,6 +1346,68 @@ mod tests {
     fn install_shell_unsupported_returns_none() {
         assert!(fps_function_content("ksh").is_none(), "unsupported shell must return None");
         assert!(fps_install_path("ksh").is_none(), "unsupported shell install path must return None");
+    }
+
+    #[test]
+    fn check_branch_lock_returns_none_when_no_lock() {
+        let tmp = tempfile::tempdir().unwrap();
+        let git_dir = tmp.path().join(".git");
+        std::fs::create_dir_all(&git_dir).unwrap();
+        assert!(check_branch_lock(&git_dir, "feat/foo").is_none(),
+            "no lock file must return None");
+    }
+
+    #[test]
+    fn check_branch_lock_returns_alive_warning_for_live_lock() {
+        let tmp = tempfile::tempdir().unwrap();
+        let git_dir = tmp.path().join(".git");
+        let lp = worktree::lock_path(&git_dir, "feat/foo");
+        std::fs::create_dir_all(lp.parent().unwrap()).unwrap();
+        let live_pid = std::process::id(); // current process is alive
+        worktree::write_lock(&lp, live_pid, "agent", "my-session").unwrap();
+        let result = check_branch_lock(&git_dir, "feat/foo");
+        assert!(result.is_some(), "live lock must return Some");
+        let msg = result.unwrap();
+        assert!(msg.contains("alive"), "live lock warning must say 'alive', got: {}", msg);
+        assert!(msg.contains("feat/foo"), "warning must contain branch name, got: {}", msg);
+    }
+
+    #[test]
+    fn check_branch_lock_returns_dead_warning_with_unlock_hint() {
+        let tmp = tempfile::tempdir().unwrap();
+        let git_dir = tmp.path().join(".git");
+        let lp = worktree::lock_path(&git_dir, "feat/bar");
+        std::fs::create_dir_all(lp.parent().unwrap()).unwrap();
+        worktree::write_lock(&lp, 99999999, "agent", "old-session").unwrap(); // dead pid
+        let result = check_branch_lock(&git_dir, "feat/bar");
+        assert!(result.is_some(), "dead lock must return Some");
+        let msg = result.unwrap();
+        assert!(msg.contains("fp unlock"), "dead lock warning must mention 'fp unlock', got: {}", msg);
+    }
+
+    #[test]
+    fn locked_subtree_returns_transitive_descendants() {
+        let locked: std::collections::HashSet<String> = ["feat/a".to_string()].into();
+        let parent_of: std::collections::HashMap<String, Option<String>> = [
+            ("feat/b".to_string(), Some("feat/a".to_string())),
+            ("feat/c".to_string(), Some("feat/b".to_string())),
+            ("feat/d".to_string(), Some("main".to_string())),
+        ].into();
+        let result = locked_subtree(&locked, &parent_of);
+        assert!(result.contains("feat/b"), "b is child of locked a");
+        assert!(result.contains("feat/c"), "c is grandchild of locked a");
+        assert!(!result.contains("feat/d"), "d has unrelated parent");
+        assert!(!result.contains("feat/a"), "locked branch itself not in subtree");
+    }
+
+    #[test]
+    fn locked_subtree_empty_when_no_descendants() {
+        let locked: std::collections::HashSet<String> = ["feat/a".to_string()].into();
+        let parent_of: std::collections::HashMap<String, Option<String>> = [
+            ("feat/b".to_string(), Some("main".to_string())),
+        ].into();
+        let result = locked_subtree(&locked, &parent_of);
+        assert!(result.is_empty(), "no descendants when nothing chains from locked");
     }
 
     #[test]
