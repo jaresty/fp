@@ -37,7 +37,7 @@ fp observes PR state (checks, threads, approvals) and surfaces the exact actions
 ```sh
 # State observation
 fp ls [--json]                          # list tracked PRs
-fp status <pr> [--json]                 # tasks blocking this PR
+fp status [<pr>] [--json]               # tasks blocking this PR (defaults to current branch's PR)
 fp status --all [--json]                # all tracked PRs
 fp context <pr> <hint>                  # log tail for check, or thread body
                                         # hint: exact check name (e.g. ci/test)
@@ -49,13 +49,15 @@ fp agent-context [--json]               # print capability manifest with tracked
 
 # Thread management
 fp reply <pr> <thread_id> "<message>"   # post reply, mark thread Addressed
-fp resolve <pr> <thread_id>             # mark Resolved locally (no GitHub post)
 fp comment <pr> "<text>"                # post top-level PR comment (not a thread reply)
 
 # Stack management
 fp rebase-stack                         # rebase each tracked branch onto parent tip
 fp merge <pr>                           # merge PR via GitHub API, auto-detect merge method,
                                         # rebase full downstream stack after merge
+fp merge <pr> --squash                  # force squash merge
+fp merge <pr> --rebase                  # force rebase merge
+fp merge <pr> --merge                   # force merge commit
 
 # Branch and worktree creation
 fp new <branch> [--base <base>]         # create new branch + worktree without a PR (default base: main)
@@ -63,10 +65,12 @@ fp new <branch> [--base <base>]         # create new branch + worktree without a
 
 # PR creation and editing
 fp create "<title>" [--base <branch>]   # create draft PR for current branch
+fp create "<title>" --body "<text>"     # create PR with description body
 fp create "<title>" --demo <url>        # create PR and inject ## Demo section with image
 fp create "<title>" --demo <file>       # upload local image file, inject URL into ## Demo
 fp create "<title>" --demo <url> --demo <url2>  # multiple demos, numbered
 fp create "<title>" --restack-before <pr>  # insert new PR before <pr> in the stack
+fp create "<title>" --insert-after <pr>    # insert new PR after <pr>, rebase what follows
 fp edit <pr> [--title "<t>"] [--body "<b>"]     # update PR title and/or body
 fp edit <pr> --demo <url>               # append/replace ## Demo section in PR body
 fp edit <pr> --demo <file>              # upload local image file, inject into PR body
