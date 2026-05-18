@@ -453,6 +453,26 @@ fn repo_root() -> Result<PathBuf> {
     worktree::main_repo_root(&cwd).context("not in a git repository")
 }
 
+fn cleanup_pr_worktree(repo_root: &std::path::Path, git_dir: &std::path::Path, branch: &str) {
+    let wt_path = worktree::worktree_path(repo_root, branch);
+    if wt_path.exists() {
+        let remove = std::process::Command::new("git")
+            .args(["worktree", "remove", "--force", wt_path.to_str().unwrap_or("")])
+            .output();
+        if remove.map(|o| o.status.success()).unwrap_or(false) {
+            let _ = std::process::Command::new("git").args(["worktree", "prune"]).output();
+        }
+    }
+    let lp = worktree::lock_path(git_dir, branch);
+    let _ = worktree::remove_lock(&lp);
+}
+
+fn untrack_and_cleanup(store: &Store, repo_root: &std::path::Path, git_dir: &std::path::Path, number: u64, branch: &str) -> Result<()> {
+    store.untrack(number)?;
+    cleanup_pr_worktree(repo_root, git_dir, branch);
+    Ok(())
+}
+
 fn main() -> Result<()> {
     let cli = Cli::parse();
     let git_dir = git_dir()?;
@@ -578,18 +598,10 @@ fn main() -> Result<()> {
                 let state = store.load()?;
                 state.prs.get(&pr).map(|t| t.branch.clone())
             };
-            store.untrack(pr)?;
             if let Some(branch) = branch {
-                let wt_path = worktree::worktree_path(&repo_root()?, &branch);
-                if wt_path.exists() {
-                    let remove = std::process::Command::new("git")
-                        .args(["worktree", "remove", "--force", wt_path.to_str().unwrap_or("")])
-                        .output()?;
-                    if remove.status.success() {
-                        let _ = std::process::Command::new("git").args(["worktree", "prune"]).output();
-                    }
-                }
-                worktree::remove_lock(&worktree::lock_path(&git_dir, &branch))?;
+                untrack_and_cleanup(&store, &repo_root()?, &git_dir, pr, &branch)?;
+            } else {
+                store.untrack(pr)?;
             }
             println!("Untracked PR #{}", pr);
         }
@@ -931,8 +943,7 @@ fn main() -> Result<()> {
                 let all_branches: Vec<String> = state.prs.values().map(|p| p.branch.clone()).collect();
                 let parent_of = stack::detect_parent_of(&all_branches, &work_dir)?;
 
-                // Build branch -> pr_number map
-                let mut merged_pr_numbers: Vec<u64> = Vec::new();
+                let mut merged_prs: Vec<(u64, String)> = Vec::new();
                 for pr in state.prs.values() {
                     if client.fetch_pr_is_merged(&owner, &repo_name, pr.number).unwrap_or(false) {
                         let (head_sha, base_ref) = client.fetch_pr_head_sha_and_base(&owner, &repo_name, pr.number)?;
@@ -945,11 +956,11 @@ fn main() -> Result<()> {
                                 }
                             }
                         }
-                        merged_pr_numbers.push(pr.number);
+                        merged_prs.push((pr.number, pr.branch.clone()));
                     }
                 }
-                for number in merged_pr_numbers {
-                    store.untrack(number)?;
+                for (number, branch) in merged_prs {
+                    untrack_and_cleanup(&store, &repo_root()?, &git_dir, number, &branch)?;
                     println!("✓ untracked merged PR #{}", number);
                 }
                 state = store.load()?;
@@ -1205,6 +1216,31 @@ mod tests {
     fn install_shell_unsupported_returns_none() {
         assert!(fps_function_content("ksh").is_none(), "unsupported shell must return None");
         assert!(fps_install_path("ksh").is_none(), "unsupported shell install path must return None");
+    }
+
+    #[test]
+    fn untrack_and_cleanup_removes_lock_for_merged_pr() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let git_dir = tmp.path().join("git_dir");
+        std::fs::create_dir_all(&git_dir).unwrap();
+        let store_dir = git_dir.join("fp_store");
+        std::fs::create_dir_all(&store_dir).unwrap();
+        let store = Store::open(&git_dir);
+
+        let branch = "feature/my-branch";
+        store.track(TrackedPr { number: 42, title: "test".into(), branch: branch.into(), base: "main".into() }).unwrap();
+        assert!(store.load().unwrap().prs.contains_key(&42), "PR must be tracked before cleanup");
+
+        // Create a fake lock file
+        let lp = worktree::lock_path(&git_dir, branch);
+        if let Some(parent) = lp.parent() { std::fs::create_dir_all(parent).unwrap(); }
+        std::fs::write(&lp, b"fake lock").unwrap();
+        assert!(lp.exists(), "lock file must exist before cleanup");
+
+        untrack_and_cleanup(&store, tmp.path(), &git_dir, 42, branch).unwrap();
+
+        assert!(!store.load().unwrap().prs.contains_key(&42), "PR must be untracked after cleanup");
+        assert!(!lp.exists(), "lock file must be removed by untrack_and_cleanup");
     }
 
 }
