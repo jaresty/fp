@@ -708,18 +708,21 @@ fn main() -> Result<()> {
                 let tree_order = stack_tree_order(&prs);
                 for (number, prefix) in tree_order {
                     let tracked = match state.prs.get(&number) { Some(t) => t, None => continue };
-                    let pr_state = fetched.get(&tracked.number).cloned()
+                    let mut pr_state = fetched.get(&tracked.number).cloned()
                         .unwrap_or_else(|| crate::model::PrState {
                             number: tracked.number,
                             title: tracked.title.clone(),
                             branch: tracked.branch.clone(),
-                            base: "".into(), head_sha: "".into(), base_sha: "".into(), draft: false, approved: false,
-                            checks: vec![], threads: vec![], has_merge_conflict: false, codeowners_eligibility: Default::default(),
+                            base: "".into(), head_sha: "".into(), draft: false, approved: false,
+                            checks: vec![], threads: vec![], needs_parent_rebase: false, has_merge_conflict: false, codeowners_eligibility: Default::default(),
                         });
-                    let parent_state = prs.iter()
-                        .find(|p| p.branch == tracked.base)
-                        .and_then(|p| fetched.get(&p.number));
-                    let tasks = generate_tasks(&pr_state, parent_state);
+                    if let (Some(tok), Some((owner, repo_name))) = (&token, detect_repo())
+                        && let Some(parent) = prs.iter().find(|p| p.branch == tracked.base).and_then(|p| fetched.get(&p.number))
+                        && !parent.head_sha.is_empty() && !pr_state.head_sha.is_empty() {
+                        pr_state.needs_parent_rebase = GithubClient::new(tok.clone())
+                            .is_head_behind_base(&owner, &repo_name, &parent.head_sha, &pr_state.head_sha);
+                    }
+                    let tasks = generate_tasks(&pr_state);
                     let lock = worktree::lock_status(&git_dir, &tracked.branch)
                         .map(|s| format!("  {}", s))
                         .unwrap_or_default();
@@ -740,13 +743,17 @@ fn main() -> Result<()> {
                         number: tracked.number,
                         title: tracked.title.clone(),
                         branch: tracked.branch.clone(),
-                        base: "".into(), head_sha: "".into(), base_sha: "".into(), draft: false, approved: false,
-                        checks: vec![], threads: vec![], has_merge_conflict: false, codeowners_eligibility: Default::default(),
+                        base: "".into(), head_sha: "".into(), draft: false, approved: false,
+                        checks: vec![], threads: vec![], needs_parent_rebase: false, has_merge_conflict: false, codeowners_eligibility: Default::default(),
                     });
-                let parent_state: Option<crate::model::PrState> = state.prs.values()
-                    .find(|p| p.branch == tracked.base)
-                    .and_then(|p| fetch(p.number, &p.branch));
-                let task_list = generate_tasks(&pr_state, parent_state.as_ref());
+                let mut pr_state_single = pr_state;
+                if let (Some(tok), Some((owner, repo_name))) = (&token, detect_repo())
+                    && let Some(parent) = state.prs.values().find(|p| p.branch == tracked.base).and_then(|p| fetch(p.number, &p.branch))
+                    && !parent.head_sha.is_empty() && !pr_state_single.head_sha.is_empty() {
+                    pr_state_single.needs_parent_rebase = GithubClient::new(tok.clone())
+                        .is_head_behind_base(&owner, &repo_name, &parent.head_sha, &pr_state_single.head_sha);
+                }
+                let task_list = generate_tasks(&pr_state_single);
                 let lock = worktree::lock_status(&git_dir, &tracked.branch);
 
                 if json {
@@ -922,13 +929,17 @@ fn main() -> Result<()> {
                             number: tracked.number,
                             title: tracked.title.clone(),
                             branch: tracked.branch.clone(),
-                            base: "".into(), head_sha: "".into(), base_sha: "".into(), draft: false, approved: false,
-                            checks: vec![], threads: vec![], has_merge_conflict: false, codeowners_eligibility: Default::default(),
+                            base: "".into(), head_sha: "".into(), draft: false, approved: false,
+                            checks: vec![], threads: vec![], needs_parent_rebase: false, has_merge_conflict: false, codeowners_eligibility: Default::default(),
                         });
-                    let parent_state = prs.iter()
-                        .find(|p| p.branch == tracked.base)
-                        .and_then(|p| fetched.get(&p.number));
-                    let curr = generate_tasks(&pr_state, parent_state);
+                    let mut pr_state = pr_state;
+                    if let (Some(tok), Some((owner, repo_name))) = (&token, &repo)
+                        && let Some(parent) = prs.iter().find(|p| p.branch == tracked.base).and_then(|p| fetched.get(&p.number))
+                        && !parent.head_sha.is_empty() && !pr_state.head_sha.is_empty() {
+                        pr_state.needs_parent_rebase = GithubClient::new(tok.clone())
+                            .is_head_behind_base(owner, repo_name, &parent.head_sha, &pr_state.head_sha);
+                    }
+                    let curr = generate_tasks(&pr_state);
                     all_tasks.extend(curr.clone());
 
                     let prev = prev_tasks.get(&tracked.number).map(|v| v.as_slice()).unwrap_or(&[]);
@@ -1285,8 +1296,8 @@ fn main() -> Result<()> {
                 number: tracked.number,
                 title: tracked.title.clone(),
                 branch: tracked.branch.clone(),
-                base: "".into(), head_sha: "".into(), base_sha: "".into(), draft: false, approved: false,
-                checks: vec![], threads: vec![], has_merge_conflict: false, codeowners_eligibility: Default::default(),
+                base: "".into(), head_sha: "".into(), draft: false, approved: false,
+                checks: vec![], threads: vec![], needs_parent_rebase: false, has_merge_conflict: false, codeowners_eligibility: Default::default(),
             });
 
             if let Some(stripped) = hint.strip_prefix("thread:") {
@@ -1373,7 +1384,7 @@ fn main() -> Result<()> {
                     None
                 }.unwrap_or_else(|| model::PrState {
                     number: tracked.number, title: tracked.title.clone(), branch: tracked.branch.clone(),
-                    base: "".into(), head_sha: "".into(), base_sha: "".into(), draft: false, approved: false, checks: vec![], threads: vec![], has_merge_conflict: false, codeowners_eligibility: Default::default(),
+                    base: "".into(), head_sha: "".into(), draft: false, approved: false, checks: vec![], threads: vec![], needs_parent_rebase: false, has_merge_conflict: false, codeowners_eligibility: Default::default(),
                 });
                 let threads = fetch_open_threads(&pr_state.threads);
                 print!("{}", format_open_threads(pr, &threads, json));

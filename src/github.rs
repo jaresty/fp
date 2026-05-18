@@ -180,12 +180,11 @@ impl GithubClient {
             branch: resp["head"]["ref"].as_str().unwrap_or("").to_string(),
             base: resp["base"]["ref"].as_str().unwrap_or("").to_string(),
             head_sha: resp["head"]["sha"].as_str().unwrap_or("").to_string(),
-            base_sha: resp["base"]["sha"].as_str().unwrap_or("").to_string(),
             draft: resp["draft"].as_bool().unwrap_or(false),
             approved: false,
             checks: vec![],
             threads: vec![],
-            has_merge_conflict: false, codeowners_eligibility: Default::default(),
+            needs_parent_rebase: false, has_merge_conflict: false, codeowners_eligibility: Default::default(),
         })
     }
 
@@ -242,6 +241,15 @@ impl GithubClient {
             .send()?
             .error_for_status()?;
         Ok(())
+    }
+
+    /// Returns true if `head_sha` is behind `base_sha` (base has commits not reachable from head).
+    pub fn is_head_behind_base(&self, owner: &str, repo: &str, base_sha: &str, head_sha: &str) -> bool {
+        self.get(&format!("/repos/{}/{}/compare/{}...{}", owner, repo, base_sha, head_sha))
+            .ok()
+            .and_then(|j| j["behind_by"].as_u64())
+            .map(|n| n > 0)
+            .unwrap_or(false)
     }
 
     pub fn fetch_pr_head_sha_and_base(&self, owner: &str, repo: &str, pr_number: u64) -> Result<(String, String)> {
@@ -375,7 +383,6 @@ impl GithubClient {
         let head_sha = pr_json["head"]["sha"].as_str().unwrap_or("").to_string();
         let draft = pr_json["draft"].as_bool().unwrap_or(false);
         let base_branch = pr_json["base"]["ref"].as_str().unwrap_or("main").to_string();
-        let base_sha = pr_json["base"]["sha"].as_str().unwrap_or("").to_string();
 
         // 2. Check runs
         let encoded_branch = branch.replace('/', "%2F");
@@ -582,7 +589,7 @@ impl GithubClient {
         let threads: Vec<Thread> = threads.into_iter().chain(review_body_threads).chain(issue_threads).collect();
 
         let has_merge_conflict = pr_json["mergeable"].as_bool() == Some(false);
-        Ok(PrState { number: pr_number, title, branch, base: base_branch, head_sha, base_sha, draft, approved, checks, threads, has_merge_conflict, codeowners_eligibility: Default::default() })
+        Ok(PrState { number: pr_number, title, branch, base: base_branch, head_sha, needs_parent_rebase: false, draft, approved, checks, threads, has_merge_conflict, codeowners_eligibility: Default::default() })
     }
 }
 

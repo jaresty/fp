@@ -57,7 +57,7 @@ pub struct PrState {
     #[serde(default)]
     pub head_sha: String,
     #[serde(default)]
-    pub base_sha: String,
+    pub needs_parent_rebase: bool,
     pub draft: bool,
     pub approved: bool,
     pub checks: Vec<Check>,
