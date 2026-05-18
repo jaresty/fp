@@ -192,8 +192,11 @@ enum Commands {
         #[arg(long, name = "merge")]
         merge_commit: bool,
     },
-    /// Rebase all tracked PRs in stack order onto their parent branches
-    RebaseStack,
+    /// Rebase tracked PRs in stack order onto their parent branches
+    RebaseStack {
+        /// Optional PR number to start from — rebase only that PR and its descendants
+        pr: Option<u64>,
+    },
     /// Create a new branch and worktree without creating a PR (use fp create afterwards)
     New {
         /// New branch name
@@ -501,6 +504,26 @@ pub fn locked_subtree(
     blocked
 }
 
+/// Returns the given root branch plus all tracked descendants, in the order they appear in `all_branches`.
+pub fn subtree_branches(
+    root: &str,
+    parent_of: &std::collections::HashMap<String, Option<String>>,
+    all_branches: &[String],
+) -> Vec<String> {
+    let mut members = std::collections::HashSet::new();
+    members.insert(root.to_string());
+    let mut changed = true;
+    while changed {
+        changed = false;
+        for (branch, parent) in parent_of {
+            if parent.as_deref().map(|p| members.contains(p)).unwrap_or(false) && members.insert(branch.clone()) {
+                changed = true;
+            }
+        }
+    }
+    all_branches.iter().filter(|b| members.contains(*b)).cloned().collect()
+}
+
 /// Returns true if the worktree at wt_path is checked out to a different branch than expected.
 pub fn worktree_branch_mismatch(wt_path: &std::path::Path, expected_branch: &str) -> anyhow::Result<bool> {
     let out = std::process::Command::new("git")
@@ -690,10 +713,13 @@ fn main() -> Result<()> {
                             number: tracked.number,
                             title: tracked.title.clone(),
                             branch: tracked.branch.clone(),
-                            base: "".into(), draft: false, approved: false,
+                            base: "".into(), head_sha: "".into(), base_sha: "".into(), draft: false, approved: false,
                             checks: vec![], threads: vec![], has_merge_conflict: false, codeowners_eligibility: Default::default(),
                         });
-                    let tasks = generate_tasks(&pr_state);
+                    let parent_state = prs.iter()
+                        .find(|p| p.branch == tracked.base)
+                        .and_then(|p| fetched.get(&p.number));
+                    let tasks = generate_tasks(&pr_state, parent_state);
                     let lock = worktree::lock_status(&git_dir, &tracked.branch)
                         .map(|s| format!("  {}", s))
                         .unwrap_or_default();
@@ -714,10 +740,13 @@ fn main() -> Result<()> {
                         number: tracked.number,
                         title: tracked.title.clone(),
                         branch: tracked.branch.clone(),
-                        base: "".into(), draft: false, approved: false,
+                        base: "".into(), head_sha: "".into(), base_sha: "".into(), draft: false, approved: false,
                         checks: vec![], threads: vec![], has_merge_conflict: false, codeowners_eligibility: Default::default(),
                     });
-                let task_list = generate_tasks(&pr_state);
+                let parent_state: Option<crate::model::PrState> = state.prs.values()
+                    .find(|p| p.branch == tracked.base)
+                    .and_then(|p| fetch(p.number, &p.branch));
+                let task_list = generate_tasks(&pr_state, parent_state.as_ref());
                 let lock = worktree::lock_status(&git_dir, &tracked.branch);
 
                 if json {
@@ -893,10 +922,13 @@ fn main() -> Result<()> {
                             number: tracked.number,
                             title: tracked.title.clone(),
                             branch: tracked.branch.clone(),
-                            base: "".into(), draft: false, approved: false,
+                            base: "".into(), head_sha: "".into(), base_sha: "".into(), draft: false, approved: false,
                             checks: vec![], threads: vec![], has_merge_conflict: false, codeowners_eligibility: Default::default(),
                         });
-                    let curr = generate_tasks(&pr_state);
+                    let parent_state = prs.iter()
+                        .find(|p| p.branch == tracked.base)
+                        .and_then(|p| fetched.get(&p.number));
+                    let curr = generate_tasks(&pr_state, parent_state);
                     all_tasks.extend(curr.clone());
 
                     let prev = prev_tasks.get(&tracked.number).map(|v| v.as_slice()).unwrap_or(&[]);
@@ -1130,7 +1162,7 @@ fn main() -> Result<()> {
             println!("✓ untracked PR #{}", pr);
         }
 
-        Commands::RebaseStack => {
+        Commands::RebaseStack { pr: rebase_from_pr } => {
             let mut state = store.load()?;
             if state.prs.is_empty() {
                 println!("No tracked PRs.");
@@ -1173,11 +1205,21 @@ fn main() -> Result<()> {
             }
 
             // Rebase remaining open PRs
-            let branches: Vec<String> = state.prs.values().map(|p| p.branch.clone()).collect();
-            if branches.is_empty() {
+            let all_branches: Vec<String> = state.prs.values().map(|p| p.branch.clone()).collect();
+            if all_branches.is_empty() {
                 return Ok(());
             }
-            let parent_of = stack::detect_parent_of(&branches, &main_root)?;
+            let parent_of = stack::detect_parent_of(&all_branches, &main_root)?;
+
+            // If a starting PR is given, restrict to that branch and its descendants
+            let branches: Vec<String> = if let Some(from_pr) = rebase_from_pr {
+                let start_branch = state.prs.get(&from_pr)
+                    .with_context(|| format!("PR #{} is not tracked", from_pr))?
+                    .branch.clone();
+                subtree_branches(&start_branch, &parent_of, &all_branches)
+            } else {
+                all_branches
+            };
 
             // Skip branches checked out in main worktree (and locked branches) and their descendants
             let directly_locked: std::collections::HashSet<String> = branches.iter()
@@ -1243,7 +1285,7 @@ fn main() -> Result<()> {
                 number: tracked.number,
                 title: tracked.title.clone(),
                 branch: tracked.branch.clone(),
-                base: "".into(), draft: false, approved: false,
+                base: "".into(), head_sha: "".into(), base_sha: "".into(), draft: false, approved: false,
                 checks: vec![], threads: vec![], has_merge_conflict: false, codeowners_eligibility: Default::default(),
             });
 
@@ -1331,7 +1373,7 @@ fn main() -> Result<()> {
                     None
                 }.unwrap_or_else(|| model::PrState {
                     number: tracked.number, title: tracked.title.clone(), branch: tracked.branch.clone(),
-                    base: "".into(), draft: false, approved: false, checks: vec![], threads: vec![], has_merge_conflict: false, codeowners_eligibility: Default::default(),
+                    base: "".into(), head_sha: "".into(), base_sha: "".into(), draft: false, approved: false, checks: vec![], threads: vec![], has_merge_conflict: false, codeowners_eligibility: Default::default(),
                 });
                 let threads = fetch_open_threads(&pr_state.threads);
                 print!("{}", format_open_threads(pr, &threads, json));

@@ -12,6 +12,7 @@ pub enum TaskType {
     MarkReady,
     MergeConflict,
     ReadyUnverified,
+    RebaseOnParent,
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
@@ -44,7 +45,7 @@ pub fn task_diff(prev: &[Task], curr: &[Task]) -> (Vec<Task>, Vec<Task>) {
 
 /// Returns ordered tasks blocking readiness for a PR.
 /// Empty vec means the PR is ready to merge.
-pub fn generate_tasks(pr: &PrState) -> Vec<Task> {
+pub fn generate_tasks(pr: &PrState, parent: Option<&PrState>) -> Vec<Task> {
     let mut tasks = Vec::new();
 
     // All checks → produce tasks based on status, required gates blocking only
@@ -111,6 +112,19 @@ pub fn generate_tasks(pr: &PrState) -> Vec<Task> {
             blocking: true,
             description: "Resolve merge conflict".into(),
             context_hint: "merge_conflict".into(),
+        });
+    }
+
+    // Parent PR ahead of child's base → child needs rebase
+    if let Some(p) = parent
+        && !p.head_sha.is_empty() && !pr.base_sha.is_empty() && p.head_sha != pr.base_sha
+    {
+        tasks.push(Task {
+            pr: pr.number,
+            task_type: TaskType::RebaseOnParent,
+            blocking: true,
+            description: format!("Run `fp rebase-stack {}` — parent PR is ahead of this branch's base", pr.number),
+            context_hint: "rebase_on_parent".into(),
         });
     }
 

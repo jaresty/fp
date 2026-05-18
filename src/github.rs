@@ -179,6 +179,8 @@ impl GithubClient {
             title: resp["title"].as_str().unwrap_or("").to_string(),
             branch: resp["head"]["ref"].as_str().unwrap_or("").to_string(),
             base: resp["base"]["ref"].as_str().unwrap_or("").to_string(),
+            head_sha: resp["head"]["sha"].as_str().unwrap_or("").to_string(),
+            base_sha: resp["base"]["sha"].as_str().unwrap_or("").to_string(),
             draft: resp["draft"].as_bool().unwrap_or(false),
             approved: false,
             checks: vec![],
@@ -370,8 +372,10 @@ impl GithubClient {
         let pr_json = self.get(&format!("/repos/{}/{}/pulls/{}", owner, repo, pr_number))?;
         let title = pr_json["title"].as_str().unwrap_or("").to_string();
         let branch = pr_json["head"]["ref"].as_str().unwrap_or("").to_string();
+        let head_sha = pr_json["head"]["sha"].as_str().unwrap_or("").to_string();
         let draft = pr_json["draft"].as_bool().unwrap_or(false);
         let base_branch = pr_json["base"]["ref"].as_str().unwrap_or("main").to_string();
+        let base_sha = pr_json["base"]["sha"].as_str().unwrap_or("").to_string();
 
         // 2. Check runs
         let encoded_branch = branch.replace('/', "%2F");
@@ -578,7 +582,7 @@ impl GithubClient {
         let threads: Vec<Thread> = threads.into_iter().chain(review_body_threads).chain(issue_threads).collect();
 
         let has_merge_conflict = pr_json["mergeable"].as_bool() == Some(false);
-        Ok(PrState { number: pr_number, title, branch, base: base_branch, draft, approved, checks, threads, has_merge_conflict, codeowners_eligibility: Default::default() })
+        Ok(PrState { number: pr_number, title, branch, base: base_branch, head_sha, base_sha, draft, approved, checks, threads, has_merge_conflict, codeowners_eligibility: Default::default() })
     }
 }
 

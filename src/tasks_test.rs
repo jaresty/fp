@@ -19,6 +19,8 @@ mod tests {
                 log_snippet: None,
             }],
             threads: vec![],
+            head_sha: "".into(),
+            base_sha: "".into(),
             has_merge_conflict: false, codeowners_eligibility: Default::default(),
         }
     }
@@ -27,7 +29,7 @@ mod tests {
     #[test]
     fn ready_pr_has_no_tasks() {
         let pr = pr_clean();
-        let tasks = generate_tasks(&pr);
+        let tasks = generate_tasks(&pr, None);
         assert!(tasks.is_empty(), "expected no tasks, got: {:?}", tasks);
     }
 
@@ -36,7 +38,7 @@ mod tests {
     fn failing_required_check_produces_fix_ci_task() {
         let mut pr = pr_clean();
         pr.checks[0].status = CheckStatus::Fail;
-        let tasks = generate_tasks(&pr);
+        let tasks = generate_tasks(&pr, None);
         assert!(
             tasks.iter().any(|t| t.task_type == TaskType::FixCi),
             "expected fix_ci task, got: {:?}",
@@ -49,7 +51,7 @@ mod tests {
     fn pending_required_check_produces_awaiting_ci() {
         let mut pr = pr_clean();
         pr.checks[0].status = CheckStatus::Pending;
-        let tasks = generate_tasks(&pr);
+        let tasks = generate_tasks(&pr, None);
         assert!(
             tasks.iter().any(|t| t.task_type == TaskType::AwaitingCi),
             "expected awaiting_ci task, got: {:?}",
@@ -70,7 +72,7 @@ mod tests {
             file: Some("src/main.rs".into()),
             line: Some(10),
         });
-        let tasks = generate_tasks(&pr);
+        let tasks = generate_tasks(&pr, None);
         assert!(
             tasks.iter().any(|t| t.task_type == TaskType::RespondThread),
             "expected respond_thread task, got: {:?}",
@@ -91,7 +93,7 @@ mod tests {
             file: None,
             line: None,
         });
-        let tasks = generate_tasks(&pr);
+        let tasks = generate_tasks(&pr, None);
         assert!(
             tasks.iter().any(|t| t.task_type == TaskType::RespondThread),
             "expected respond_thread task for stale thread, got: {:?}",
@@ -112,7 +114,7 @@ mod tests {
             file: None,
             line: None,
         });
-        let tasks = generate_tasks(&pr);
+        let tasks = generate_tasks(&pr, None);
         assert!(
             !tasks.iter().any(|t| t.task_type == TaskType::RespondThread),
             "resolved thread should not produce task, got: {:?}",
@@ -125,7 +127,7 @@ mod tests {
     fn no_approval_produces_awaiting_review_task() {
         let mut pr = pr_clean();
         pr.approved = false;
-        let tasks = generate_tasks(&pr);
+        let tasks = generate_tasks(&pr, None);
         assert!(
             tasks
                 .iter()
@@ -140,14 +142,14 @@ mod tests {
     fn fix_ci_is_blocking_awaiting_ci_is_not() {
         let mut pr_fail = pr_clean();
         pr_fail.checks[0].status = CheckStatus::Fail;
-        let fail_tasks = generate_tasks(&pr_fail);
+        let fail_tasks = generate_tasks(&pr_fail, None);
         assert!(fail_tasks
             .iter()
             .any(|t| t.task_type == TaskType::FixCi && t.blocking));
 
         let mut pr_pending = pr_clean();
         pr_pending.checks[0].status = CheckStatus::Pending;
-        let pending_tasks = generate_tasks(&pr_pending);
+        let pending_tasks = generate_tasks(&pr_pending, None);
         assert!(pending_tasks
             .iter()
             .any(|t| t.task_type == TaskType::AwaitingCi && !t.blocking));
@@ -165,7 +167,7 @@ mod tests {
             details_url: None,
             log_snippet: None,
         });
-        let tasks = generate_tasks(&pr);
+        let tasks = generate_tasks(&pr, None);
         assert!(
             tasks
                 .iter()
@@ -181,7 +183,7 @@ mod tests {
         let mut pr = pr_clean();
         pr.checks[0].required = false;
         pr.checks[0].status = CheckStatus::Fail;
-        let tasks = generate_tasks(&pr);
+        let tasks = generate_tasks(&pr, None);
         assert!(
             tasks
                 .iter()
@@ -197,7 +199,7 @@ mod tests {
         let mut pr = pr_clean();
         pr.checks[0].required = false;
         pr.checks[0].status = CheckStatus::Pending;
-        let tasks = generate_tasks(&pr);
+        let tasks = generate_tasks(&pr, None);
         assert!(
             tasks
                 .iter()
@@ -253,9 +255,10 @@ mod tests {
             approved: false,
             checks: vec![Check { name: "ci".into(), status: CheckStatus::Pass, required: true, details_url: None, log_snippet: None }],
             threads: vec![],
+            head_sha: "".into(), base_sha: "".into(),
             has_merge_conflict: false, codeowners_eligibility: Default::default(),
         };
-        let tasks = generate_tasks(&pr);
+        let tasks = generate_tasks(&pr, None);
         assert!(
             tasks.iter().any(|t| t.task_type == TaskType::MarkReady),
             "expected MarkReady task for draft PR with all green checks, got: {:?}",
@@ -275,9 +278,10 @@ mod tests {
             approved: false,
             checks: vec![Check { name: "ci".into(), status: CheckStatus::Pass, required: true, details_url: None, log_snippet: None }],
             threads: vec![],
+            head_sha: "".into(), base_sha: "".into(),
             has_merge_conflict: false, codeowners_eligibility: Default::default(),
         };
-        let tasks = generate_tasks(&pr);
+        let tasks = generate_tasks(&pr, None);
         assert!(
             !tasks.iter().any(|t| t.task_type == TaskType::MarkReady),
             "expected no MarkReady task for non-draft PR"
@@ -294,7 +298,7 @@ mod tests {
              src/bar.ts:3:1  error  Missing semicolon  semi\n\
              ✖ 2 problems (2 errors, 0 warnings)".into()
         );
-        let tasks = generate_tasks(&pr);
+        let tasks = generate_tasks(&pr, None);
         let fix_ci: Vec<_> = tasks.iter().filter(|t| t.task_type == TaskType::FixCi).collect();
         assert!(
             fix_ci.iter().any(|t| t.context_hint.contains("no-undef") || t.description.contains("no-undef")),
@@ -311,7 +315,7 @@ mod tests {
     fn merge_conflict_produces_task() {
         let mut pr = pr_clean();
         pr.has_merge_conflict = true;
-        let tasks = generate_tasks(&pr);
+        let tasks = generate_tasks(&pr, None);
         assert!(
             tasks.iter().any(|t| t.task_type == TaskType::MergeConflict && t.blocking),
             "expected blocking MergeConflict task, got: {:?}", tasks
@@ -322,7 +326,7 @@ mod tests {
     #[test]
     fn no_merge_conflict_produces_no_task() {
         let pr = pr_clean();
-        let tasks = generate_tasks(&pr);
+        let tasks = generate_tasks(&pr, None);
         assert!(
             !tasks.iter().any(|t| t.task_type == TaskType::MergeConflict),
             "expected no MergeConflict task when no conflict, got: {:?}", tasks
@@ -334,7 +338,7 @@ mod tests {
     fn unverifiable_codeowners_produces_ready_unverified_task() {
         let mut pr = pr_clean();
         pr.codeowners_eligibility = CownershipEligibility::Unverifiable { reviewer: "alice".into() };
-        let tasks = generate_tasks(&pr);
+        let tasks = generate_tasks(&pr, None);
         assert!(
             tasks.iter().any(|t| t.task_type == TaskType::ReadyUnverified),
             "expected ReadyUnverified task when CODEOWNERS unverifiable, got: {:?}", tasks
@@ -346,7 +350,7 @@ mod tests {
     fn ready_unverified_description_names_reviewer() {
         let mut pr = pr_clean();
         pr.codeowners_eligibility = CownershipEligibility::Unverifiable { reviewer: "bob".into() };
-        let tasks = generate_tasks(&pr);
+        let tasks = generate_tasks(&pr, None);
         let task = tasks.iter().find(|t| t.task_type == TaskType::ReadyUnverified).unwrap();
         assert!(task.description.contains("bob"), "description should name reviewer, got: {}", task.description);
     }
@@ -356,7 +360,7 @@ mod tests {
     fn ineligible_codeowners_approver_produces_awaiting_review_with_team() {
         let mut pr = pr_clean();
         pr.codeowners_eligibility = CownershipEligibility::Ineligible { reviewer: "carol".into(), required_team: "org/reviewers".into() };
-        let tasks = generate_tasks(&pr);
+        let tasks = generate_tasks(&pr, None);
         assert!(
             tasks.iter().any(|t| t.task_type == TaskType::AwaitingReview),
             "expected AwaitingReview when approver ineligible, got: {:?}", tasks
@@ -369,12 +373,51 @@ mod tests {
     #[test]
     fn eligible_codeowners_produces_no_ready_unverified_task() {
         let pr = pr_clean(); // codeowners_eligibility defaults to Verified
-        let tasks = generate_tasks(&pr);
+        let tasks = generate_tasks(&pr, None);
         assert!(
             !tasks.iter().any(|t| t.task_type == TaskType::ReadyUnverified),
             "Verified eligibility should not produce ReadyUnverified, got: {:?}", tasks
         );
         assert!(tasks.is_empty(), "clean PR with Verified eligibility should have no tasks, got: {:?}", tasks);
+    }
+
+    // RS: RebaseOnParent task when parent head_sha differs from child base_sha
+    #[test]
+    fn rebase_on_parent_task_when_parent_head_differs_from_child_base() {
+        let mut child = pr_clean();
+        child.base_sha = "abc123".into();
+        let mut parent = pr_clean();
+        parent.head_sha = "def456".into();
+        let tasks = generate_tasks(&child, Some(&parent));
+        assert!(
+            tasks.iter().any(|t| t.task_type == TaskType::RebaseOnParent && t.blocking),
+            "expected blocking RebaseOnParent task, got: {:?}", tasks
+        );
+    }
+
+    // RS: no RebaseOnParent task when parent head_sha matches child base_sha
+    #[test]
+    fn no_rebase_on_parent_task_when_shas_match() {
+        let mut child = pr_clean();
+        child.base_sha = "abc123".into();
+        let mut parent = pr_clean();
+        parent.head_sha = "abc123".into();
+        let tasks = generate_tasks(&child, Some(&parent));
+        assert!(
+            !tasks.iter().any(|t| t.task_type == TaskType::RebaseOnParent),
+            "expected no RebaseOnParent task when shas match, got: {:?}", tasks
+        );
+    }
+
+    // RS: no RebaseOnParent task when no parent
+    #[test]
+    fn no_rebase_on_parent_task_when_no_parent() {
+        let pr = pr_clean();
+        let tasks = generate_tasks(&pr, None);
+        assert!(
+            !tasks.iter().any(|t| t.task_type == TaskType::RebaseOnParent),
+            "expected no RebaseOnParent task when no parent, got: {:?}", tasks
+        );
     }
 
     // DW3: task_diff returns empty when tasks unchanged

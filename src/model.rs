@@ -54,6 +54,10 @@ pub struct PrState {
     pub title: String,
     pub branch: String,
     pub base: String,
+    #[serde(default)]
+    pub head_sha: String,
+    #[serde(default)]
+    pub base_sha: String,
     pub draft: bool,
     pub approved: bool,
     pub checks: Vec<Check>,
