@@ -385,6 +385,14 @@ pub fn check_not_checked_out_in_main(branch: &str, dir: &std::path::Path) -> any
     Ok(())
 }
 
+pub fn repo_header(owner: &str, repo: &str) -> String {
+    format!("{}/{}", owner, repo)
+}
+
+pub fn require_repo(repo: Option<(String, String)>) -> Result<(String, String)> {
+    repo.ok_or_else(|| anyhow::anyhow!("no GitHub remote detected — cannot determine which repository these PRs belong to"))
+}
+
 pub fn format_single_pr_status(pr: u64, tasks: &[tasks::Task], lock: Option<&str>) -> String {
     let lock_str = lock.map(|s| format!("  {}", s)).unwrap_or_default();
     if tasks.is_empty() {
@@ -480,11 +488,13 @@ fn main() -> Result<()> {
 
     match cli.command {
         Commands::Ls { json } => {
+            let (owner, repo_name) = require_repo(detect_repo())?;
             let state = store.load()?;
             if json {
                 let items: Vec<_> = state.prs.values().collect();
                 println!("{}", serde_json::to_string_pretty(&items)?);
             } else {
+                println!("{}", repo_header(&owner, &repo_name));
                 if state.prs.is_empty() {
                     println!("No tracked PRs. Use `fp track <pr>` to add one.");
                 } else {
@@ -501,25 +511,26 @@ fn main() -> Result<()> {
         Commands::Status { pr, json, all } => {
             let state = store.load()?;
             let token = std::env::var("GITHUB_TOKEN").ok();
-            let repo = detect_repo();
+            let repo = require_repo(detect_repo())?;
 
             let fetch = |number: u64, _branch: &str| -> Option<crate::model::PrState> {
-                if let (Some(tok), Some((owner, repo_name))) = (&token, &repo) {
+                if let Some(tok) = &token {
                     let client = GithubClient::new(tok.clone());
-                    client.fetch_pr(owner, repo_name, number).ok()
+                    client.fetch_pr(&repo.0, &repo.1, number).ok()
                 } else {
                     None
                 }
             };
 
             if all {
+                if !json { println!("{}", repo_header(&repo.0, &repo.1)); }
                 let mut prs: Vec<_> = state.prs.values().collect();
                 prs.sort_by_key(|p| p.number);
                 let pr_numbers: Vec<u64> = prs.iter().map(|p| p.number).collect();
 
                 let fetched: std::collections::HashMap<u64, crate::model::PrState> =
-                    if let (Some(tok), Some((owner, repo_name))) = (&token, &repo) {
-                        GithubClient::new(tok.clone()).fetch_prs_as_map(owner, repo_name, &pr_numbers)
+                    if let Some(tok) = &token {
+                        GithubClient::new(tok.clone()).fetch_prs_as_map(&repo.0, &repo.1, &pr_numbers)
                     } else {
                         std::collections::HashMap::new()
                     };
@@ -1216,6 +1227,29 @@ mod tests {
     fn install_shell_unsupported_returns_none() {
         assert!(fps_function_content("ksh").is_none(), "unsupported shell must return None");
         assert!(fps_install_path("ksh").is_none(), "unsupported shell install path must return None");
+    }
+
+    #[test]
+    fn repo_header_contains_owner_slash_repo() {
+        let h = repo_header("alice", "myproject");
+        assert!(h.contains("alice/myproject"), "repo_header must contain owner/repo, got: {}", h);
+    }
+
+    #[test]
+    fn require_repo_errors_with_no_github_remote_message_when_none() {
+        let result = require_repo(None);
+        assert!(result.is_err(), "require_repo(None) must return Err");
+        let msg = result.unwrap_err().to_string();
+        assert!(msg.contains("no GitHub remote"), "error must contain 'no GitHub remote', got: {}", msg);
+    }
+
+    #[test]
+    fn require_repo_returns_owner_and_repo_when_some() {
+        let result = require_repo(Some(("alice".into(), "proj".into())));
+        assert!(result.is_ok(), "require_repo(Some) must succeed");
+        let (owner, repo) = result.unwrap();
+        assert_eq!(owner, "alice");
+        assert_eq!(repo, "proj");
     }
 
     #[test]
