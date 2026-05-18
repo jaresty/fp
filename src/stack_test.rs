@@ -452,6 +452,82 @@ mod tests {
 
     // RS5: rebase_stack rebases root branches onto origin/main when main has new commits
     #[test]
+    // RS_ROOT2: root branch with TWO own commits must retain both after rebase when main advances.
+    // Bug: the --onto logic fired incorrectly for root branches (parent = origin/main).
+    // origin/main is not in the branch's ancestry after advancing, so parent_is_ancestor=false,
+    // causing old_upstream = oldest own commit and replaying only the newer commit.
+    #[test]
+    fn rebase_stack_root_branch_retains_all_commits_when_main_advances() {
+        use std::process::Command;
+        use tempfile::TempDir;
+
+        let remote_dir = TempDir::new().unwrap();
+        Command::new("git").args(["init", "--bare", "-b", "main"])
+            .current_dir(remote_dir.path()).output().unwrap();
+
+        let dir = TempDir::new().unwrap();
+        let path = dir.path();
+        let git = |args: &[&str]| Command::new("git").args(args).current_dir(path).output().unwrap();
+        let env = [("GIT_AUTHOR_NAME","t"),("GIT_AUTHOR_EMAIL","t@t"),
+                   ("GIT_COMMITTER_NAME","t"),("GIT_COMMITTER_EMAIL","t@t")];
+        let git_env = |args: &[&str]| {
+            let mut c = Command::new("git");
+            c.args(args).current_dir(path);
+            for (k,v) in &env { c.env(k,v); }
+            c.output().unwrap()
+        };
+
+        git(&["init", "-b", "main"]);
+        git(&["config", "user.email", "t@t.com"]);
+        git(&["config", "user.name", "T"]);
+        git(&["remote", "add", "origin", remote_dir.path().to_str().unwrap()]);
+
+        // main: commit M
+        std::fs::write(path.join("m.txt"), "m").unwrap();
+        git(&["add", "."]);
+        git_env(&["commit", "-m", "M"]);
+        git(&["push", "-u", "origin", "main"]);
+
+        // feat/work: TWO own commits (C1 then C2) on top of main
+        git(&["checkout", "-b", "feat/work"]);
+        std::fs::write(path.join("c1.txt"), "c1").unwrap();
+        git(&["add", "."]);
+        git_env(&["commit", "-m", "C1"]);
+        std::fs::write(path.join("c2.txt"), "c2").unwrap();
+        git(&["add", "."]);
+        git_env(&["commit", "-m", "C2"]);
+        git(&["push", "-u", "origin", "feat/work"]);
+
+        // main advances (X) — origin/main is no longer in feat/work's ancestry
+        git(&["checkout", "main"]);
+        std::fs::write(path.join("x.txt"), "x").unwrap();
+        git(&["add", "."]);
+        git_env(&["commit", "-m", "X"]);
+        git(&["push", "origin", "main"]);
+        git(&["checkout", "main"]);
+
+        let parent_of: std::collections::HashMap<String, Option<String>> =
+            [("feat/work".to_string(), None)].into_iter().collect();
+        let base_of: std::collections::HashMap<String, String> =
+            [("feat/work".to_string(), "main".to_string())].into_iter().collect();
+
+        let result = rebase_stack(
+            &["feat/work".to_string()], &parent_of, &base_of, path, &|_| {}
+        ).unwrap();
+        assert!(result.conflicts.is_empty(), "no conflicts expected: {:?}", result.conflicts);
+
+        // feat/work must have BOTH C1 and C2 on top of new main
+        let log = Command::new("git")
+            .args(["log", "--oneline", "origin/main..feat/work"])
+            .current_dir(path).output().unwrap();
+        let log_str = String::from_utf8_lossy(&log.stdout);
+        let count = log_str.trim().lines().count();
+        assert_eq!(count, 2,
+            "feat/work must retain both C1 and C2, got: {}", log_str);
+        assert!(log_str.contains(" C1"), "C1 must be present: {}", log_str);
+        assert!(log_str.contains(" C2"), "C2 must be present: {}", log_str);
+    }
+
     fn rebase_stack_rebases_root_branch_onto_origin_main() {
         use std::process::Command;
         use tempfile::TempDir;

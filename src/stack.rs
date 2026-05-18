@@ -170,10 +170,13 @@ pub fn rebase_stack(branches: &[String], parent_of: &HashMap<String, Option<Stri
                 .current_dir(&wt_path)
                 .output()?
         } else {
-            // Check if parent is an ancestor of branch. If not, parent was rebased since this
-            // branch was created — use --onto with the oldest exclusive commit so we replay
-            // only this branch's own commits, not the stale parent commits that would conflict.
-            let parent_is_ancestor = std::process::Command::new("git")
+            // Only check for "parent was rewritten" when parent is a local branch.
+            // Origin refs (origin/main etc.) are always forward-only — if origin/main is not
+            // an ancestor of the branch, the branch simply needs to be rebased forward and
+            // plain `git rebase parent` is always correct. Local branch parents can be
+            // rewritten (rebased with conflict resolution), which is the only case --onto helps.
+            let parent_is_local = !parent.starts_with("origin/");
+            let parent_is_ancestor = !parent_is_local || std::process::Command::new("git")
                 .args(["merge-base", "--is-ancestor", parent, branch])
                 .current_dir(&wt_path)
                 .output()?.status.success();
