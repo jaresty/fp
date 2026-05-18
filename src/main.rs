@@ -385,6 +385,14 @@ pub fn check_not_checked_out_in_main(branch: &str, dir: &std::path::Path) -> any
     Ok(())
 }
 
+/// Errors when merged_base is empty and there are downstream PRs that need rebasing.
+pub fn check_merge_base(merged_base: &str, has_downstream: bool) -> Result<()> {
+    if merged_base.is_empty() && has_downstream {
+        anyhow::bail!("could not determine merge base — downstream PRs were not rebased; rebase manually with: git rebase --onto <new-main-tip> <old-parent-tip> <branch>");
+    }
+    Ok(())
+}
+
 /// Returns `fetched` when non-empty (GitHub API is authoritative), else falls back to `stored`.
 pub fn resolve_merge_base(fetched: &str, stored: &str) -> String {
     if !fetched.is_empty() { fetched.to_string() } else { stored.to_string() }
@@ -926,16 +934,21 @@ fn main() -> Result<()> {
                     .filter(|p| p.number != pr)
                     .map(|p| (p.branch.clone(), p.base.clone()))
                     .collect();
-                let errors = stack::rebase_downstream_stack(
-                    &merged_branch, &head_sha, &merged_base, &branch_base_of, &work_dir, &|b| {
-                        println!("  rebasing {}...", b);
-                    }
-                );
-                for e in &errors {
+                let has_downstream = branch_base_of.values().any(|parent| parent == &merged_branch);
+                if let Err(e) = check_merge_base(&merged_base, has_downstream) {
                     println!("✗ {}", e);
-                }
-                if errors.is_empty() {
-                    println!("✓ rebased downstream stack onto {}", merged_base);
+                } else {
+                    let errors = stack::rebase_downstream_stack(
+                        &merged_branch, &head_sha, &merged_base, &branch_base_of, &work_dir, &|b| {
+                            println!("  rebasing {}...", b);
+                        }
+                    );
+                    for e in &errors {
+                        println!("✗ {}", e);
+                    }
+                    if errors.is_empty() {
+                        println!("✓ rebased downstream stack onto {}", merged_base);
+                    }
                 }
             }
 
@@ -1232,6 +1245,27 @@ mod tests {
     fn install_shell_unsupported_returns_none() {
         assert!(fps_function_content("ksh").is_none(), "unsupported shell must return None");
         assert!(fps_install_path("ksh").is_none(), "unsupported shell install path must return None");
+    }
+
+    #[test]
+    fn check_merge_base_errors_with_no_base_message_when_empty_and_has_downstream() {
+        let result = check_merge_base("", true);
+        assert!(result.is_err(), "check_merge_base must error when base empty and downstream exists");
+        let msg = result.unwrap_err().to_string();
+        assert!(msg.contains("could not determine merge base"),
+            "error must contain 'could not determine merge base', got: {}", msg);
+    }
+
+    #[test]
+    fn check_merge_base_ok_when_empty_and_no_downstream() {
+        assert!(check_merge_base("", false).is_ok(),
+            "check_merge_base must succeed when base empty but no downstream PRs");
+    }
+
+    #[test]
+    fn check_merge_base_ok_when_base_non_empty() {
+        assert!(check_merge_base("main", true).is_ok(),
+            "check_merge_base must succeed when base is non-empty");
     }
 
     #[test]
