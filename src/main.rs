@@ -398,6 +398,27 @@ pub fn resolve_merge_base(fetched: &str, stored: &str) -> String {
     if !fetched.is_empty() { fetched.to_string() } else { stored.to_string() }
 }
 
+/// Returns (pr_number, indent_prefix) pairs in tree order: roots first, then children indented.
+pub fn stack_tree_order(prs: &[&TrackedPr]) -> Vec<(u64, String)> {
+    let branches: std::collections::HashSet<&str> = prs.iter().map(|p| p.branch.as_str()).collect();
+    let mut result = Vec::new();
+    fn visit(branch: &str, prs: &[&TrackedPr], depth: usize, result: &mut Vec<(u64, String)>) {
+        let prefix = if depth == 0 { String::new() } else { "  ".repeat(depth - 1) + "  └─ " };
+        if let Some(pr) = prs.iter().find(|p| p.branch == branch) {
+            result.push((pr.number, prefix));
+        }
+        for child in prs.iter().filter(|p| p.base == branch) {
+            visit(&child.branch.clone(), prs, depth + 1, result);
+        }
+    }
+    let mut root_prs: Vec<&&TrackedPr> = prs.iter().filter(|p| !branches.contains(p.base.as_str())).collect();
+    root_prs.sort_by_key(|p| p.number);
+    for root in root_prs {
+        visit(&root.branch.clone(), prs, 0, &mut result);
+    }
+    result
+}
+
 pub fn repo_header(owner: &str, repo: &str) -> String {
     format!("{}/{}", owner, repo)
 }
@@ -511,11 +532,11 @@ fn main() -> Result<()> {
                 if state.prs.is_empty() {
                     println!("No tracked PRs. Use `fp track <pr>` to add one.");
                 } else {
-                    let mut prs: Vec<_> = state.prs.values().collect();
-                    prs.sort_by_key(|p| p.number);
-                    for pr in prs {
-                        let base_info = if pr.base.is_empty() { String::new() } else { format!(" ← {}", pr.base) };
-                        println!("#{} {}{} ({})", pr.number, pr.title, base_info, pr.branch);
+                    let prs: Vec<_> = state.prs.values().collect();
+                    for (number, prefix) in stack_tree_order(&prs) {
+                        if let Some(pr) = state.prs.get(&number) {
+                            println!("{}#{} {} ({})", prefix, pr.number, pr.title, pr.branch);
+                        }
                     }
                 }
             }
@@ -548,7 +569,9 @@ fn main() -> Result<()> {
                         std::collections::HashMap::new()
                     };
 
-                for tracked in prs {
+                let tree_order = stack_tree_order(&prs);
+                for (number, prefix) in tree_order {
+                    let tracked = match state.prs.get(&number) { Some(t) => t, None => continue };
                     let pr_state = fetched.get(&tracked.number).cloned()
                         .unwrap_or_else(|| crate::model::PrState {
                             number: tracked.number,
@@ -564,9 +587,9 @@ fn main() -> Result<()> {
                     if json {
                         println!("{}", serde_json::to_string_pretty(&tasks).unwrap());
                     } else if tasks.is_empty() {
-                        println!("PR #{} {} — ready{}", tracked.number, tracked.title, lock);
+                        println!("{}PR #{} {} — ready{}", prefix, tracked.number, tracked.title, lock);
                     } else {
-                        println!("PR #{} {} — {} task(s){}", tracked.number, tracked.title, tasks.len(), lock);
+                        println!("{}PR #{} {} — {} task(s){}", prefix, tracked.number, tracked.title, tasks.len(), lock);
                     }
                 }
             } else {
@@ -727,6 +750,9 @@ fn main() -> Result<()> {
                         std::collections::HashMap::new()
                     };
 
+                let tree_prefixes: std::collections::HashMap<u64, String> =
+                    stack_tree_order(&prs).into_iter().collect();
+
                 let mut all_tasks: Vec<tasks::Task> = Vec::new();
                 for tracked in &prs {
                     let pr_state = fetched.get(&tracked.number).cloned()
@@ -760,7 +786,8 @@ fn main() -> Result<()> {
                         }
                     } else {
                         let lock = worktree::lock_status(&git_dir, &tracked.branch);
-                        print!("{}", format_watch_initial_state(tracked.number, &tracked.title, &curr, json, lock.as_deref()));
+                        let prefix = tree_prefixes.get(&tracked.number).cloned().unwrap_or_default();
+                        print!("{}{}", prefix, format_watch_initial_state(tracked.number, &tracked.title, &curr, json, lock.as_deref()));
                     }
                     prev_tasks.insert(tracked.number, curr);
                 }
@@ -1245,6 +1272,41 @@ mod tests {
     fn install_shell_unsupported_returns_none() {
         assert!(fps_function_content("ksh").is_none(), "unsupported shell must return None");
         assert!(fps_install_path("ksh").is_none(), "unsupported shell install path must return None");
+    }
+
+    fn make_pr(number: u64, branch: &str, base: &str) -> TrackedPr {
+        TrackedPr { number, title: format!("PR {}", number), branch: branch.into(), base: base.into() }
+    }
+
+    #[test]
+    fn stack_tree_order_root_has_no_indent() {
+        let root = make_pr(1, "feature-a", "main");
+        let prs = vec![&root];
+        let result = stack_tree_order(&prs);
+        assert_eq!(result.len(), 1);
+        assert!(!result[0].1.contains("└─"), "root PR must have no └─ indent, got: {:?}", result[0].1);
+    }
+
+    #[test]
+    fn stack_tree_order_child_has_indent_prefix() {
+        let root = make_pr(1, "feature-a", "main");
+        let child = make_pr(2, "feature-b", "feature-a");
+        let prs = vec![&root, &child];
+        let result = stack_tree_order(&prs);
+        assert_eq!(result.len(), 2);
+        let child_entry = result.iter().find(|(n, _)| *n == 2).unwrap();
+        assert!(child_entry.1.contains("└─"), "child PR must contain └─, got: {:?}", child_entry.1);
+    }
+
+    #[test]
+    fn stack_tree_order_child_follows_parent() {
+        let root = make_pr(1, "feature-a", "main");
+        let child = make_pr(2, "feature-b", "feature-a");
+        let prs = vec![&child, &root]; // child listed first in input
+        let result = stack_tree_order(&prs);
+        let root_pos = result.iter().position(|(n, _)| *n == 1).unwrap();
+        let child_pos = result.iter().position(|(n, _)| *n == 2).unwrap();
+        assert!(root_pos < child_pos, "root must appear before its child in output");
     }
 
     #[test]
