@@ -925,7 +925,7 @@ fn main() -> Result<()> {
                 .output()
                 .context("failed to run git")?;
             let head_branch = String::from_utf8(out.stdout)?.trim().to_string();
-            let work_dir = stack::resolve_work_dir(&std::env::current_dir()?)?;
+            let main_root = repo_root()?;
 
             let client = GithubClient::new(token);
             let final_body = if demo.is_empty() {
@@ -947,7 +947,7 @@ fn main() -> Result<()> {
             if let Some(target_pr) = restack_before {
                 let target_branch = client.fetch_pr_metadata(&owner, &repo_name, target_pr)?.1;
                 let old_base = client.fetch_pr_base(&owner, &repo_name, target_pr)?;
-                rebase_branch_onto(&target_branch, &old_base, &head_branch, &work_dir)?;
+                rebase_branch_onto(&target_branch, &old_base, &head_branch, &main_root)?;
                 client.update_pr_base(&owner, &repo_name, target_pr, &head_branch)?;
                 println!("Restacked PR #{} onto {} (rebased {} --onto {})", target_pr, head_branch, target_branch, head_branch);
             }
@@ -965,7 +965,7 @@ fn main() -> Result<()> {
                 if let Some(next) = next_pr {
                     let next_branch = next.branch.clone();
                     let next_pr_num = next.number;
-                    rebase_branch_onto(&next_branch, &anchor_branch, &head_branch, &work_dir)?;
+                    rebase_branch_onto(&next_branch, &anchor_branch, &head_branch, &main_root)?;
                     client.update_pr_base(&owner, &repo_name, next_pr_num, &head_branch)?;
                     println!("Inserted {} between PR #{} and PR #{}", head_branch, anchor_pr, next_pr_num);
                 } else {
@@ -1079,7 +1079,7 @@ fn main() -> Result<()> {
             if let Some(tracked_pr) = state.prs.get(&pr) {
                 let merged_branch = tracked_pr.branch.clone();
                 let merged_base = resolve_merge_base(&fetched_base_ref, &tracked_pr.base);
-                let work_dir = stack::resolve_work_dir(&std::env::current_dir()?)?;
+                let main_root = repo_root()?;
 
                 let branch_base_of: std::collections::HashMap<String, String> = state.prs.values()
                     .filter(|p| p.number != pr)
@@ -1090,7 +1090,7 @@ fn main() -> Result<()> {
                     println!("✗ {}", e);
                 } else {
                     let errors = stack::rebase_downstream_stack(
-                        &merged_branch, &head_sha, &merged_base, &branch_base_of, &work_dir, &|b| {
+                        &merged_branch, &head_sha, &merged_base, &branch_base_of, &main_root, &|b| {
                             println!("  rebasing {}...", b);
                         }
                     );
@@ -1115,15 +1115,13 @@ fn main() -> Result<()> {
                 return Ok(());
             }
 
-            let work_dir = stack::resolve_work_dir(&std::env::current_dir()?)?;
-            // main_root is always the main worktree root regardless of CWD (for HEAD checks)
             let main_root = repo_root()?;
 
             // Handle merged PRs: rebase their children onto the merge target, then untrack
             if let (Ok(token), Some((owner, repo_name))) = (resolve_github_token(), detect_repo()) {
                 let client = GithubClient::new(token);
                 let all_branches: Vec<String> = state.prs.values().map(|p| p.branch.clone()).collect();
-                let parent_of = stack::detect_parent_of(&all_branches, &work_dir)?;
+                let parent_of = stack::detect_parent_of(&all_branches, &main_root)?;
 
                 let mut merged_prs: Vec<(u64, String)> = Vec::new();
                 for pr in state.prs.values() {
@@ -1136,7 +1134,7 @@ fn main() -> Result<()> {
                                     println!("{}", warn);
                                     continue;
                                 }
-                                match stack::rebase_onto_after_merge(branch, &head_sha, &base_ref, &work_dir) {
+                                match stack::rebase_onto_after_merge(branch, &head_sha, &base_ref, &main_root) {
                                     Ok(()) => println!("✓ rebased {} onto {} (merged PR #{})", branch, base_ref, pr.number),
                                     Err(e) => println!("✗ failed to rebase {} after merge: {}", branch, e),
                                 }
@@ -1157,7 +1155,7 @@ fn main() -> Result<()> {
             if branches.is_empty() {
                 return Ok(());
             }
-            let parent_of = stack::detect_parent_of(&branches, &work_dir)?;
+            let parent_of = stack::detect_parent_of(&branches, &main_root)?;
 
             // Skip branches checked out in main worktree (and locked branches) and their descendants
             let directly_locked: std::collections::HashSet<String> = branches.iter()
@@ -1185,7 +1183,7 @@ fn main() -> Result<()> {
                     std::collections::HashMap::new()
                 };
 
-            let result = stack::rebase_stack(&branches, &parent_of, &base_of, &work_dir, &|msg| eprintln!("{}", msg))?;
+            let result = stack::rebase_stack(&branches, &parent_of, &base_of, &main_root, &|msg| eprintln!("{}", msg))?;
 
             for branch in &result.rebased {
                 println!("✓ rebased {}", branch);
@@ -1555,7 +1553,7 @@ mod tests {
 
     #[test]
     #[test]
-    fn resolve_work_dir_returns_main_root_from_inside_worktree() {
+    fn main_repo_root_returns_main_root_from_inside_worktree() {
         let tmp = tempfile::tempdir().unwrap();
         let main_root = tmp.path().join("myrepo");
         std::fs::create_dir(&main_root).unwrap();
@@ -1578,11 +1576,11 @@ mod tests {
         std::process::Command::new("git")
             .args(["worktree","add", wt_path.to_str().unwrap(), "feat/branch"])
             .current_dir(&main_root).output().unwrap();
-        // call resolve_work_dir with the worktree path as cwd — must return main_root
-        let result = stack::resolve_work_dir(&wt_path).unwrap();
+        // main_repo_root must return main root even when called with a worktree path as cwd
+        let result = worktree::main_repo_root(&wt_path).unwrap();
         let expected = main_root.canonicalize().unwrap();
         assert_eq!(result.canonicalize().unwrap(), expected,
-            "resolve_work_dir must return main repo root even when called from inside a worktree");
+            "main_repo_root must return main repo root even when called from inside a worktree");
     }
 
     fn checked_out_in_main_error_mentions_adopt() {

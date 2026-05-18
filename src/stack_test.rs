@@ -82,12 +82,13 @@ mod tests {
         assert_eq!(parent_of.get("feat/top"), Some(&Some("feat/base".to_string())));
     }
 
-    // RS0: resolve_work_dir returns an absolute, existing directory
+    // RS0: main_repo_root returns an absolute, existing directory
     #[test]
-    fn resolve_work_dir_returns_absolute_path() {
-        let dir = crate::stack::resolve_work_dir(std::path::Path::new(".git")).unwrap();
-        assert!(dir.is_absolute(), "work_dir must be absolute, got: {:?}", dir);
-        assert!(dir.is_dir(), "work_dir must be an existing directory, got: {:?}", dir);
+    fn main_repo_root_returns_absolute_path() {
+        let cwd = std::env::current_dir().unwrap();
+        let dir = crate::worktree::main_repo_root(&cwd).unwrap();
+        assert!(dir.is_absolute(), "main_root must be absolute, got: {:?}", dir);
+        assert!(dir.is_dir(), "main_root must be an existing directory, got: {:?}", dir);
     }
 
     // MG1: rebase_onto_after_merge rebases child onto base using head_sha as cut point (squash-safe)

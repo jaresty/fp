@@ -286,9 +286,6 @@ pub fn rebase_downstream_stack(
     errors
 }
 
-pub fn resolve_work_dir(cwd: &Path) -> Result<std::path::PathBuf> {
-    worktree::main_repo_root(cwd)
-}
 
 fn git_rev_parse(branch: &str, dir: &Path) -> Result<String> {
     let out = std::process::Command::new("git")
