@@ -466,10 +466,19 @@ pub fn stack_tree_order(prs: &[&TrackedPr]) -> Vec<(u64, String)> {
 pub fn check_branch_lock(git_dir: &std::path::Path, branch: &str) -> Option<String> {
     let lp = worktree::lock_path(git_dir, branch);
     let lock = worktree::read_lock(&lp)?;
+    let my_pid = worktree::session_anchor_pid();
     if worktree::lock_is_live(&lock) {
-        Some(format!("⚠ skipping {} — locked by {} (pid {}, alive)", branch, lock.id, lock.pid))
+        Some(format!(
+            "⚠ skipping {} — locked by {} (pid {}, alive; your pid: {}). \
+            Steal only after confirming the other process has finished: fp unlock {}",
+            branch, lock.id, lock.pid, my_pid, branch
+        ))
     } else {
-        Some(format!("⚠ skipping {} — dead lock from {}; run: fp unlock {}", branch, lock.id, branch))
+        Some(format!(
+            "⚠ skipping {} — dead lock from {} (pid {} no longer running; your pid: {}). \
+            Safe to steal: fp unlock {}",
+            branch, lock.id, lock.pid, my_pid, branch
+        ))
     }
 }
 

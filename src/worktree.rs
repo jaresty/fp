@@ -155,8 +155,32 @@ pub fn repo_is_dirty(repo_root: &Path) -> anyhow::Result<bool> {
 pub fn check_target_lock(git_dir: &Path, branch: &str) -> anyhow::Result<()> {
     let lp = lock_path(git_dir, branch);
     if let Some(lock) = read_lock(&lp) {
-        let liveness = if lock_is_live(&lock) { "alive" } else { "dead" };
-        anyhow::bail!("worktree for '{}' is locked by '{}' (pid {}, {}) — run `fp unlock` to clear", branch, lock.id, lock.pid, liveness);
+        let is_live = lock_is_live(&lock);
+        let liveness = if is_live { "alive" } else { "dead" };
+        let my_pid = session_anchor_pid();
+        let safety_note = if is_live {
+            format!(
+                "The lock is ALIVE (pid {} is running). \
+                It is safe to steal only if you have confirmed that process has finished \
+                all work in this worktree and will not make further changes.",
+                lock.pid
+            )
+        } else {
+            "The lock is DEAD (pid is no longer running). It is safe to steal.".to_string()
+        };
+        anyhow::bail!(
+            "worktree for '{}' is locked by '{}' (pid {}, {})\n\n\
+            Your anchor PID is {}. The holder is {}.\n\n\
+            Stealing this lock means both processes could access the same worktree \
+            simultaneously, risking lost or corrupted uncommitted changes.\n\n\
+            {}\n\n\
+            To steal: fp unlock {}",
+            branch, lock.id, lock.pid, liveness,
+            my_pid,
+            if lock.pid == my_pid { "YOU (same process)" } else { "a DIFFERENT process" },
+            safety_note,
+            branch
+        );
     }
     Ok(())
 }
@@ -190,8 +214,11 @@ pub fn find_worktree_path(branch: &str, repo_root: &Path) -> Option<PathBuf> {
 pub fn lock_status(git_dir: &Path, branch: &str) -> Option<String> {
     let lp = lock_path(git_dir, branch);
     let lock = read_lock(&lp)?;
-    let liveness = if lock_is_live(&lock) { "alive" } else { "dead" };
-    Some(format!("🔒 {} (pid {}, {})", lock.id, lock.pid, liveness))
+    let is_live = lock_is_live(&lock);
+    let liveness = if is_live { "alive — do not steal" } else { "dead — safe to steal with: fp unlock" };
+    let my_pid = session_anchor_pid();
+    let owner = if lock.pid == my_pid { "YOU" } else { "other process" };
+    Some(format!("🔒 {} (pid {}, {}, {})", lock.id, lock.pid, owner, liveness))
 }
 
 #[cfg(test)]
@@ -408,8 +435,24 @@ mod tests {
         write_lock(&lp, std::process::id(), "agent", "live-session").unwrap();
         let result = check_target_lock(&git_dir, "feat/auth");
         assert!(result.is_err(), "live lock must block switch");
-        assert!(result.unwrap_err().to_string().contains("locked"),
-            "error must mention 'locked'");
+        let msg = result.unwrap_err().to_string();
+        assert!(msg.contains("locked"), "error must mention 'locked'");
+        // Guidance for agents: must explain own PID, stealing risk, and safety check
+        assert!(msg.contains("Your anchor PID"), "error must tell agent its own PID");
+        assert!(msg.contains("steal"), "error must explain stealing the lock");
+        assert!(msg.contains("safe"), "error must explain how to tell it is safe");
+    }
+
+    #[test]
+    fn check_target_lock_dead_lock_message_includes_guidance() {
+        let (_base, _repo, git_dir) = make_repo("myrepo");
+        let lp = lock_path(&git_dir, "feat/auth");
+        write_lock(&lp, 999_999_999, "agent", "dead-session").unwrap();
+        let result = check_target_lock(&git_dir, "feat/auth");
+        assert!(result.is_err());
+        let msg = result.unwrap_err().to_string();
+        assert!(msg.contains("dead"), "dead lock must be identified as dead");
+        assert!(msg.contains("safe to steal"), "dead lock message must say safe to steal");
     }
 
     #[test]
