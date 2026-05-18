@@ -57,11 +57,16 @@ fp rebase-stack                         # rebase each tracked branch onto parent
 fp merge <pr>                           # merge PR via GitHub API, auto-detect merge method,
                                         # rebase full downstream stack after merge
 
+# Branch and worktree creation
+fp new <branch> [--base <base>]         # create new branch + worktree without a PR (default base: main)
+                                        # fetches origin/<base>, creates branch from it, prints worktree path
+
 # PR creation and editing
 fp create "<title>" [--base <branch>]   # create draft PR for current branch
 fp create "<title>" --demo <url>        # create PR and inject ## Demo section with image
 fp create "<title>" --demo <file>       # upload local image file, inject URL into ## Demo
 fp create "<title>" --demo <url> --demo <url2>  # multiple demos, numbered
+fp create "<title>" --restack-before <pr>  # insert new PR before <pr> in the stack
 fp edit <pr> [--title "<t>"] [--body "<b>"]     # update PR title and/or body
 fp edit <pr> --demo <url>               # append/replace ## Demo section in PR body
 fp edit <pr> --demo <file>              # upload local image file, inject into PR body
@@ -182,17 +187,39 @@ fp watch --wait-for ready
 
 ## Stack Workflow
 
-All branches in the stack must be tracked first:
+Create new stacked branches from scratch:
+
+```sh
+fp new feat/step-1 --base main          # create branch + worktree from main
+fps feat/step-1                         # switch in
+# ... make changes, push ...
+fp create "Step 1: ..."                 # create PR, now on feat/step-1
+
+fp new feat/step-2 --base feat/step-1  # stack on top
+fps feat/step-2
+# ... make changes, push ...
+fp create "Step 2: ..." --base feat/step-1
+```
+
+Track existing PRs and see the stack:
 
 ```sh
 fp track 5    # base PR
 fp track 6    # PR stacked on #5
 fp track 7    # PR stacked on #6
-fp rebase-stack
+fp ls
 # Output:
+# owner/repo
+# #5 Step 1 title (feat/step-1)
+#   └─ #6 Step 2 title (feat/step-2)
+#       └─ #7 Step 3 title (feat/step-3)
+
+fp rebase-stack
 # ✓ rebased feat/step-2
 # ✓ rebased feat/step-3
 ```
+
+`fp ls`, `fp status --all`, and `fp watch` all show the stack tree with indented `└─` children.
 
 Conflicts are reported by branch name. Resolve manually, then re-run `fp rebase-stack`.
 
@@ -227,7 +254,8 @@ fp install-shell        # auto-detects fish/zsh/bash and writes the function
 fps 42 my-session   # enter worktree for PR #42 with session label (created if needed)
 fps 87 my-session   # switch to PR #87 worktree
 fps root            # return to main repo root from anywhere
-fp status --all     # shows 🔒 <id> (pid, alive/dead) next to locked PRs
+fp ls               # shows owner/repo header + stack tree; errors if no GitHub remote
+fp status --all     # shows owner/repo header + stack tree + task counts; errors if no GitHub remote
 fp watch            # also shows lock status per PR
 fp unlock <branch>  # explicitly remove a lock (required — locks are never auto-cleared)
 fp untrack 42       # removes worktree + cleans up lock
