@@ -286,12 +286,8 @@ pub fn rebase_downstream_stack(
     errors
 }
 
-pub fn resolve_work_dir(_git_dir: &Path) -> Result<std::path::PathBuf> {
-    let out = std::process::Command::new("git")
-        .args(["rev-parse", "--show-toplevel"])
-        .output()?;
-    let path = String::from_utf8(out.stdout)?.trim().to_string();
-    Ok(std::path::PathBuf::from(path))
+pub fn resolve_work_dir(cwd: &Path) -> Result<std::path::PathBuf> {
+    worktree::main_repo_root(cwd)
 }
 
 fn git_rev_parse(branch: &str, dir: &Path) -> Result<String> {

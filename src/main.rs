@@ -925,7 +925,7 @@ fn main() -> Result<()> {
                 .output()
                 .context("failed to run git")?;
             let head_branch = String::from_utf8(out.stdout)?.trim().to_string();
-            let work_dir = stack::resolve_work_dir(std::path::Path::new(".git"))?;
+            let work_dir = stack::resolve_work_dir(&std::env::current_dir()?)?;
 
             let client = GithubClient::new(token);
             let final_body = if demo.is_empty() {
@@ -1079,7 +1079,7 @@ fn main() -> Result<()> {
             if let Some(tracked_pr) = state.prs.get(&pr) {
                 let merged_branch = tracked_pr.branch.clone();
                 let merged_base = resolve_merge_base(&fetched_base_ref, &tracked_pr.base);
-                let work_dir = stack::resolve_work_dir(std::path::Path::new("."))?;
+                let work_dir = stack::resolve_work_dir(&std::env::current_dir()?)?;
 
                 let branch_base_of: std::collections::HashMap<String, String> = state.prs.values()
                     .filter(|p| p.number != pr)
@@ -1115,7 +1115,7 @@ fn main() -> Result<()> {
                 return Ok(());
             }
 
-            let work_dir = stack::resolve_work_dir(&git_dir)?;
+            let work_dir = stack::resolve_work_dir(&std::env::current_dir()?)?;
             // main_root is always the main worktree root regardless of CWD (for HEAD checks)
             let main_root = repo_root()?;
 
@@ -1554,6 +1554,37 @@ mod tests {
     }
 
     #[test]
+    #[test]
+    fn resolve_work_dir_returns_main_root_from_inside_worktree() {
+        let tmp = tempfile::tempdir().unwrap();
+        let main_root = tmp.path().join("myrepo");
+        std::fs::create_dir(&main_root).unwrap();
+        let env = [("GIT_AUTHOR_NAME","t"),("GIT_AUTHOR_EMAIL","t@t"),("GIT_COMMITTER_NAME","t"),("GIT_COMMITTER_EMAIL","t@t")];
+        std::process::Command::new("git").args(["init"]).current_dir(&main_root).output().unwrap();
+        let mut cmd = std::process::Command::new("git");
+        cmd.args(["commit","--allow-empty","-m","init"]).current_dir(&main_root);
+        for (k,v) in &env { cmd.env(k,v); }
+        cmd.output().unwrap();
+        // create a worktree
+        let wt_path = tmp.path().join("myrepo-worktrees/feat/branch");
+        std::fs::create_dir_all(&wt_path).unwrap();
+        std::process::Command::new("git").args(["checkout","-b","feat/branch"]).current_dir(&main_root).output().unwrap();
+        // re-check out main so we can add worktree for feat/branch
+        std::process::Command::new("git").args(["checkout","-b","other"]).current_dir(&main_root).output().unwrap();
+        let mut cmd2 = std::process::Command::new("git");
+        cmd2.args(["commit","--allow-empty","-m","other"]).current_dir(&main_root);
+        for (k,v) in &env { cmd2.env(k,v); }
+        cmd2.output().unwrap();
+        std::process::Command::new("git")
+            .args(["worktree","add", wt_path.to_str().unwrap(), "feat/branch"])
+            .current_dir(&main_root).output().unwrap();
+        // call resolve_work_dir with the worktree path as cwd — must return main_root
+        let result = stack::resolve_work_dir(&wt_path).unwrap();
+        let expected = main_root.canonicalize().unwrap();
+        assert_eq!(result.canonicalize().unwrap(), expected,
+            "resolve_work_dir must return main repo root even when called from inside a worktree");
+    }
+
     fn checked_out_in_main_error_mentions_adopt() {
         use std::path::PathBuf;
         let tmp = tempfile::tempdir().unwrap();
