@@ -385,6 +385,11 @@ pub fn check_not_checked_out_in_main(branch: &str, dir: &std::path::Path) -> any
     Ok(())
 }
 
+/// Returns `fetched` when non-empty (GitHub API is authoritative), else falls back to `stored`.
+pub fn resolve_merge_base(fetched: &str, stored: &str) -> String {
+    if !fetched.is_empty() { fetched.to_string() } else { stored.to_string() }
+}
+
 pub fn repo_header(owner: &str, repo: &str) -> String {
     format!("{}/{}", owner, repo)
 }
@@ -905,7 +910,7 @@ fn main() -> Result<()> {
             };
 
             // Fetch the PR's head branch and base before merging (need head_sha for rebase --onto)
-            let (head_sha, _base_ref) = client.fetch_pr_head_sha_and_base(&owner, &repo_name, pr)?;
+            let (head_sha, fetched_base_ref) = client.fetch_pr_head_sha_and_base(&owner, &repo_name, pr)?;
 
             // Perform the merge
             let merge_sha = client.merge_pr(&owner, &repo_name, pr, Some(merge_method))?;
@@ -914,7 +919,7 @@ fn main() -> Result<()> {
             // Find the tracked PR to get the head branch name, then rebase downstream
             if let Some(tracked_pr) = state.prs.get(&pr) {
                 let merged_branch = tracked_pr.branch.clone();
-                let merged_base = tracked_pr.base.clone();
+                let merged_base = resolve_merge_base(&fetched_base_ref, &tracked_pr.base);
                 let work_dir = stack::resolve_work_dir(std::path::Path::new("."))?;
 
                 let branch_base_of: std::collections::HashMap<String, String> = state.prs.values()
@@ -1227,6 +1232,24 @@ mod tests {
     fn install_shell_unsupported_returns_none() {
         assert!(fps_function_content("ksh").is_none(), "unsupported shell must return None");
         assert!(fps_install_path("ksh").is_none(), "unsupported shell install path must return None");
+    }
+
+    #[test]
+    fn resolve_merge_base_prefers_fetched_when_both_non_empty() {
+        assert_eq!(resolve_merge_base("main", "old-base"), "main",
+            "resolve_merge_base must return fetched when both are non-empty");
+    }
+
+    #[test]
+    fn resolve_merge_base_uses_fetched_when_stored_empty() {
+        assert_eq!(resolve_merge_base("main", ""), "main",
+            "resolve_merge_base must return fetched when stored is empty");
+    }
+
+    #[test]
+    fn resolve_merge_base_falls_back_to_stored_when_fetched_empty() {
+        assert_eq!(resolve_merge_base("", "stored-base"), "stored-base",
+            "resolve_merge_base must fall back to stored when fetched is empty");
     }
 
     #[test]
