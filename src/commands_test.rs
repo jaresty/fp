@@ -306,4 +306,34 @@ mod tests {
         let out = crate::commands::cmd_ls(&store, "alice", "myrepo", false).unwrap();
         assert!(out.contains("No tracked PRs"), "cmd_ls with empty store must say 'No tracked PRs', got: {}", out);
     }
+
+    #[test]
+    fn commands_governs_cmd_comment_posts_and_returns_url() {
+        let fake = make_fake_with_pr(7);
+        let out = crate::commands::cmd_comment(&fake, "owner", "repo", 7, "great work").unwrap();
+        assert!(out.contains("Comment posted"), "must say 'Comment posted', got: {}", out);
+        assert!(out.contains("http"), "must contain a URL, got: {}", out);
+    }
+
+    #[test]
+    fn commands_governs_cmd_threads_open_returns_formatted_threads() {
+        let tmp = tempfile::tempdir().unwrap();
+        let git_dir = tmp.path().join("git_dir");
+        std::fs::create_dir_all(&git_dir).unwrap();
+        let store = make_store_with_pr(&git_dir, 7, "feat/test");
+        let fake = make_fake_with_pr(7);
+        let out = crate::commands::cmd_threads(Some(&fake), &store, "owner", "repo", 7, false, false).unwrap();
+        assert!(out.contains("7") || out.contains("fix this"), "must contain thread content, got: {}", out);
+    }
+
+    #[test]
+    fn commands_governs_cmd_threads_errors_on_untracked() {
+        let tmp = tempfile::tempdir().unwrap();
+        let git_dir = tmp.path().join("git_dir");
+        std::fs::create_dir_all(&git_dir).unwrap();
+        let store = crate::store::Store::open(&git_dir);
+        let result = crate::commands::cmd_threads(None, &store, "owner", "repo", 99, false, false);
+        assert!(result.is_err(), "must error for untracked PR");
+        assert!(result.unwrap_err().to_string().contains("not tracked"), "error must say 'not tracked'");
+    }
 }

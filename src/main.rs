@@ -56,7 +56,7 @@ mod profile_test;
 
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
-use github::{GithubClient, detect_repo, resolve_github_token, resolve_track_branch, fetch_open_threads, format_open_threads, format_resolved_threads};
+use github::{GithubClient, detect_repo, resolve_github_token, resolve_track_branch};
 use store::{Store, PrCache};
 use tasks::{generate_tasks, task_diff};
 
@@ -400,8 +400,7 @@ fn main() -> Result<()> {
             let (owner, repo_name) = detect_repo()
                 .context("could not detect GitHub repo from git remote")?;
             let client = GithubClient::new(token);
-            let url = client.post_pr_comment(&owner, &repo_name, pr, &message)?;
-            println!("Comment posted: {}", url);
+            println!("{}", commands::cmd_comment(&client, &owner, &repo_name, pr, &message)?);
         }
 
         Commands::Edit { pr, title, body, demo } => {
@@ -877,34 +876,11 @@ fn main() -> Result<()> {
         }
 
         Commands::Threads { pr, resolved, json } => {
-            let state = store.load()?;
             let token = resolve_github_token().ok();
-            let repo = detect_repo();
-
-            let tracked = state.cache.get(&pr)
-                .with_context(|| format!("PR #{} is not tracked. Run `fp track {}`", pr, pr))?;
-
-            if resolved {
-                if let (Some(tok), Some((owner, repo_name))) = (token, repo) {
-                    let client = GithubClient::new(tok);
-                    let threads = client.fetch_resolved_threads_graphql(&owner, &repo_name, pr)?;
-                    print!("{}", format_resolved_threads(pr, &threads, json));
-                } else {
-                    println!("No GitHub credentials — cannot fetch resolved threads.");
-                }
-            } else {
-                let pr_state = if let (Some(tok), Some((owner, repo_name))) = (token, repo) {
-                    let client = GithubClient::new(tok);
-                    client.fetch_pr(&owner, &repo_name, pr).ok()
-                } else {
-                    None
-                }.unwrap_or_else(|| model::PrState {
-                    number: tracked.number, title: tracked.title.clone(), branch: tracked.branch.clone(),
-                    base: "".into(), head_sha: "".into(), draft: false, approved: false, checks: vec![], threads: vec![], needs_parent_rebase: false, has_merge_conflict: false, codeowners_eligibility: Default::default(),
-                });
-                let threads = fetch_open_threads(&pr_state.threads);
-                print!("{}", format_open_threads(pr, &threads, json));
-            }
+            let (owner, repo_name) = detect_repo().unwrap_or_default();
+            let client = token.as_ref().map(|t| GithubClient::new(t.clone()));
+            let client_ref: Option<&dyn github::GithubClientTrait> = client.as_ref().map(|c| c as &dyn github::GithubClientTrait);
+            print!("{}", commands::cmd_threads(client_ref, &store, &owner, &repo_name, pr, resolved, json)?);
         }
 
         Commands::AgentContext { json } => {

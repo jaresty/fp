@@ -242,6 +242,44 @@ pub fn cmd_untrack(store: &crate::store::Store, repo_root: &std::path::Path, git
     Ok(format!("Untracked PR #{}", pr))
 }
 
+pub fn cmd_comment(client: &dyn crate::github::GithubClientTrait, owner: &str, repo: &str, pr: u64, message: &str) -> anyhow::Result<String> {
+    let url = client.post_pr_comment(owner, repo, pr, message)?;
+    Ok(format!("Comment posted: {}", url))
+}
+
+pub fn cmd_threads(
+    client: Option<&dyn crate::github::GithubClientTrait>,
+    store: &crate::store::Store,
+    owner: &str,
+    repo: &str,
+    pr: u64,
+    resolved: bool,
+    json: bool,
+) -> anyhow::Result<String> {
+    let state = store.load()?;
+    let tracked = state.cache.get(&pr)
+        .with_context(|| format!("PR #{} is not tracked. Run `fp track {}`", pr, pr))?;
+
+    if resolved {
+        if let Some(c) = client {
+            let threads = c.fetch_resolved_threads_graphql(owner, repo, pr)?;
+            return Ok(crate::display::format_resolved_threads(pr, &threads, json));
+        }
+        return Ok("No GitHub credentials — cannot fetch resolved threads.".into());
+    }
+
+    let pr_state = client
+        .and_then(|c| c.fetch_pr(owner, repo, pr).ok())
+        .unwrap_or_else(|| crate::model::PrState {
+            number: tracked.number, title: tracked.title.clone(), branch: tracked.branch.clone(),
+            base: "".into(), head_sha: "".into(), draft: false, approved: false,
+            checks: vec![], threads: vec![], needs_parent_rebase: false, has_merge_conflict: false,
+            codeowners_eligibility: Default::default(),
+        });
+    let threads = crate::display::fetch_open_threads(&pr_state.threads);
+    Ok(crate::display::format_open_threads(pr, &threads, json))
+}
+
 pub fn cmd_ls(store: &crate::store::Store, owner: &str, repo: &str, json: bool) -> anyhow::Result<String> {
     let state = store.load()?;
     if json {

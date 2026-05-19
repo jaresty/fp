@@ -687,7 +687,7 @@ impl GithubClientTrait for FakeGithubClient {
     fn fetch_resolved_threads_graphql(&self, _o: &str, _r: &str, _n: u64) -> Result<Vec<ResolvedThreadInfo>> { Ok(vec![]) }
     fn reply_to_thread(&self, _o: &str, _r: &str, _n: u64, _t: &Thread, _b: &str) -> Result<String> { Ok("ok".into()) }
     fn reply_to_comment(&self, _o: &str, _r: &str, _n: u64, _c: u64, _b: &str) -> Result<String> { Ok("ok".into()) }
-    fn post_pr_comment(&self, _o: &str, _r: &str, _n: u64, _b: &str) -> Result<String> { Ok("ok".into()) }
+    fn post_pr_comment(&self, _o: &str, _r: &str, _n: u64, _b: &str) -> Result<String> { Ok("https://github.com/fake/comment/1".into()) }
     #[allow(clippy::too_many_arguments)]
     fn create_pr_with_body(&self, _o: &str, _r: &str, title: &str, head: &str, base: &str, draft: bool, _body: Option<&str>) -> Result<PrState> {
         Ok(PrState { number: 0, title: title.into(), branch: head.into(), base: base.into(), head_sha: String::new(), draft, approved: false, checks: vec![], threads: vec![], needs_parent_rebase: false, has_merge_conflict: false, codeowners_eligibility: Default::default() })
@@ -720,7 +720,6 @@ pub fn resolve_merge_method(
 pub use crate::credentials::{extract_github_session_from_browser_with_chrome_db, resolve_github_token};
 pub use crate::agent::agent_context_manifest_with_prs;
 
-pub use crate::display::{format_open_threads, format_resolved_threads, fetch_open_threads};
 pub use crate::model::{ResolvedThreadInfo, parse_resolved_review_threads_from_graphql};
 
 pub use crate::merge::resolve_track_branch;
