@@ -13,6 +13,7 @@ pub mod shell;
 pub mod merge;
 pub mod upload;
 pub mod platform;
+pub mod commands;
 
 #[cfg(test)]
 mod tasks_test;
@@ -48,6 +49,8 @@ mod lifecycle_test;
 mod upload_test;
 #[cfg(test)]
 mod notify_ext_test;
+#[cfg(test)]
+mod commands_test;
 
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
@@ -746,7 +749,7 @@ fn main() -> Result<()> {
         Commands::Unlock { branch } => {
             let lp = worktree::lock_path(&git_dir, &branch);
             worktree::remove_lock(&lp)?;
-            println!("Unlocked branch '{}'", branch);
+            println!("{}", commands::unlock_message(&branch));
         }
 
         Commands::InstallShell { shell, print } => {
@@ -1086,10 +1089,7 @@ fn main() -> Result<()> {
             if json {
                 println!("{}", serde_json::to_string_pretty(&manifest)?);
             } else {
-                println!("fp agent-context — run with --json for machine-readable output");
-                println!("auth: GITHUB_TOKEN or gh auth login");
-                println!("commands: ls, status, track, untrack, watch, reply, context, threads, create, rebase-stack");
-                println!("tracked PRs: {}", prs.len());
+                println!("{}", commands::agent_context_text(prs.len()));
             }
         }
 
