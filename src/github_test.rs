@@ -1868,14 +1868,14 @@ mod tests {
         assert_eq!(issue_threads.len(), 0, "expected bot comment to be excluded, got {}", issue_threads.len());
     }
 
-    // IC3: issue comment with author reply is Addressed
+    // IC3: issue comment with author @mention reply is Addressed
     #[test]
     fn issue_comment_with_author_reply_is_addressed() {
         let mut server = mockito::Server::new();
-        // Two comments: reviewer asks, author replies
+        // Two comments: reviewer asks, author replies with @mention
         let comments = r#"[
             {"id":3,"body":"please clarify","user":{"login":"reviewer","type":"User"}},
-            {"id":4,"body":"done","user":{"login":"author","type":"User"}}
+            {"id":4,"body":"@reviewer done","user":{"login":"author","type":"User"}}
         ]"#;
         full_pr_mocks(&mut server, 79, "author", "sha3", comments);
         let pr = mock_client(&server).fetch_pr("owner", "repo", 79).unwrap();
@@ -2388,5 +2388,45 @@ mod tests {
         let result_from_worktree_sibling = crate::github::detect_repo_with_cwd(&worktree);
         assert!(result_from_worktree_sibling.is_none(),
             "detect_repo must return None from a non-git path: {:?}", result_from_worktree_sibling);
+    }
+
+    fn setup_issue_comment_pr(server: &mut mockito::Server, pr_num: u64, issue_comments: &str) {
+        let pr_body = format!(r#"{{"number":{pr_num},"title":"t","draft":false,"head":{{"ref":"b"}},"user":{{"login":"author"}}}}"#);
+        server.mock("GET", &*format!("/repos/owner/repo/pulls/{pr_num}")).with_status(200).with_header("content-type","application/json").with_body(pr_body).create();
+        server.mock("GET", &*format!("/repos/owner/repo/commits/b/check-runs")).with_status(200).with_header("content-type","application/json").with_body(r#"{"check_runs":[]}"#).create();
+        server.mock("GET", &*format!("/repos/owner/repo/branches/b/protection")).with_status(404).create();
+        server.mock("GET", &*format!("/repos/owner/repo/pulls/{pr_num}/reviews?per_page=100&page=1")).with_status(200).with_header("content-type","application/json").with_body(r#"[]"#).create();
+        server.mock("GET", &*format!("/repos/owner/repo/pulls/{pr_num}/comments?per_page=100&page=1")).with_status(200).with_header("content-type","application/json").with_body(r#"[]"#).create();
+        server.mock("GET", &*format!("/repos/owner/repo/issues/{pr_num}/comments?per_page=100&page=1")).with_status(200).with_header("content-type","application/json").with_body(issue_comments).create();
+    }
+
+    // IC1: issue-level comment thread is Addressed when author reply @mentions reviewer
+    #[test]
+    fn issue_thread_addressed_when_author_reply_mentions_reviewer() {
+        let mut server = mockito::Server::new();
+        let comments = r#"[
+            {"id":1,"body":"please fix this","user":{"login":"reviewer","type":"User"},"created_at":"2024-01-01T10:00:00Z"},
+            {"id":2,"body":"@reviewer fixed!","user":{"login":"author","type":"User"},"created_at":"2024-01-01T11:00:00Z"}
+        ]"#;
+        setup_issue_comment_pr(&mut server, 201, comments);
+        let pr = mock_client(&server).fetch_pr("owner", "repo", 201).unwrap();
+        let thread = pr.threads.iter().find(|t| t.author == "reviewer").unwrap();
+        assert_eq!(thread.state, ThreadState::Addressed,
+            "issue thread must be Addressed when author reply @mentions reviewer, got {:?}", thread.state);
+    }
+
+    // IC2: issue-level comment thread is Open when author posts without @mentioning reviewer
+    #[test]
+    fn issue_thread_open_when_author_reply_does_not_mention_reviewer() {
+        let mut server = mockito::Server::new();
+        let comments = r#"[
+            {"id":1,"body":"please fix this","user":{"login":"reviewer","type":"User"},"created_at":"2024-01-01T10:00:00Z"},
+            {"id":2,"body":"pushed a new commit","user":{"login":"author","type":"User"},"created_at":"2024-01-01T11:00:00Z"}
+        ]"#;
+        setup_issue_comment_pr(&mut server, 202, comments);
+        let pr = mock_client(&server).fetch_pr("owner", "repo", 202).unwrap();
+        let thread = pr.threads.iter().find(|t| t.author == "reviewer").unwrap();
+        assert_eq!(thread.state, ThreadState::Open,
+            "issue thread must remain Open when author reply does not @mention reviewer, got {:?}", thread.state);
     }
 }

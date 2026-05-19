@@ -569,9 +569,11 @@ impl GithubClient {
             let is_bot = user_type == "Bot" || login.contains("[bot]");
             let is_author = login == pr_author;
             if !is_bot && !is_author {
-                // Check if author replied in any subsequent comment
+                // Check if author replied with an @mention of this reviewer
+                let mention = format!("@{}", login);
                 let author_replied = issue_comments[i+1..].iter().any(|r| {
                     r["user"]["login"].as_str().unwrap_or("") == pr_author
+                        && r["body"].as_str().unwrap_or("").contains(&mention)
                 });
                 let state = if author_replied { ThreadState::Addressed } else { ThreadState::Open };
                 issue_threads.push(Thread {
