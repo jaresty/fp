@@ -599,8 +599,6 @@ impl GithubClient {
 
 pub use crate::upload::{github_upload_image, inject_demo_section};
 
-// Trait will be used once Tier-3 dispatch arms are migrated to accept &dyn GithubClientTrait.
-#[allow(dead_code)]
 pub trait GithubClientTrait {
     fn fetch_pr(&self, owner: &str, repo: &str, pr_number: u64) -> Result<PrState>;
     fn fetch_prs_as_map(&self, owner: &str, repo: &str, pr_numbers: &[u64]) -> std::collections::HashMap<u64, PrState>;
@@ -651,12 +649,14 @@ impl GithubClientTrait for GithubClient {
 #[cfg(test)]
 pub struct FakeGithubClient {
     prs: std::collections::HashMap<u64, PrState>,
+    checks: std::collections::HashMap<String, Vec<Check>>,
 }
 
 #[cfg(test)]
 impl FakeGithubClient {
-    pub fn new() -> Self { Self { prs: std::collections::HashMap::new() } }
+    pub fn new() -> Self { Self { prs: std::collections::HashMap::new(), checks: std::collections::HashMap::new() } }
     pub fn set_pr(&mut self, number: u64, pr: PrState) { self.prs.insert(number, pr); }
+    pub fn set_checks(&mut self, sha: &str, checks: Vec<Check>) { self.checks.insert(sha.into(), checks); }
 }
 
 #[cfg(test)]
@@ -681,7 +681,9 @@ impl GithubClientTrait for FakeGithubClient {
     fn fetch_pr_head_sha_and_base(&self, o: &str, r: &str, n: u64) -> Result<(String, String)> {
         let p = self.fetch_pr(o, r, n)?; Ok((p.head_sha, p.base))
     }
-    fn fetch_checks_for_sha(&self, _o: &str, _r: &str, _sha: &str) -> Result<Vec<Check>> { Ok(vec![]) }
+    fn fetch_checks_for_sha(&self, _o: &str, _r: &str, sha: &str) -> Result<Vec<Check>> {
+        Ok(self.checks.get(sha).cloned().unwrap_or_default())
+    }
     fn fetch_resolved_threads_graphql(&self, _o: &str, _r: &str, _n: u64) -> Result<Vec<ResolvedThreadInfo>> { Ok(vec![]) }
     fn reply_to_thread(&self, _o: &str, _r: &str, _n: u64, _t: &Thread, _b: &str) -> Result<String> { Ok("ok".into()) }
     fn reply_to_comment(&self, _o: &str, _r: &str, _n: u64, _c: u64, _b: &str) -> Result<String> { Ok("ok".into()) }

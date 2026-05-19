@@ -72,6 +72,86 @@ mod tests {
         );
     }
 
+    fn make_fake_with_pr(number: u64) -> crate::github::FakeGithubClient {
+        let mut fake = crate::github::FakeGithubClient::new();
+        fake.set_pr(number, crate::model::PrState {
+            number,
+            title: "test".into(),
+            branch: "feat/test".into(),
+            base: "main".into(),
+            head_sha: "abc123".into(),
+            draft: false,
+            approved: false,
+            checks: vec![crate::model::Check {
+                name: "ci/test".into(),
+                status: crate::model::CheckStatus::Pass,
+                required: true,
+                details_url: Some("https://ci.example.com/1".into()),
+                log_snippet: None,
+            }],
+            threads: vec![crate::model::Thread {
+                id: 42,
+                body: "fix this".into(),
+                state: crate::model::ThreadState::Open,
+                file: None,
+                line: None,
+                author: "reviewer".into(),
+                replies: vec![],
+            }],
+            needs_parent_rebase: false,
+            has_merge_conflict: false,
+            codeowners_eligibility: Default::default(),
+        });
+        fake
+    }
+
+    #[test]
+    fn commands_governs_cmd_checks_formats_check_results() {
+        let mut fake = crate::github::FakeGithubClient::new();
+        fake.set_checks("abc123", vec![crate::model::Check {
+            name: "ci/test".into(),
+            status: crate::model::CheckStatus::Pass,
+            required: true,
+            details_url: Some("https://ci.example.com/1".into()),
+            log_snippet: None,
+        }]);
+        let out = crate::commands::cmd_checks(&fake, "owner", "repo", "abc123").unwrap();
+        assert!(out.contains("ci/test"), "must contain check name, got: {}", out);
+        assert!(out.contains("✓"), "must contain pass symbol, got: {}", out);
+        assert!(out.contains("https://ci.example.com/1"), "must contain url, got: {}", out);
+    }
+
+    #[test]
+    fn commands_governs_cmd_checks_empty_says_no_checks() {
+        let fake = crate::github::FakeGithubClient::new();
+        let out = crate::commands::cmd_checks(&fake, "owner", "repo", "deadbeef").unwrap();
+        assert!(out.contains("No check runs"), "must say 'No check runs', got: {}", out);
+    }
+
+    #[test]
+    fn commands_governs_cmd_reply_returns_confirmation() {
+        let fake = make_fake_with_pr(7);
+        let out = crate::commands::cmd_reply(&fake, "owner", "repo", 7, 42, "looks good").unwrap();
+        assert!(out.contains("Replied"), "must confirm reply, got: {}", out);
+        assert!(out.contains("42"), "must mention thread id, got: {}", out);
+    }
+
+    #[test]
+    fn commands_governs_cmd_reply_errors_on_missing_thread() {
+        let fake = make_fake_with_pr(7);
+        let result = crate::commands::cmd_reply(&fake, "owner", "repo", 7, 99, "msg");
+        assert!(result.is_err(), "must error when thread not found");
+        assert!(result.unwrap_err().to_string().contains("not found"), "error must say 'not found'");
+    }
+
+    #[test]
+    fn commands_governs_cmd_ready_returns_confirmation() {
+        let fake = make_fake_with_pr(3);
+        let out = crate::commands::cmd_ready(&fake, "owner", "repo", 3).unwrap();
+        assert!(out.contains("ready"), "must confirm ready, got: {}", out);
+        assert!(out.contains("3"), "must mention PR number, got: {}", out);
+    }
+
     #[test]
     fn commands_governs_cmd_profile_save_and_load_roundtrip() {
         let tmp = tempfile::tempdir().unwrap();

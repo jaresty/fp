@@ -27,6 +27,37 @@ pub fn agent_context_text(pr_count: usize) -> String {
 
 use anyhow::Context as _;
 
+pub fn cmd_checks(client: &dyn crate::github::GithubClientTrait, owner: &str, repo: &str, sha: &str) -> anyhow::Result<String> {
+    let checks = client.fetch_checks_for_sha(owner, repo, sha)?;
+    if checks.is_empty() {
+        return Ok(format!("No check runs found for {}", sha));
+    }
+    let mut out = String::new();
+    for check in &checks {
+        let status = match check.status {
+            crate::model::CheckStatus::Pass => "✓",
+            crate::model::CheckStatus::Fail => "✗",
+            crate::model::CheckStatus::Pending => "⏳",
+        };
+        let url = check.details_url.as_deref().unwrap_or("(no url)");
+        out.push_str(&format!("{} {} — {}\n", status, check.name, url));
+    }
+    Ok(out)
+}
+
+pub fn cmd_reply(client: &dyn crate::github::GithubClientTrait, owner: &str, repo: &str, pr: u64, thread_id: u64, message: &str) -> anyhow::Result<String> {
+    let pr_state = client.fetch_pr(owner, repo, pr)?;
+    let thread = pr_state.threads.iter().find(|t| t.id == thread_id)
+        .with_context(|| format!("thread #{} not found on PR #{}", thread_id, pr))?;
+    let posted = client.reply_to_thread(owner, repo, pr, thread, message)?;
+    Ok(format!("Replied to thread #{}: {}", thread_id, posted))
+}
+
+pub fn cmd_ready(client: &dyn crate::github::GithubClientTrait, owner: &str, repo: &str, pr: u64) -> anyhow::Result<String> {
+    client.mark_pr_ready(owner, repo, pr)?;
+    Ok(format!("PR #{} marked as ready for review.", pr))
+}
+
 pub fn cmd_profile(
     profiles_path: &std::path::Path,
     action: &str,

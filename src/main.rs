@@ -462,12 +462,8 @@ fn main() -> Result<()> {
             let token = resolve_github_token()?;
             let (owner, repo_name) = detect_repo()
                 .context("could not detect GitHub repo from git remote")?;
-            let client = GithubClient::new(token.clone());
-            let pr_state = client.fetch_pr(&owner, &repo_name, pr)?;
-            let thread = pr_state.threads.iter().find(|t| t.id == thread_id)
-                .context(format!("thread #{} not found on PR #{}", thread_id, pr))?;
-            let posted = client.reply_to_thread(&owner, &repo_name, pr, thread, &message)?;
-            println!("Replied to thread #{}: {}", thread_id, posted);
+            let client = GithubClient::new(token);
+            println!("{}", commands::cmd_reply(&client, &owner, &repo_name, pr, thread_id, &message)?);
         }
 
         Commands::Ready { pr } => {
@@ -475,8 +471,7 @@ fn main() -> Result<()> {
             let (owner, repo_name) = detect_repo()
                 .context("could not detect GitHub repo from git remote")?;
             let client = GithubClient::new(token);
-            client.mark_pr_ready(&owner, &repo_name, pr)?;
-            println!("PR #{} marked as ready for review.", pr);
+            println!("{}", commands::cmd_ready(&client, &owner, &repo_name, pr)?);
         }
 
         Commands::Comment { pr, message } => {
@@ -957,20 +952,7 @@ fn main() -> Result<()> {
             let token = resolve_github_token()?;
             let (owner, repo_name) = detect_repo().context("could not detect GitHub repo")?;
             let client = GithubClient::new(token);
-            let checks = client.fetch_checks_for_sha(&owner, &repo_name, &sha)?;
-            if checks.is_empty() {
-                println!("No check runs found for {}", sha);
-            } else {
-                for check in &checks {
-                    let status = match check.status {
-                        model::CheckStatus::Pass => "✓",
-                        model::CheckStatus::Fail => "✗",
-                        model::CheckStatus::Pending => "⏳",
-                    };
-                    let url = check.details_url.as_deref().unwrap_or("(no url)");
-                    println!("{} {} — {}", status, check.name, url);
-                }
-            }
+            print!("{}", commands::cmd_checks(&client, &owner, &repo_name, &sha)?);
         }
 
         Commands::Threads { pr, resolved, json } => {
