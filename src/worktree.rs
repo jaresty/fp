@@ -1,4 +1,5 @@
 use std::path::{Path, PathBuf};
+use anyhow::Context;
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -342,6 +343,55 @@ fn parse_github_remote(url: &str) -> Option<(String, String)> {
         }
     }
     None
+}
+
+pub fn check_branch_lock(git_dir: &std::path::Path, branch: &str) -> Option<String> {
+    let lp = lock_path(git_dir, branch);
+    let lock = read_lock(&lp)?;
+    let my_pid = session_anchor_pid();
+    if lock_is_live(&lock) {
+        Some(format!(
+            "⚠ skipping {} — locked by {} (pid {}, alive; your pid: {}). \
+            Steal only after confirming the other process has finished: fp unlock {}",
+            branch, lock.id, lock.pid, my_pid, branch
+        ))
+    } else {
+        Some(format!(
+            "⚠ skipping {} — dead lock from {} (pid {} no longer running; your pid: {}). \
+            Safe to steal: fp unlock {}",
+            branch, lock.id, lock.pid, my_pid, branch
+        ))
+    }
+}
+
+pub fn git_dir() -> anyhow::Result<PathBuf> {
+    let cwd = std::env::current_dir().context("failed to get current directory")?;
+    common_git_dir(&cwd).context("not in a git repository")
+}
+
+pub fn repo_root() -> anyhow::Result<PathBuf> {
+    let cwd = std::env::current_dir().context("failed to get current directory")?;
+    main_repo_root(&cwd).context("not in a git repository")
+}
+
+pub fn cleanup_pr_worktree(repo_root: &std::path::Path, git_dir: &std::path::Path, branch: &str) {
+    let wt_path = worktree_path(repo_root, branch);
+    if wt_path.exists() {
+        let remove = std::process::Command::new("git")
+            .args(["worktree", "remove", "--force", wt_path.to_str().unwrap_or("")])
+            .output();
+        if remove.map(|o| o.status.success()).unwrap_or(false) {
+            let _ = std::process::Command::new("git").args(["worktree", "prune"]).output();
+        }
+    }
+    let lp = lock_path(git_dir, branch);
+    let _ = remove_lock(&lp);
+}
+
+pub fn untrack_and_cleanup(store: &crate::store::Store, repo_root: &std::path::Path, git_dir: &std::path::Path, number: u64, branch: &str) -> anyhow::Result<()> {
+    store.untrack(number)?;
+    cleanup_pr_worktree(repo_root, git_dir, branch);
+    Ok(())
 }
 
 #[cfg(test)]

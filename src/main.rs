@@ -40,11 +40,11 @@ mod threads_test;
 mod repo_test;
 #[cfg(test)]
 mod merge_test;
+#[cfg(test)]
+mod lifecycle_test;
 
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
-use std::path::PathBuf;
-
 use github::{GithubClient, detect_repo, resolve_github_token, resolve_track_branch, fetch_open_threads, format_open_threads, format_resolved_threads};
 use store::{Store, PrCache};
 use tasks::{generate_tasks, task_diff};
@@ -329,25 +329,7 @@ pub use merge::{check_merge_base, resolve_merge_base};
 
 pub use stack::stack_tree_order;
 
-/// Returns a skip-warning if branch has any lock (live or dead), None if clear.
-pub fn check_branch_lock(git_dir: &std::path::Path, branch: &str) -> Option<String> {
-    let lp = worktree::lock_path(git_dir, branch);
-    let lock = worktree::read_lock(&lp)?;
-    let my_pid = worktree::session_anchor_pid();
-    if worktree::lock_is_live(&lock) {
-        Some(format!(
-            "⚠ skipping {} — locked by {} (pid {}, alive; your pid: {}). \
-            Steal only after confirming the other process has finished: fp unlock {}",
-            branch, lock.id, lock.pid, my_pid, branch
-        ))
-    } else {
-        Some(format!(
-            "⚠ skipping {} — dead lock from {} (pid {} no longer running; your pid: {}). \
-            Safe to steal: fp unlock {}",
-            branch, lock.id, lock.pid, my_pid, branch
-        ))
-    }
-}
+pub use worktree::{check_branch_lock};
 
 pub use worktree::{locked_subtree, subtree_branches, worktree_branch_mismatch, fix_worktree_branch};
 
@@ -359,45 +341,11 @@ pub fn require_repo(repo: Option<(String, String)>) -> Result<(String, String)> 
 
 
 fn notify_macos_titled(title: &str, msg: &str) {
-    let script = format!(
-        r#"display notification "{}" with title "{}""#,
-        msg.replace('"', "'"),
-        title.replace('"', "'")
-    );
-    let _ = std::process::Command::new("osascript")
-        .args(["-e", &script])
-        .output();
+    let script = format!(r#"display notification "{}" with title "{}""#, msg.replace('"', "'"), title.replace('"', "'"));
+    let _ = std::process::Command::new("osascript").args(["-e", &script]).output();
 }
 
-fn git_dir() -> Result<PathBuf> {
-    let cwd = std::env::current_dir().context("failed to get current directory")?;
-    worktree::common_git_dir(&cwd).context("not in a git repository")
-}
-
-fn repo_root() -> Result<PathBuf> {
-    let cwd = std::env::current_dir().context("failed to get current directory")?;
-    worktree::main_repo_root(&cwd).context("not in a git repository")
-}
-
-fn cleanup_pr_worktree(repo_root: &std::path::Path, git_dir: &std::path::Path, branch: &str) {
-    let wt_path = worktree::worktree_path(repo_root, branch);
-    if wt_path.exists() {
-        let remove = std::process::Command::new("git")
-            .args(["worktree", "remove", "--force", wt_path.to_str().unwrap_or("")])
-            .output();
-        if remove.map(|o| o.status.success()).unwrap_or(false) {
-            let _ = std::process::Command::new("git").args(["worktree", "prune"]).output();
-        }
-    }
-    let lp = worktree::lock_path(git_dir, branch);
-    let _ = worktree::remove_lock(&lp);
-}
-
-fn untrack_and_cleanup(store: &Store, repo_root: &std::path::Path, git_dir: &std::path::Path, number: u64, branch: &str) -> Result<()> {
-    store.untrack(number)?;
-    cleanup_pr_worktree(repo_root, git_dir, branch);
-    Ok(())
-}
+use worktree::{git_dir, repo_root, untrack_and_cleanup};
 
 fn main() -> Result<()> {
     let cli = Cli::parse();
