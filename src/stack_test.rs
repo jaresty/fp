@@ -74,7 +74,7 @@ mod tests {
         git(&["commit", "-m", "C"]);
 
         let branches = vec!["feat/base".to_string(), "feat/top".to_string()];
-        let parent_of = detect_parent_of(&branches, path).unwrap();
+        let parent_of = detect_parent_of(&branches, path, &HashMap::new()).unwrap();
 
         // feat/base should have no parent in our branch set (its parent is main, not in set)
         assert_eq!(parent_of.get("feat/base"), Some(&None));
@@ -141,13 +141,76 @@ mod tests {
         git(&["checkout", "child"]);
 
         let branches = vec!["grandparent".to_string(), "parent".to_string(), "child".to_string()];
-        let parent_of = detect_parent_of(&branches, path).unwrap();
+        let parent_of = detect_parent_of(&branches, path, &HashMap::new()).unwrap();
 
         // child's parent should be "parent", not "grandparent" — even though parent was force-pushed
         assert_eq!(
             parent_of.get("child"),
             Some(&Some("parent".to_string())),
             "detect_parent_of must identify force-pushed 'parent' as child's parent, not grandparent. got: {:?}",
+            parent_of.get("child")
+        );
+    }
+
+    // DP3: detect_parent_of uses declared base_of over git topology.
+    // Topology: main -> grandparent -> child (depth 2 from grandparent, depth 1 from parent NOT in history).
+    // parent is force-pushed to a new commit NOT in child's history.
+    // Without base_of: topology picks grandparent (depth 2 from mb, but grandparent is direct ancestor).
+    // Wait — that's the DP2 test. Here we use a simpler case:
+    // main -> grandparent (2 commits) -> child (1 commit from grandparent).
+    // parent is a sibling of grandparent (also from main), not in child's ancestry.
+    // Topology: grandparent wins (it IS in child's ancestry with depth 1).
+    // Declared base_of: child -> parent (the sibling).
+    // Test: with base_of, parent wins over the topologically-correct grandparent.
+    #[test]
+    fn detect_parent_of_uses_declared_base_over_topology() {
+        use std::process::Command;
+        use tempfile::TempDir;
+
+        let dir = TempDir::new().unwrap();
+        let path = dir.path();
+
+        let env = [("GIT_AUTHOR_NAME","t"),("GIT_AUTHOR_EMAIL","t@t"),
+                   ("GIT_COMMITTER_NAME","t"),("GIT_COMMITTER_EMAIL","t@t")];
+        let git = |args: &[&str]| {
+            let mut c = Command::new("git");
+            c.args(args).current_dir(path);
+            for (k, v) in &env { c.env(k, v); }
+            c.output().unwrap()
+        };
+
+        git(&["init", "-b", "main"]);
+        git(&["commit", "--allow-empty", "-m", "root"]);
+        // grandparent: 1 commit from main
+        git(&["checkout", "-b", "grandparent"]);
+        git(&["commit", "--allow-empty", "-m", "gp"]);
+        // child: 1 commit from grandparent (topology: grandparent is direct parent)
+        git(&["checkout", "-b", "child"]);
+        git(&["commit", "--allow-empty", "-m", "child"]);
+        // parent: branch from main (sibling of grandparent, NOT in child's ancestry)
+        git(&["checkout", "main"]);
+        git(&["checkout", "-b", "parent"]);
+        git(&["commit", "--allow-empty", "-m", "p"]);
+
+        let branches = vec!["grandparent".to_string(), "parent".to_string(), "child".to_string()];
+
+        // Without base_of: topology must pick grandparent (it IS child's direct git ancestor).
+        let parent_of_topo = detect_parent_of(&branches, path, &HashMap::new()).unwrap();
+        assert_eq!(
+            parent_of_topo.get("child"),
+            Some(&Some("grandparent".to_string())),
+            "topology alone must pick grandparent as child's parent, got: {:?}",
+            parent_of_topo.get("child")
+        );
+
+        // With base_of declaring child -> parent: declared must win over topology.
+        let mut base_of = HashMap::new();
+        base_of.insert("child".to_string(), "parent".to_string());
+        let parent_of = detect_parent_of(&branches, path, &base_of).unwrap();
+        assert_eq!(
+            parent_of.get("child"),
+            Some(&Some("parent".to_string())),
+            "declared base_of must override topology — expected parent, got: {:?}",
             parent_of.get("child")
         );
     }

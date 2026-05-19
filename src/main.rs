@@ -867,7 +867,8 @@ fn main() -> Result<()> {
             if let (Ok(token), Some((owner, repo_name))) = (resolve_github_token(), detect_repo()) {
                 let client = GithubClient::new(token);
                 let all_branches: Vec<String> = state.tracked_prs().iter().map(|p| p.branch.clone()).collect();
-                let parent_of = stack::detect_parent_of(&all_branches, &main_root)?;
+                let cached_base_of: std::collections::HashMap<String, String> = state.tracked_prs().iter().map(|p| (p.branch.clone(), p.base.clone())).collect();
+                let parent_of = stack::detect_parent_of(&all_branches, &main_root, &cached_base_of)?;
 
                 let mut merged_prs: Vec<(u64, String)> = Vec::new();
                 for pr in state.tracked_prs() {
@@ -901,7 +902,8 @@ fn main() -> Result<()> {
             if all_branches.is_empty() {
                 return Ok(());
             }
-            let parent_of = stack::detect_parent_of(&all_branches, &main_root)?;
+            let cached_base_of: std::collections::HashMap<String, String> = state.tracked_prs().iter().map(|p| (p.branch.clone(), p.base.clone())).collect();
+            let parent_of = stack::detect_parent_of(&all_branches, &main_root, &cached_base_of)?;
 
             // If a starting PR is given, restrict to that branch and its descendants
             let branches: Vec<String> = if let Some(from_pr) = rebase_from_pr {

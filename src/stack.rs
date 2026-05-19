@@ -400,7 +400,7 @@ fn git_merge_base(a: &str, b: &str, dir: &Path) -> Result<String> {
 /// For each branch, find its parent among the other branches using git merge-base.
 /// A branch B has parent A if merge-base(A, B) == tip(A) and A != B.
 /// If no branch in the set is an ancestor, the branch is a root (None).
-pub fn detect_parent_of(branches: &[String], dir: &Path) -> Result<HashMap<String, Option<String>>> {
+pub fn detect_parent_of(branches: &[String], dir: &Path, base_of: &HashMap<String, String>) -> Result<HashMap<String, Option<String>>> {
     let tips: HashMap<String, String> = branches.iter()
         .map(|b| Ok((b.clone(), git_rev_parse(b, dir)?)))
         .collect::<Result<_>>()?;
@@ -408,6 +408,12 @@ pub fn detect_parent_of(branches: &[String], dir: &Path) -> Result<HashMap<Strin
     let mut parent_of: HashMap<String, Option<String>> = HashMap::new();
 
     for branch in branches {
+        if let Some(declared) = base_of.get(branch.as_str())
+            && !declared.is_empty() && branches.iter().any(|b| b == declared) {
+            parent_of.insert(branch.clone(), Some(declared.clone()));
+            continue;
+        }
+
         let mut best_parent: Option<String> = None;
         let mut best_depth = 0usize;
         let mut best_lead = 0usize;
