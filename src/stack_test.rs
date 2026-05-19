@@ -1757,4 +1757,101 @@ mod tests {
         let wt = crate::worktree::worktree_path(&path, "feat/wt-create");
         assert!(wt.exists(), "worktree must be created at {:?}", wt);
     }
+
+    // RS-REMOTE: rebase_stack uses --onto when parent is a remote tracking branch that was force-pushed.
+    // Uses a rename-then-modify pattern so git cannot "already applied" skip the old parent commit —
+    // the conflict resolution renames the content, making the old patch non-applicable and producing
+    // a real conflict if --onto is not used.
+    #[test]
+    fn rebase_stack_onto_when_remote_parent_force_pushed() {
+        use std::process::Command;
+        use tempfile::TempDir;
+
+        let remote_dir = TempDir::new().unwrap();
+        Command::new("git").args(["init", "--bare", "-b", "main"])
+            .current_dir(remote_dir.path()).output().unwrap();
+
+        let dir = TempDir::new().unwrap();
+        let path = dir.path();
+        let git = |args: &[&str]| Command::new("git").args(args).current_dir(path).output().unwrap();
+        let git_env = |args: &[&str], env: &[(&str, &str)]| {
+            let mut c = Command::new("git"); c.args(args).current_dir(path);
+            for (k, v) in env { c.env(k, v); } c.output().unwrap()
+        };
+        let env = [("GIT_AUTHOR_NAME","t"),("GIT_AUTHOR_EMAIL","t@t"),("GIT_COMMITTER_NAME","t"),("GIT_COMMITTER_EMAIL","t@t")];
+
+        git(&["init", "-b", "main"]);
+        git(&["config", "user.email", "t@t.com"]);
+        git(&["config", "user.name", "T"]);
+        git(&["remote", "add", "origin", remote_dir.path().to_str().unwrap()]);
+
+        // M: runner.sh = "#!/bin/bash\nrun_v1()\n"
+        std::fs::write(path.join("runner.sh"), "#!/bin/bash\nrun_v1()\n").unwrap();
+        git(&["add", "."]);
+        git_env(&["commit", "-m", "M"], &env);
+        git(&["push", "-u", "origin", "main"]);
+
+        // feat/parent P1: renames run_v1 → run_v2
+        git(&["checkout", "-b", "feat/parent"]);
+        std::fs::write(path.join("runner.sh"), "#!/bin/bash\nrun_v2()\n").unwrap();
+        git(&["add", "."]);
+        git_env(&["commit", "-m", "P1-rename-v1-to-v2"], &env);
+        git(&["push", "-u", "origin", "feat/parent"]);
+
+        // feat/child stacked on feat/parent: adds c.txt (unique, no conflict with runner.sh)
+        git(&["checkout", "-b", "feat/child"]);
+        std::fs::write(path.join("c.txt"), "child only\n").unwrap();
+        git(&["add", "."]);
+        git_env(&["commit", "-m", "C"], &env);
+        git(&["push", "-u", "origin", "feat/child"]);
+
+        // main advances: also renames run_v1 → run_v3 (different name → conflict with P1)
+        git(&["checkout", "main"]);
+        std::fs::write(path.join("runner.sh"), "#!/bin/bash\nrun_v3()\n").unwrap();
+        git(&["add", "."]);
+        git_env(&["commit", "-m", "M2-rename-v1-to-v3"], &env);
+        git(&["push", "origin", "main"]);
+
+        // Rebase feat/parent onto new main with conflict resolution:
+        // resolution uses run_resolved() — changes the content, so old P1's patch won't "already apply"
+        git(&["checkout", "feat/parent"]);
+        git(&["fetch", "origin"]);
+        let r = git(&["rebase", "origin/main"]);
+        if !r.status.success() {
+            std::fs::write(path.join("runner.sh"), "#!/bin/bash\nrun_resolved()\n").unwrap();
+            git(&["add", "runner.sh"]);
+            git_env(&["rebase", "--continue"], &[
+                ("GIT_AUTHOR_NAME","t"),("GIT_AUTHOR_EMAIL","t@t"),
+                ("GIT_COMMITTER_NAME","t"),("GIT_COMMITTER_EMAIL","t@t"),
+                ("GIT_EDITOR","true"),
+            ]);
+        }
+        git(&["push", "--force-with-lease", "origin", "feat/parent"]);
+        git(&["fetch", "origin"]);  // update origin/feat/parent reflog
+
+        // Return to main
+        git(&["checkout", "main"]);
+
+        // Rebase feat/child with REMOTE parent origin/feat/parent
+        let parent_of: std::collections::HashMap<String, Option<String>> = [
+            ("feat/child".to_string(), Some("origin/feat/parent".to_string())),
+        ].into_iter().collect();
+        let base_of: std::collections::HashMap<String, String> = [
+            ("feat/child".to_string(), "main".to_string()),
+        ].into_iter().collect();
+        let branches = vec!["feat/child".to_string()];
+
+        let result = rebase_stack(&branches, &parent_of, &base_of, path, &|_| {}).unwrap();
+        assert!(result.conflicts.is_empty(),
+            "no conflicts expected when rebasing child onto force-pushed remote parent, got: {:?}", result.conflicts);
+
+        // feat/child should have exactly 1 commit on top of origin/feat/parent: C only, not P1+C
+        let log = Command::new("git")
+            .args(["log", "--oneline", "origin/feat/parent..feat/child"])
+            .current_dir(path).output().unwrap();
+        let log_str = String::from_utf8_lossy(&log.stdout);
+        let commit_count = log_str.trim().lines().count();
+        assert_eq!(commit_count, 1,
+            "feat/child must have exactly 1 commit on top of origin/feat/parent (C only), got: {}", log_str);
+    }
 }
