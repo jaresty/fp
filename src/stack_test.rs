@@ -1520,6 +1520,137 @@ mod tests {
             "C's semantic diff should be unchanged after splice rebase");
     }
 
+    // RS15: rebase_stack uses fork-point to find old_upstream when parent has multiple
+    // rewritten commits AND P2_old's patch genuinely conflicts with P2' state.
+    // Scenario: P1_old adds "runner_v1\n"; P2_old renames it to "runner_v2\n".
+    // Conflict resolution on P1: resolves to "runner_resolved\n" (different from runner_v1).
+    // P2_old tries to rename "runner_v1\n" → "runner_v2\n" but the file has "runner_resolved\n"
+    // → CONFLICT when replaying wrong old_upstream (P1_old).
+    // With --fork-point old_upstream = P2_old (old feat/child base), only C replayed → clean.
+    #[test]
+    fn rebase_stack_fully_rebased_parent_with_conflict_resolution_replays_only_child_commit() {
+        use std::process::Command;
+        use tempfile::TempDir;
+
+        let remote_dir = TempDir::new().unwrap();
+        Command::new("git").args(["init", "--bare", "-b", "main"])
+            .current_dir(remote_dir.path()).output().unwrap();
+
+        let dir = TempDir::new().unwrap();
+        let path = dir.path();
+        let git = |args: &[&str]| Command::new("git").args(args).current_dir(path).output().unwrap();
+        let env = [("GIT_AUTHOR_NAME","t"),("GIT_AUTHOR_EMAIL","t@t"),
+                   ("GIT_COMMITTER_NAME","t"),("GIT_COMMITTER_EMAIL","t@t")];
+        let git_env = |args: &[&str]| {
+            let mut c = Command::new("git");
+            c.args(args).current_dir(path);
+            for (k, v) in &env { c.env(k, v); }
+            c.output().unwrap()
+        };
+        let git_env_cont = |args: &[&str]| {
+            let mut c = Command::new("git");
+            c.args(args).current_dir(path)
+                .env("GIT_AUTHOR_NAME", "t").env("GIT_AUTHOR_EMAIL", "t@t")
+                .env("GIT_COMMITTER_NAME", "t").env("GIT_COMMITTER_EMAIL", "t@t")
+                .env("GIT_EDITOR", "true");
+            c.output().unwrap()
+        };
+
+        git(&["init", "-b", "main"]);
+        git(&["config", "user.email", "t@t.com"]);
+        git(&["config", "user.name", "T"]);
+        git(&["remote", "add", "origin", remote_dir.path().to_str().unwrap()]);
+
+        // main: M — runner.sh = "base\n"
+        std::fs::write(path.join("runner.sh"), "base\n").unwrap();
+        git(&["add", "."]);
+        git_env(&["commit", "-m", "M"]);
+        git(&["push", "-u", "origin", "main"]);
+
+        // feat/parent: P1 adds runner_v1; P2 renames runner_v1 to runner_v2
+        git(&["checkout", "-b", "feat/parent"]);
+        // P1: adds runner_v1 line
+        std::fs::write(path.join("runner.sh"), "base\nrunner_v1\n").unwrap();
+        git(&["add", "."]);
+        git_env(&["commit", "-m", "P1"]);
+        // P2: renames runner_v1 → runner_v2
+        std::fs::write(path.join("runner.sh"), "base\nrunner_v2\n").unwrap();
+        git(&["add", "."]);
+        git_env(&["commit", "-m", "P2"]);
+        git(&["push", "-u", "origin", "feat/parent"]);
+
+        // feat/child: C only adds c.txt (no runner.sh dependency)
+        git(&["checkout", "-b", "feat/child"]);
+        std::fs::write(path.join("c.txt"), "c\n").unwrap();
+        git(&["add", "."]);
+        git_env(&["commit", "-m", "C"]);
+        git(&["push", "-u", "origin", "feat/child"]);
+
+        // main advances: M2 changes runner.sh context so P1 conflicts
+        // M2: changes "base\n" to "base\nupdated\n"
+        git(&["checkout", "main"]);
+        std::fs::write(path.join("runner.sh"), "base\nupdated\n").unwrap();
+        git(&["add", "."]);
+        git_env(&["commit", "-m", "M2"]);
+        git(&["push", "origin", "main"]);
+
+        // Rebase feat/parent onto new main with conflict resolution.
+        // P1 patch (base\n→base\nrunner_v1\n) conflicts with M2 (base\n→base\nupdated\n).
+        // Resolution: "base\nupdated\nrunner_resolved\n" — runner_v1 renamed to runner_resolved.
+        // P2 patch (runner_v1→runner_v2) now conflicts (runner_v1 not present).
+        // Resolution for P2: keep runner_v2 as the final name.
+        git(&["checkout", "feat/parent"]);
+        git(&["fetch", "origin"]);
+        let rebase_out = git(&["rebase", "origin/main"]);
+        if !rebase_out.status.success() {
+            // Resolve P1: keep updated and use runner_resolved instead of runner_v1
+            std::fs::write(path.join("runner.sh"), "base\nupdated\nrunner_resolved\n").unwrap();
+            git(&["add", "runner.sh"]);
+            let cont = git_env_cont(&["rebase", "--continue"]);
+            if !cont.status.success() {
+                // Resolve P2: rename runner_resolved to runner_v2 (or just set runner_v2)
+                std::fs::write(path.join("runner.sh"), "base\nupdated\nrunner_v2\n").unwrap();
+                git(&["add", "runner.sh"]);
+                git_env_cont(&["rebase", "--continue"]);
+            }
+        }
+        git(&["push", "--force-with-lease", "origin", "feat/parent"]);
+
+        // Verify feat/parent now has 2 commits on top of new main
+        let parent_log = Command::new("git")
+            .args(["log", "--oneline", "origin/main..feat/parent"])
+            .current_dir(path).output().unwrap();
+        let parent_log_str = String::from_utf8_lossy(&parent_log.stdout);
+        assert_eq!(parent_log_str.trim().lines().count(), 2,
+            "feat/parent should have 2 commits on top of new main, got: {}", parent_log_str);
+
+        // Return to main for worktree creation
+        git(&["checkout", "main"]);
+
+        // Rebase feat/child: parent = feat/parent (both commits fully rewritten)
+        let parent_of: std::collections::HashMap<String, Option<String>> = [
+            ("feat/child".to_string(), Some("feat/parent".to_string())),
+        ].into_iter().collect();
+        let base_of: std::collections::HashMap<String, String> = [
+            ("feat/child".to_string(), "main".to_string()),
+        ].into_iter().collect();
+        let branches = vec!["feat/child".to_string()];
+
+        let result = crate::stack::rebase_stack(&branches, &parent_of, &base_of, path, &|_| {}).unwrap();
+        assert!(result.conflicts.is_empty(),
+            "no conflicts expected — only C should be replayed via fork-point, got: {:?}", result.conflicts);
+
+        // feat/child must have exactly 1 commit on top of feat/parent (C only)
+        let log = Command::new("git")
+            .args(["log", "--oneline", "feat/parent..feat/child"])
+            .current_dir(path).output().unwrap();
+        let log_str = String::from_utf8_lossy(&log.stdout);
+        let commit_count = log_str.trim().lines().count();
+        assert_eq!(commit_count, 1,
+            "feat/child should have exactly 1 commit on top of feat/parent (C only), got: {}", log_str);
+        assert!(log_str.contains(" C"), "the one commit should be C, got: {}", log_str);
+    }
+
     // DW1: rebase_stack does not checkout any branch in the main worktree
     #[test]
     fn rebase_stack_does_not_checkout_in_main_worktree() {

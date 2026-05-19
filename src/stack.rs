@@ -181,19 +181,40 @@ pub fn rebase_stack(branches: &[String], parent_of: &HashMap<String, Option<Stri
                 .current_dir(&wt_path)
                 .output()?.status.success();
             if !parent_is_ancestor {
-                // Find the oldest commit in branch not reachable from parent — that is the
-                // old parent tip (before parent was rebased). Use it as the --onto upstream
-                // so only commits unique to branch are replanted.
-                let rev_list_out = std::process::Command::new("git")
-                    .args(["rev-list", &format!("{}..{}", parent, branch)])
+                // Find where branch diverged from parent's old history.
+                // --fork-point uses the reflog to find the most recent parent tip that is
+                // an ancestor of branch — this is the correct old_upstream when parent was
+                // fully rebased (all SHAs changed). Falls back to rev-list | tail -1 which
+                // works for the single-rewrite case but returns the wrong (oldest) commit
+                // when parent had multiple commits all rewritten.
+                let fork_point_out = std::process::Command::new("git")
+                    .args(["merge-base", "--fork-point", parent, branch])
                     .current_dir(&wt_path)
-                    .output()?;
-                let old_upstream = String::from_utf8_lossy(&rev_list_out.stdout)
-                    .lines()
-                    .last()
-                    .map(str::trim)
-                    .unwrap_or("")
-                    .to_string();
+                    .output();
+                let old_upstream = fork_point_out
+                    .ok()
+                    .filter(|o| o.status.success())
+                    .and_then(|o| String::from_utf8(o.stdout).ok())
+                    .map(|s| s.trim().to_string())
+                    .filter(|s| !s.is_empty())
+                    .unwrap_or_else(|| {
+                        // Fallback: oldest commit in branch not reachable from parent
+                        let rev_list_out = std::process::Command::new("git")
+                            .args(["rev-list", &format!("{}..{}", parent, branch)])
+                            .current_dir(&wt_path)
+                            .output()
+                            .unwrap_or_else(|_| std::process::Output {
+                                status: std::process::ExitStatus::default(),
+                                stdout: vec![],
+                                stderr: vec![],
+                            });
+                        String::from_utf8_lossy(&rev_list_out.stdout)
+                            .lines()
+                            .last()
+                            .map(str::trim)
+                            .unwrap_or("")
+                            .to_string()
+                    });
                 // Only use --onto if there are commits to replay after old_upstream.
                 // If replay_count == 0, old_upstream == branch tip (independent branch being
                 // newly stacked) — fall back to plain rebase which handles that correctly.
