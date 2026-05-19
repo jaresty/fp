@@ -304,6 +304,46 @@ pub fn fix_worktree_branch(wt_path: &std::path::Path, branch: &str, force: bool)
     Ok(())
 }
 
+pub fn detect_repo_with_cwd(cwd: &std::path::Path) -> Option<(String, String)> {
+    let output = std::process::Command::new("git")
+        .args(["remote", "get-url", "origin"])
+        .current_dir(cwd)
+        .output()
+        .ok()?;
+    if !output.status.success() { return None; }
+    let url = String::from_utf8(output.stdout).ok()?;
+    parse_github_remote(url.trim())
+}
+
+pub fn detect_repo() -> Option<(String, String)> {
+    let cwd = std::env::current_dir().ok()?;
+    let git_dir = common_git_dir(&cwd).ok()?;
+    let repo_root = git_dir.parent()?;
+    detect_repo_with_cwd(repo_root)
+}
+
+#[cfg(test)]
+pub fn parse_github_remote_pub(url: &str) -> Option<(String, String)> {
+    parse_github_remote(url)
+}
+
+fn parse_github_remote(url: &str) -> Option<(String, String)> {
+    let url = url.trim_end_matches(".git");
+    if let Some(rest) = url.strip_prefix("https://github.com/") {
+        let parts: Vec<&str> = rest.splitn(2, '/').collect();
+        if parts.len() == 2 {
+            return Some((parts[0].to_string(), parts[1].to_string()));
+        }
+    }
+    if let Some(rest) = url.strip_prefix("git@github.com:") {
+        let parts: Vec<&str> = rest.splitn(2, '/').collect();
+        if parts.len() == 2 {
+            return Some((parts[0].to_string(), parts[1].to_string()));
+        }
+    }
+    None
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

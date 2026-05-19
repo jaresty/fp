@@ -35,6 +35,8 @@ mod agent_manifest_test;
 mod shell_test;
 #[cfg(test)]
 mod threads_test;
+#[cfg(test)]
+mod repo_test;
 
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};

@@ -799,45 +799,6 @@ pub fn resolve_track_branch(
     )
 }
 
-/// Detect owner/repo from `git remote get-url origin` using the given directory.
-pub fn detect_repo_with_cwd(cwd: &std::path::Path) -> Option<(String, String)> {
-    let output = std::process::Command::new("git")
-        .args(["remote", "get-url", "origin"])
-        .current_dir(cwd)
-        .output()
-        .ok()?;
-    if !output.status.success() { return None; }
-    let url = String::from_utf8(output.stdout).ok()?;
-    parse_github_remote(url.trim())
-}
-
-/// Detect owner/repo from `git remote get-url origin`, always running from the main repo root.
-pub fn detect_repo() -> Option<(String, String)> {
-    let cwd = std::env::current_dir().ok()?;
-    let git_dir = crate::worktree::common_git_dir(&cwd).ok()?;
-    let repo_root = git_dir.parent()?;
-    detect_repo_with_cwd(repo_root)
-}
-
+pub use crate::worktree::detect_repo;
 #[cfg(test)]
-pub fn parse_github_remote_pub(url: &str) -> Option<(String, String)> {
-    parse_github_remote(url)
-}
-
-fn parse_github_remote(url: &str) -> Option<(String, String)> {
-    // https://github.com/owner/repo.git  or  git@github.com:owner/repo.git
-    let url = url.trim_end_matches(".git");
-    if let Some(rest) = url.strip_prefix("https://github.com/") {
-        let parts: Vec<&str> = rest.splitn(2, '/').collect();
-        if parts.len() == 2 {
-            return Some((parts[0].to_string(), parts[1].to_string()));
-        }
-    }
-    if let Some(rest) = url.strip_prefix("git@github.com:") {
-        let parts: Vec<&str> = rest.splitn(2, '/').collect();
-        if parts.len() == 2 {
-            return Some((parts[0].to_string(), parts[1].to_string()));
-        }
-    }
-    None
-}
+pub use crate::worktree::parse_github_remote_pub;
