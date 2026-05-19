@@ -73,6 +73,25 @@ mod tests {
     }
 
     #[test]
+    fn commands_governs_cmd_profile_save_and_load_roundtrip() {
+        let tmp = tempfile::tempdir().unwrap();
+        let profiles_path = tmp.path().join("profiles.json");
+        crate::commands::cmd_profile(&profiles_path, "save", "myprofile", Some("tok123".into()), Some("owner/repo".into())).unwrap();
+        let out = crate::commands::cmd_profile(&profiles_path, "load", "myprofile", None, None).unwrap();
+        assert!(out.contains("tok123"), "load must contain saved token, got: {}", out);
+        assert!(out.contains("owner/repo"), "load must contain saved repo, got: {}", out);
+    }
+
+    #[test]
+    fn commands_governs_cmd_profile_unknown_action_errors() {
+        let tmp = tempfile::tempdir().unwrap();
+        let profiles_path = tmp.path().join("profiles.json");
+        let result = crate::commands::cmd_profile(&profiles_path, "delete", "x", None, None);
+        assert!(result.is_err(), "unknown action must return error");
+        assert!(result.unwrap_err().to_string().contains("unknown profile action"), "error must say 'unknown profile action'");
+    }
+
+    #[test]
     fn commands_governs_cmd_switch_errors_on_untracked_pr() {
         let tmp = tempfile::tempdir().unwrap();
         let git_dir = tmp.path().join("git_dir");

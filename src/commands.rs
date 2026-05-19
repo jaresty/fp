@@ -27,6 +27,28 @@ pub fn agent_context_text(pr_count: usize) -> String {
 
 use anyhow::Context as _;
 
+pub fn cmd_profile(
+    profiles_path: &std::path::Path,
+    action: &str,
+    name: &str,
+    token: Option<String>,
+    repo: Option<String>,
+) -> anyhow::Result<String> {
+    match action {
+        "save" => {
+            let tok = token.ok_or_else(|| anyhow::anyhow!("--token required for profile save"))?;
+            let r = repo.ok_or_else(|| anyhow::anyhow!("--repo required for profile save"))?;
+            crate::profile::save_profile(profiles_path, name, &tok, &r)?;
+            Ok(format!("Profile '{}' saved.", name))
+        }
+        "load" => {
+            let p = crate::profile::load_profile(profiles_path, name)?;
+            Ok(format!("export GITHUB_TOKEN={}\n# repo: {}", p.github_token, p.repo))
+        }
+        _ => anyhow::bail!("unknown profile action '{}'; use save or load", action),
+    }
+}
+
 pub fn cmd_switch(
     store: &crate::store::Store,
     git_dir: &std::path::Path,

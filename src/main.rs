@@ -1016,21 +1016,7 @@ fn main() -> Result<()> {
         }
 
         Commands::Profile { action, name, token, repo } => {
-            let profiles_path = profile::profiles_path();
-            match action.as_str() {
-                "save" => {
-                    let tok = token.ok_or_else(|| anyhow::anyhow!("--token required for profile save"))?;
-                    let r = repo.ok_or_else(|| anyhow::anyhow!("--repo required for profile save"))?;
-                    profile::save_profile(&profiles_path, &name, &tok, &r)?;
-                    println!("Profile '{}' saved.", name);
-                }
-                "load" => {
-                    let p = profile::load_profile(&profiles_path, &name)?;
-                    println!("export GITHUB_TOKEN={}", p.github_token);
-                    println!("# repo: {}", p.repo);
-                }
-                _ => anyhow::bail!("unknown profile action '{}'; use save or load", action),
-            }
+            println!("{}", commands::cmd_profile(&profile::profiles_path(), &action, &name, token, repo)?);
         }
     }
 
