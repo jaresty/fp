@@ -330,23 +330,7 @@ fn main() -> Result<()> {
     match cli.command {
         Commands::Ls { json } => {
             let (owner, repo_name) = require_repo(detect_repo())?;
-            let state = store.load()?;
-            if json {
-                let items = state.tracked_prs();
-                println!("{}", serde_json::to_string_pretty(&items)?);
-            } else {
-                println!("{}", repo_header(&owner, &repo_name));
-                if state.tracked.is_empty() {
-                    println!("No tracked PRs. Use `fp track <pr>` to add one.");
-                } else {
-                    let prs = state.tracked_prs();
-                    for (number, prefix) in stack_tree_order(&prs) {
-                        if let Some(pr) = state.cache.get(&number) {
-                            println!("{}#{} {} ({})", prefix, pr.number, pr.title, pr.branch);
-                        }
-                    }
-                }
-            }
+            print!("{}", commands::cmd_ls(&store, &owner, &repo_name, json)?);
         }
 
         Commands::Status { pr, json, all } => {
@@ -466,65 +450,11 @@ fn main() -> Result<()> {
         }
 
         Commands::Untrack { pr } => {
-            let branch = {
-                let state = store.load()?;
-                state.cache.get(&pr).map(|t| t.branch.clone())
-            };
-            if let Some(branch) = branch {
-                untrack_and_cleanup(&store, &repo_root()?, &git_dir, pr, &branch)?;
-            } else {
-                store.untrack(pr)?;
-            }
-            println!("Untracked PR #{}", pr);
+            println!("{}", commands::cmd_untrack(&store, &repo_root()?, &git_dir, pr)?);
         }
 
         Commands::Switch { pr, id, force, adopt } => {
-            let state = store.load()?;
-            let cached = state.cache.get(&pr)
-                .with_context(|| format!("PR #{} is not tracked. Run `fp track {}`", pr, pr))?;
-            let branch = cached.branch.clone();
-            let root = repo_root()?;
-
-            if !force && worktree::repo_is_dirty(&std::env::current_dir()?)? {
-                anyhow::bail!("current worktree has uncommitted changes — commit, stash, or use --force to override");
-            }
-
-            // Check if branch is in main worktree
-            let head_out = std::process::Command::new("git")
-                .args(["rev-parse", "--abbrev-ref", "HEAD"])
-                .current_dir(&root)
-                .output()?;
-            let current_head = String::from_utf8(head_out.stdout)?.trim().to_string();
-            if current_head == branch {
-                if adopt {
-                    // Move branch to fp worktree: checkout main in main worktree first
-                    let checkout = std::process::Command::new("git")
-                        .args(["checkout", "main"])
-                        .current_dir(&root)
-                        .output()?;
-                    anyhow::ensure!(checkout.status.success(), "git checkout main failed: {}",
-                        String::from_utf8_lossy(&checkout.stderr));
-                    print!("{}", format_adopt_message(&branch));
-                } else {
-                    check_not_checked_out_in_main(&branch, &root)?;
-                }
-            }
-            worktree::check_target_lock(&git_dir, &branch)?;
-
-            let wt_path = worktree::worktree_path(&root, &branch);
-            if !wt_path.exists() {
-                let out = std::process::Command::new("git")
-                    .args(["worktree", "add", wt_path.to_str().unwrap_or(""), &branch])
-                    .output()?;
-                anyhow::ensure!(out.status.success(), "{}",
-                    format_worktree_add_error(&String::from_utf8_lossy(&out.stderr), &branch, pr));
-            } else if worktree_branch_mismatch(&wt_path, &branch)? {
-                fix_worktree_branch(&wt_path, &branch, force)
-                    .with_context(|| format!("worktree at {} is on wrong branch — use --force to discard local changes and fix it", wt_path.display()))?;
-            }
-
-            let lp = worktree::lock_path(&git_dir, &branch);
-            worktree::write_lock(&lp, worktree::session_anchor_pid(), "agent", &id)?;
+            let wt_path = commands::cmd_switch(&store, &git_dir, pr, &id, force, adopt)?;
             println!("{}", wt_path.display());
         }
 

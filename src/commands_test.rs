@@ -71,4 +71,81 @@ mod tests {
             "error must mention 'unsupported shell'"
         );
     }
+
+    #[test]
+    fn commands_governs_cmd_switch_errors_on_untracked_pr() {
+        let tmp = tempfile::tempdir().unwrap();
+        let git_dir = tmp.path().join("git_dir");
+        std::fs::create_dir_all(&git_dir).unwrap();
+        let store = crate::store::Store::open(&git_dir);
+        let result = crate::commands::cmd_switch(&store, &git_dir, 99, "session-id", false, false);
+        assert!(result.is_err(), "cmd_switch must error for untracked PR");
+        assert!(result.unwrap_err().to_string().contains("not tracked"), "error must mention 'not tracked'");
+    }
+
+    #[test]
+    fn commands_governs_cmd_untrack_removes_pr_and_returns_message() {
+        let tmp = tempfile::tempdir().unwrap();
+        let git_dir = tmp.path().join("git_dir");
+        std::fs::create_dir_all(&git_dir).unwrap();
+        let store = crate::store::Store::open(&git_dir);
+        store.track(5).unwrap();
+        store.update_cache(crate::store::PrCache {
+            number: 5,
+            title: "test".into(),
+            branch: "feat/test".into(),
+            base: "main".into(),
+        }).unwrap();
+        let msg = crate::commands::cmd_untrack(&store, tmp.path(), &git_dir, 5).unwrap();
+        assert!(msg.contains("Untracked PR #5"), "must confirm untrack, got: {}", msg);
+        assert!(!store.load().unwrap().tracked.contains(&5), "PR must be removed from store");
+    }
+
+    #[test]
+    fn commands_governs_cmd_ls_text_lists_tracked_prs() {
+        let tmp = tempfile::tempdir().unwrap();
+        let git_dir = tmp.path().join("git_dir");
+        std::fs::create_dir_all(&git_dir).unwrap();
+        let store = crate::store::Store::open(&git_dir);
+        store.track(7).unwrap();
+        store.update_cache(crate::store::PrCache {
+            number: 7,
+            title: "my feature".into(),
+            branch: "feat/my-feature".into(),
+            base: "main".into(),
+        }).unwrap();
+        let out = crate::commands::cmd_ls(&store, "alice", "myrepo", false).unwrap();
+        assert!(out.contains("#7"), "cmd_ls text must contain PR number, got: {}", out);
+        assert!(out.contains("my feature"), "cmd_ls text must contain title, got: {}", out);
+        assert!(out.contains("feat/my-feature"), "cmd_ls text must contain branch, got: {}", out);
+    }
+
+    #[test]
+    fn commands_governs_cmd_ls_json_returns_valid_json() {
+        let tmp = tempfile::tempdir().unwrap();
+        let git_dir = tmp.path().join("git_dir");
+        std::fs::create_dir_all(&git_dir).unwrap();
+        let store = crate::store::Store::open(&git_dir);
+        store.track(3).unwrap();
+        store.update_cache(crate::store::PrCache {
+            number: 3,
+            title: "fix bug".into(),
+            branch: "fix/bug".into(),
+            base: "main".into(),
+        }).unwrap();
+        let out = crate::commands::cmd_ls(&store, "alice", "myrepo", true).unwrap();
+        let parsed: serde_json::Value = serde_json::from_str(&out)
+            .expect("cmd_ls json mode must return valid JSON");
+        assert!(parsed.is_array(), "cmd_ls json must be an array, got: {}", out);
+    }
+
+    #[test]
+    fn commands_governs_cmd_ls_text_empty_shows_no_tracked() {
+        let tmp = tempfile::tempdir().unwrap();
+        let git_dir = tmp.path().join("git_dir");
+        std::fs::create_dir_all(&git_dir).unwrap();
+        let store = crate::store::Store::open(&git_dir);
+        let out = crate::commands::cmd_ls(&store, "alice", "myrepo", false).unwrap();
+        assert!(out.contains("No tracked PRs"), "cmd_ls with empty store must say 'No tracked PRs', got: {}", out);
+    }
 }
