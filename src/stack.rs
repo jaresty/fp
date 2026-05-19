@@ -410,24 +410,43 @@ pub fn detect_parent_of(branches: &[String], dir: &Path) -> Result<HashMap<Strin
     for branch in branches {
         let mut best_parent: Option<String> = None;
         let mut best_depth = 0usize;
+        let mut best_lead = 0usize;
 
         for candidate in branches {
             if candidate == branch { continue; }
             let mb = git_merge_base(candidate, branch, dir)?;
             let candidate_tip = tips.get(candidate).unwrap();
 
-            if &mb == candidate_tip {
-                // candidate is an ancestor of branch — measure depth as commit count
-                let out = std::process::Command::new("git")
-                    .args(["rev-list", "--count", &format!("{}..{}", candidate, branch)])
-                    .current_dir(dir)
-                    .output()?;
-                let depth: usize = String::from_utf8(out.stdout)?.trim().parse().unwrap_or(0);
-                // pick the closest ancestor (smallest depth > 0)
-                if best_parent.is_none() || depth < best_depth {
-                    best_parent = Some(candidate.clone());
-                    best_depth = depth;
-                }
+            // Depth from merge-base to branch tip (fewer = closer parent).
+            // Using merge-base (not candidate tip) handles force-push: the parent's new
+            // tip is not in the child's history, but the merge-base is still recent.
+            let depth_out = std::process::Command::new("git")
+                .args(["rev-list", "--count", &format!("{}..{}", mb, branch)])
+                .current_dir(dir)
+                .output()?;
+            let depth: usize = String::from_utf8(depth_out.stdout)?.trim().parse().unwrap_or(0);
+            if depth == 0 { continue; }
+
+            // How far has the candidate advanced beyond the merge-base?
+            // Tiebreaker: when two candidates share the same depth, prefer the one whose
+            // tip is further past the merge-base. A force-pushed parent has new commits
+            // beyond the shared merge-base; a stable grandparent at the merge-base has 0.
+            // This correctly picks a force-pushed direct parent over a stable grandparent
+            // even when both yield the same depth-from-mb to the child.
+            let lead_out = std::process::Command::new("git")
+                .args(["rev-list", "--count", &format!("{}..{}", mb, candidate_tip)])
+                .current_dir(dir)
+                .output()?;
+            let lead: usize = String::from_utf8(lead_out.stdout)?.trim().parse().unwrap_or(0);
+
+            let better = match best_parent {
+                None => true,
+                Some(_) => depth < best_depth || (depth == best_depth && lead > best_lead),
+            };
+            if better {
+                best_parent = Some(candidate.clone());
+                best_depth = depth;
+                best_lead = lead;
             }
         }
         parent_of.insert(branch.clone(), best_parent);

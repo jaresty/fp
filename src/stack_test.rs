@@ -82,6 +82,76 @@ mod tests {
         assert_eq!(parent_of.get("feat/top"), Some(&Some("feat/base".to_string())));
     }
 
+    // DP2: detect_parent_of identifies force-pushed parent even though its new tip is not in child's history
+    #[test]
+    fn detect_parent_of_finds_parent_after_force_push() {
+        use std::process::Command;
+        use tempfile::TempDir;
+
+        let dir = TempDir::new().unwrap();
+        let path = dir.path();
+
+        let git = |args: &[&str]| {
+            Command::new("git").args(args).current_dir(path)
+                .env("GIT_AUTHOR_NAME", "t").env("GIT_AUTHOR_EMAIL", "t@t")
+                .env("GIT_COMMITTER_NAME", "t").env("GIT_COMMITTER_EMAIL", "t@t")
+                .output().unwrap()
+        };
+
+        git(&["init", "-b", "main"]);
+        git(&["config", "user.email", "t@t.com"]);
+        git(&["config", "user.name", "T"]);
+
+        // root commit on main
+        std::fs::write(path.join("root.txt"), "root").unwrap();
+        git(&["add", "."]);
+        git(&["commit", "-m", "root"]);
+
+        // grandparent: branch from main, add commit GP
+        git(&["checkout", "-b", "grandparent"]);
+        std::fs::write(path.join("gp.txt"), "gp").unwrap();
+        git(&["add", "."]);
+        git(&["commit", "-m", "GP"]);
+
+        // parent: branch from grandparent, add commit P
+        git(&["checkout", "-b", "parent"]);
+        std::fs::write(path.join("p.txt"), "p").unwrap();
+        git(&["add", "."]);
+        git(&["commit", "-m", "P"]);
+
+        // child: branch from parent, add 2 commits C1, C2
+        git(&["checkout", "-b", "child"]);
+        std::fs::write(path.join("c1.txt"), "c1").unwrap();
+        git(&["add", "."]);
+        git(&["commit", "-m", "C1"]);
+        std::fs::write(path.join("c2.txt"), "c2").unwrap();
+        git(&["add", "."]);
+        git(&["commit", "-m", "C2"]);
+
+        // Simulate force-push of parent: reset parent to a new commit on grandparent (different SHA)
+        // This is what happens when parent is rebased: its tip changes, child still has old tip
+        git(&["checkout", "parent"]);
+        git(&["reset", "--hard", "grandparent"]);
+        std::fs::write(path.join("p_new.txt"), "p-rebased").unwrap();
+        git(&["add", "."]);
+        git(&["commit", "-m", "P-rebased"]);
+        // Now parent's new tip is NOT in child's history (force-pushed)
+        // child still contains old P commit in its history
+
+        git(&["checkout", "child"]);
+
+        let branches = vec!["grandparent".to_string(), "parent".to_string(), "child".to_string()];
+        let parent_of = detect_parent_of(&branches, path).unwrap();
+
+        // child's parent should be "parent", not "grandparent" — even though parent was force-pushed
+        assert_eq!(
+            parent_of.get("child"),
+            Some(&Some("parent".to_string())),
+            "detect_parent_of must identify force-pushed 'parent' as child's parent, not grandparent. got: {:?}",
+            parent_of.get("child")
+        );
+    }
+
     // RS0: main_repo_root returns an absolute, existing directory
     #[test]
     fn main_repo_root_returns_absolute_path() {
