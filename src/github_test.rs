@@ -2019,7 +2019,7 @@ mod tests {
     #[test]
     fn parse_gh_image_output_extracts_url() {
         let output = "![screenshot.gif](https://github.com/user-attachments/assets/abc-123)\n";
-        let url = crate::github::parse_gh_image_output(output).unwrap();
+        let url = crate::upload::parse_gh_image_output(output).unwrap();
         assert_eq!(url, "https://github.com/user-attachments/assets/abc-123");
     }
 
@@ -2027,7 +2027,7 @@ mod tests {
     #[test]
     fn parse_gh_image_output_errors_on_invalid() {
         let output = "some unexpected output";
-        assert!(crate::github::parse_gh_image_output(output).is_err(),
+        assert!(crate::upload::parse_gh_image_output(output).is_err(),
             "expected error on non-markdown output");
     }
 
@@ -2265,7 +2265,7 @@ mod tests {
     #[test]
     fn parse_upload_token_extracts_token_from_html() {
         let html = r#"<html><head>"uploadToken":"tok123"</head></html>"#;
-        let token = crate::github::parse_upload_token(html).unwrap();
+        let token = crate::upload::parse_upload_token(html).unwrap();
         assert_eq!(token, "tok123");
     }
 
@@ -2273,7 +2273,7 @@ mod tests {
     #[test]
     fn parse_upload_token_errors_on_missing() {
         let html = "<html><body>no token here</body></html>";
-        assert!(crate::github::parse_upload_token(html).is_err());
+        assert!(crate::upload::parse_upload_token(html).is_err());
     }
 
     // ADR-007: parse_upload_policy_response extracts upload fields
@@ -2285,7 +2285,7 @@ mod tests {
             "form": {"key": "val1", "Content-Type": "image/png"},
             "asset_upload_authenticity_token": "auth-tok-xyz"
         }"#;
-        let policy = crate::github::parse_upload_policy_response(json).unwrap();
+        let policy = crate::upload::parse_upload_policy_response(json).unwrap();
         assert_eq!(policy.upload_url, "https://s3.example.com/upload");
         assert_eq!(policy.asset_id, 42);
         assert_eq!(policy.asset_href, "https://github.com/user-attachments/assets/abc");

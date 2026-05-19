@@ -11,6 +11,7 @@ pub mod credentials;
 pub mod agent;
 pub mod shell;
 pub mod merge;
+pub mod upload;
 
 #[cfg(test)]
 mod tasks_test;
@@ -42,6 +43,8 @@ mod repo_test;
 mod merge_test;
 #[cfg(test)]
 mod lifecycle_test;
+#[cfg(test)]
+mod upload_test;
 
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
