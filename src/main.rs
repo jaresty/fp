@@ -51,14 +51,14 @@ mod upload_test;
 mod notify_ext_test;
 #[cfg(test)]
 mod commands_test;
+#[cfg(test)]
+mod profile_test;
 
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
 use github::{GithubClient, detect_repo, resolve_github_token, resolve_track_branch, fetch_open_threads, format_open_threads, format_resolved_threads};
 use store::{Store, PrCache};
 use tasks::{generate_tasks, task_diff};
-
-const FP_SKILL: &str = include_str!("../assets/fp-skill.md");
 
 
 #[derive(Parser)]
@@ -318,14 +318,9 @@ pub use worktree::{locked_subtree, subtree_branches, worktree_branch_mismatch, f
 
 pub use display::{format_adopt_message, format_new_worktree_output, repo_header, format_single_pr_status, format_worktree_add_error, format_conflict_hint};
 
-pub fn require_repo(repo: Option<(String, String)>) -> Result<(String, String)> {
-    repo.ok_or_else(|| anyhow::anyhow!("no GitHub remote detected — cannot determine which repository these PRs belong to"))
-}
-
-
 use platform::notify_macos_titled;
 
-use worktree::{git_dir, repo_root, untrack_and_cleanup};
+use worktree::{git_dir, repo_root, untrack_and_cleanup, require_repo};
 
 fn main() -> Result<()> {
     let cli = Cli::parse();
@@ -754,8 +749,7 @@ fn main() -> Result<()> {
 
         Commands::InstallShell { shell, print } => {
             let shell_name = shell.unwrap_or_else(detect_shell);
-            let content = fps_function_content(&shell_name)
-                .ok_or_else(|| anyhow::anyhow!("unsupported shell: {}. Supported: fish, zsh, bash", shell_name))?;
+            let content = commands::install_shell_content(&shell_name)?;
             if print {
                 println!("{}", content);
             } else {
@@ -768,7 +762,6 @@ fn main() -> Result<()> {
                     std::fs::write(&dest, content)?;
                     println!("Installed fps to {}", dest.display());
                 } else {
-                    // For zsh/bash append to rc file only if not already present
                     let existing = std::fs::read_to_string(&dest).unwrap_or_default();
                     if existing.contains("fps()") {
                         println!("fps already installed in {}", dest.display());
@@ -790,10 +783,7 @@ fn main() -> Result<()> {
                     home.join(".claude").join("skills").join("fp").join("SKILL.md")
                 }
             };
-            if let Some(parent) = skill_path.parent() {
-                std::fs::create_dir_all(parent)?;
-            }
-            std::fs::write(&skill_path, FP_SKILL)?;
+            commands::install_skills(&skill_path)?;
             println!("Installed fp skill to {}", skill_path.display());
         }
 
@@ -1094,7 +1084,7 @@ fn main() -> Result<()> {
         }
 
         Commands::Profile { action, name, token, repo } => {
-            let profiles_path = dirs_path();
+            let profiles_path = profile::profiles_path();
             match action.as_str() {
                 "save" => {
                     let tok = token.ok_or_else(|| anyhow::anyhow!("--token required for profile save"))?;
@@ -1113,14 +1103,6 @@ fn main() -> Result<()> {
     }
 
     Ok(())
-}
-
-fn dirs_path() -> std::path::PathBuf {
-    dirs::home_dir()
-        .unwrap_or_else(|| std::path::PathBuf::from("."))
-        .join(".config")
-        .join("fp")
-        .join("profiles.json")
 }
 
 

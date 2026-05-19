@@ -394,6 +394,10 @@ pub fn untrack_and_cleanup(store: &crate::store::Store, repo_root: &std::path::P
     Ok(())
 }
 
+pub fn require_repo(repo: Option<(String, String)>) -> anyhow::Result<(String, String)> {
+    repo.ok_or_else(|| anyhow::anyhow!("no GitHub remote detected — cannot determine which repository these PRs belong to"))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

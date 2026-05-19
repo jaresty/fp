@@ -1540,16 +1540,14 @@ mod tests {
     // D4-a: resolve_track_branch returns fetched branch when explicit is absent
     #[test]
     fn resolve_track_branch_uses_fetched_when_explicit_absent() {
-        use crate::github::resolve_track_branch;
-        let result = resolve_track_branch(None, Some("feature/foo".to_string()), 99);
+        let result = crate::merge::resolve_track_branch(None, Some("feature/foo".to_string()), 99);
         assert_eq!(result.unwrap(), "feature/foo");
     }
 
     // D4-b: resolve_track_branch errors with corrective message when both fail
     #[test]
     fn resolve_track_branch_errors_with_corrective_message() {
-        use crate::github::resolve_track_branch;
-        let err = resolve_track_branch(None, None, 99).unwrap_err();
+        let err = crate::merge::resolve_track_branch(None, None, 99).unwrap_err();
         let msg = err.to_string();
         assert!(msg.contains("fp track 99 --branch"), "error should contain corrective command, got: {msg}");
     }
@@ -1557,8 +1555,7 @@ mod tests {
     // D4-c: resolve_track_branch prefers explicit over fetched
     #[test]
     fn resolve_track_branch_prefers_explicit() {
-        use crate::github::resolve_track_branch;
-        let result = resolve_track_branch(Some("explicit-branch".to_string()), Some("fetched-branch".to_string()), 99);
+        let result = crate::merge::resolve_track_branch(Some("explicit-branch".to_string()), Some("fetched-branch".to_string()), 99);
         assert_eq!(result.unwrap(), "explicit-branch");
     }
 

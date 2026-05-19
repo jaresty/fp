@@ -14,6 +14,25 @@ mod tests {
     }
 
     #[test]
+    fn worktree_governs_require_repo_errors_when_none() {
+        let result = crate::worktree::require_repo(None);
+        assert!(result.is_err(), "worktree::require_repo(None) must return Err");
+        assert!(
+            result.unwrap_err().to_string().contains("no GitHub remote"),
+            "error must mention 'no GitHub remote'"
+        );
+    }
+
+    #[test]
+    fn worktree_governs_require_repo_returns_pair_when_some() {
+        let result = crate::worktree::require_repo(Some(("alice".into(), "proj".into())));
+        assert!(result.is_ok(), "worktree::require_repo(Some) must succeed");
+        let (owner, repo) = result.unwrap();
+        assert_eq!(owner, "alice");
+        assert_eq!(repo, "proj");
+    }
+
+    #[test]
     fn worktree_governs_git_dir_returns_path_in_repo() {
         // This test only works when run inside the fp repo itself
         let result = crate::worktree::git_dir();

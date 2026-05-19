@@ -8,3 +8,16 @@ pub fn check_merge_base(merged_base: &str, has_downstream: bool) -> anyhow::Resu
 pub fn resolve_merge_base(fetched: &str, stored: &str) -> String {
     if !fetched.is_empty() { fetched.to_string() } else { stored.to_string() }
 }
+
+pub fn resolve_track_branch(
+    explicit: Option<String>,
+    fetched: Option<String>,
+    pr_number: u64,
+) -> anyhow::Result<String> {
+    if let Some(b) = explicit.filter(|s| !s.is_empty()) { return Ok(b); }
+    if let Some(b) = fetched.filter(|s| !s.is_empty()) { return Ok(b); }
+    anyhow::bail!(
+        "fp: could not determine branch for PR #{}.\nRun: fp track {} --branch <branch-name>",
+        pr_number, pr_number
+    )
+}

@@ -9,6 +9,14 @@ pub struct Profile {
     pub repo: String,
 }
 
+pub fn profiles_path() -> std::path::PathBuf {
+    dirs::home_dir()
+        .unwrap_or_else(|| std::path::PathBuf::from("."))
+        .join(".config")
+        .join("fp")
+        .join("profiles.json")
+}
+
 pub fn save_profile(path: &Path, name: &str, github_token: &str, repo: &str) -> Result<()> {
     let mut profiles: HashMap<String, Profile> = if path.exists() {
         serde_json::from_str(&std::fs::read_to_string(path)?)?

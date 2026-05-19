@@ -622,20 +622,7 @@ pub use crate::agent::agent_context_manifest_with_prs;
 pub use crate::display::{format_open_threads, format_resolved_threads, fetch_open_threads};
 pub use crate::model::{ResolvedThreadInfo, parse_resolved_review_threads_from_graphql};
 
-/// Resolve the branch for a tracked PR. Prefers explicit, then fetched; errors with corrective
-/// message when both are absent.
-pub fn resolve_track_branch(
-    explicit: Option<String>,
-    fetched: Option<String>,
-    pr_number: u64,
-) -> Result<String> {
-    if let Some(b) = explicit.filter(|s| !s.is_empty()) { return Ok(b); }
-    if let Some(b) = fetched.filter(|s| !s.is_empty()) { return Ok(b); }
-    anyhow::bail!(
-        "fp: could not determine branch for PR #{}.\nRun: fp track {} --branch <branch-name>",
-        pr_number, pr_number
-    )
-}
+pub use crate::merge::resolve_track_branch;
 
 pub use crate::worktree::detect_repo;
 #[cfg(test)]
