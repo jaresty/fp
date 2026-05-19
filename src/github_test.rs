@@ -1,4 +1,40 @@
 #[cfg(test)]
+mod trait_tests {
+    // GH-T1: FakeGithubClient implements GithubClient trait
+    // This test proves the trait exists and FakeGithubClient satisfies it.
+    #[test]
+    fn github_governs_fake_implements_trait() {
+        let fake = crate::github::FakeGithubClient::new();
+        let _client: &dyn crate::github::GithubClientTrait = &fake;
+        // If this compiles and runs, FakeGithubClient implements GithubClientTrait.
+    }
+
+    // GH-T2: FakeGithubClient::fetch_pr returns the configured response
+    #[test]
+    fn github_governs_fake_fetch_pr_returns_configured_pr() {
+        use crate::github::GithubClientTrait;
+        let mut fake = crate::github::FakeGithubClient::new();
+        fake.set_pr(7, crate::model::PrState {
+            number: 7,
+            title: "test pr".into(),
+            branch: "feat/test".into(),
+            base: "main".into(),
+            head_sha: "abc".into(),
+            draft: false,
+            approved: false,
+            checks: vec![],
+            threads: vec![],
+            needs_parent_rebase: false,
+            has_merge_conflict: false,
+            codeowners_eligibility: Default::default(),
+        });
+        let pr = fake.fetch_pr("owner", "repo", 7).unwrap();
+        assert_eq!(pr.title, "test pr");
+        assert_eq!(pr.number, 7);
+    }
+}
+
+#[cfg(test)]
 mod tests {
     use crate::github::{parse_github_remote_pub, GithubClient};
     use crate::model::{CheckStatus, ThreadState};

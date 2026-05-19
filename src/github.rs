@@ -599,6 +599,105 @@ impl GithubClient {
 
 pub use crate::upload::{github_upload_image, inject_demo_section};
 
+// Trait will be used once Tier-3 dispatch arms are migrated to accept &dyn GithubClientTrait.
+#[allow(dead_code)]
+pub trait GithubClientTrait {
+    fn fetch_pr(&self, owner: &str, repo: &str, pr_number: u64) -> Result<PrState>;
+    fn fetch_prs_as_map(&self, owner: &str, repo: &str, pr_numbers: &[u64]) -> std::collections::HashMap<u64, PrState>;
+    fn fetch_prs_parallel(&self, owner: &str, repo: &str, pr_numbers: &[u64]) -> Vec<PrState>;
+    fn fetch_pr_metadata(&self, owner: &str, repo: &str, pr_number: u64) -> Result<(String, String)>;
+    fn fetch_pr_base(&self, owner: &str, repo: &str, pr_number: u64) -> Result<String>;
+    fn fetch_pr_body(&self, owner: &str, repo: &str, pr_number: u64) -> Result<String>;
+    fn fetch_pr_is_merged(&self, owner: &str, repo: &str, pr_number: u64) -> Result<bool>;
+    fn fetch_pr_head_sha_and_base(&self, owner: &str, repo: &str, pr_number: u64) -> Result<(String, String)>;
+    fn fetch_checks_for_sha(&self, owner: &str, repo: &str, sha: &str) -> Result<Vec<Check>>;
+    fn fetch_resolved_threads_graphql(&self, owner: &str, repo: &str, pr_number: u64) -> Result<Vec<ResolvedThreadInfo>>;
+    fn reply_to_thread(&self, owner: &str, repo: &str, pr_number: u64, thread: &Thread, body: &str) -> Result<String>;
+    fn reply_to_comment(&self, owner: &str, repo: &str, pr_number: u64, comment_id: u64, body: &str) -> Result<String>;
+    fn post_pr_comment(&self, owner: &str, repo: &str, pr_number: u64, body: &str) -> Result<String>;
+    #[allow(clippy::too_many_arguments)]
+    fn create_pr_with_body(&self, owner: &str, repo: &str, title: &str, head: &str, base: &str, draft: bool, body: Option<&str>) -> Result<PrState>;
+    fn mark_pr_ready(&self, owner: &str, repo: &str, pr_number: u64) -> Result<()>;
+    fn is_head_behind_base(&self, owner: &str, repo: &str, base_sha: &str, head_sha: &str) -> bool;
+    fn fetch_repo_merge_method(&self, owner: &str, repo: &str) -> Result<String>;
+    fn merge_pr(&self, owner: &str, repo: &str, pr_number: u64, merge_method: Option<&str>) -> Result<String>;
+    fn update_pr(&self, owner: &str, repo: &str, pr_number: u64, title: Option<&str>, body: Option<&str>) -> Result<()>;
+    fn update_pr_base(&self, owner: &str, repo: &str, pr_number: u64, new_base: &str) -> Result<()>;
+}
+
+impl GithubClientTrait for GithubClient {
+    fn fetch_pr(&self, owner: &str, repo: &str, pr_number: u64) -> Result<PrState> { self.fetch_pr(owner, repo, pr_number) }
+    fn fetch_prs_as_map(&self, owner: &str, repo: &str, pr_numbers: &[u64]) -> std::collections::HashMap<u64, PrState> { self.fetch_prs_as_map(owner, repo, pr_numbers) }
+    fn fetch_prs_parallel(&self, owner: &str, repo: &str, pr_numbers: &[u64]) -> Vec<PrState> { self.fetch_prs_parallel(owner, repo, pr_numbers) }
+    fn fetch_pr_metadata(&self, owner: &str, repo: &str, pr_number: u64) -> Result<(String, String)> { self.fetch_pr_metadata(owner, repo, pr_number) }
+    fn fetch_pr_base(&self, owner: &str, repo: &str, pr_number: u64) -> Result<String> { self.fetch_pr_base(owner, repo, pr_number) }
+    fn fetch_pr_body(&self, owner: &str, repo: &str, pr_number: u64) -> Result<String> { self.fetch_pr_body(owner, repo, pr_number) }
+    fn fetch_pr_is_merged(&self, owner: &str, repo: &str, pr_number: u64) -> Result<bool> { self.fetch_pr_is_merged(owner, repo, pr_number) }
+    fn fetch_pr_head_sha_and_base(&self, owner: &str, repo: &str, pr_number: u64) -> Result<(String, String)> { self.fetch_pr_head_sha_and_base(owner, repo, pr_number) }
+    fn fetch_checks_for_sha(&self, owner: &str, repo: &str, sha: &str) -> Result<Vec<Check>> { self.fetch_checks_for_sha(owner, repo, sha) }
+    fn fetch_resolved_threads_graphql(&self, owner: &str, repo: &str, pr_number: u64) -> Result<Vec<ResolvedThreadInfo>> { self.fetch_resolved_threads_graphql(owner, repo, pr_number) }
+    fn reply_to_thread(&self, owner: &str, repo: &str, pr_number: u64, thread: &Thread, body: &str) -> Result<String> { self.reply_to_thread(owner, repo, pr_number, thread, body) }
+    fn reply_to_comment(&self, owner: &str, repo: &str, pr_number: u64, comment_id: u64, body: &str) -> Result<String> { self.reply_to_comment(owner, repo, pr_number, comment_id, body) }
+    fn post_pr_comment(&self, owner: &str, repo: &str, pr_number: u64, body: &str) -> Result<String> { self.post_pr_comment(owner, repo, pr_number, body) }
+    fn create_pr_with_body(&self, owner: &str, repo: &str, title: &str, head: &str, base: &str, draft: bool, body: Option<&str>) -> Result<PrState> { self.create_pr_with_body(owner, repo, title, head, base, draft, body) }
+    fn mark_pr_ready(&self, owner: &str, repo: &str, pr_number: u64) -> Result<()> { self.mark_pr_ready(owner, repo, pr_number) }
+    fn is_head_behind_base(&self, owner: &str, repo: &str, base_sha: &str, head_sha: &str) -> bool { self.is_head_behind_base(owner, repo, base_sha, head_sha) }
+    fn fetch_repo_merge_method(&self, owner: &str, repo: &str) -> Result<String> { self.fetch_repo_merge_method(owner, repo) }
+    fn merge_pr(&self, owner: &str, repo: &str, pr_number: u64, merge_method: Option<&str>) -> Result<String> { self.merge_pr(owner, repo, pr_number, merge_method) }
+    fn update_pr(&self, owner: &str, repo: &str, pr_number: u64, title: Option<&str>, body: Option<&str>) -> Result<()> { self.update_pr(owner, repo, pr_number, title, body) }
+    fn update_pr_base(&self, owner: &str, repo: &str, pr_number: u64, new_base: &str) -> Result<()> { self.update_pr_base(owner, repo, pr_number, new_base) }
+}
+
+#[cfg(test)]
+pub struct FakeGithubClient {
+    prs: std::collections::HashMap<u64, PrState>,
+}
+
+#[cfg(test)]
+impl FakeGithubClient {
+    pub fn new() -> Self { Self { prs: std::collections::HashMap::new() } }
+    pub fn set_pr(&mut self, number: u64, pr: PrState) { self.prs.insert(number, pr); }
+}
+
+#[cfg(test)]
+impl GithubClientTrait for FakeGithubClient {
+    fn fetch_pr(&self, _owner: &str, _repo: &str, pr_number: u64) -> Result<PrState> {
+        self.prs.get(&pr_number).cloned().ok_or_else(|| anyhow::anyhow!("PR #{} not in fake", pr_number))
+    }
+    fn fetch_prs_as_map(&self, _o: &str, _r: &str, ns: &[u64]) -> std::collections::HashMap<u64, PrState> {
+        ns.iter().filter_map(|n| self.prs.get(n).map(|p| (*n, p.clone()))).collect()
+    }
+    fn fetch_prs_parallel(&self, _o: &str, _r: &str, ns: &[u64]) -> Vec<PrState> {
+        ns.iter().filter_map(|n| self.prs.get(n).cloned()).collect()
+    }
+    fn fetch_pr_metadata(&self, o: &str, r: &str, n: u64) -> Result<(String, String)> {
+        let p = self.fetch_pr(o, r, n)?; Ok((p.title, p.branch))
+    }
+    fn fetch_pr_base(&self, o: &str, r: &str, n: u64) -> Result<String> {
+        let p = self.fetch_pr(o, r, n)?; Ok(p.base)
+    }
+    fn fetch_pr_body(&self, _o: &str, _r: &str, _n: u64) -> Result<String> { Ok(String::new()) }
+    fn fetch_pr_is_merged(&self, _o: &str, _r: &str, _n: u64) -> Result<bool> { Ok(false) }
+    fn fetch_pr_head_sha_and_base(&self, o: &str, r: &str, n: u64) -> Result<(String, String)> {
+        let p = self.fetch_pr(o, r, n)?; Ok((p.head_sha, p.base))
+    }
+    fn fetch_checks_for_sha(&self, _o: &str, _r: &str, _sha: &str) -> Result<Vec<Check>> { Ok(vec![]) }
+    fn fetch_resolved_threads_graphql(&self, _o: &str, _r: &str, _n: u64) -> Result<Vec<ResolvedThreadInfo>> { Ok(vec![]) }
+    fn reply_to_thread(&self, _o: &str, _r: &str, _n: u64, _t: &Thread, _b: &str) -> Result<String> { Ok("ok".into()) }
+    fn reply_to_comment(&self, _o: &str, _r: &str, _n: u64, _c: u64, _b: &str) -> Result<String> { Ok("ok".into()) }
+    fn post_pr_comment(&self, _o: &str, _r: &str, _n: u64, _b: &str) -> Result<String> { Ok("ok".into()) }
+    #[allow(clippy::too_many_arguments)]
+    fn create_pr_with_body(&self, _o: &str, _r: &str, title: &str, head: &str, base: &str, draft: bool, _body: Option<&str>) -> Result<PrState> {
+        Ok(PrState { number: 0, title: title.into(), branch: head.into(), base: base.into(), head_sha: String::new(), draft, approved: false, checks: vec![], threads: vec![], needs_parent_rebase: false, has_merge_conflict: false, codeowners_eligibility: Default::default() })
+    }
+    fn mark_pr_ready(&self, _o: &str, _r: &str, _n: u64) -> Result<()> { Ok(()) }
+    fn is_head_behind_base(&self, _o: &str, _r: &str, _base: &str, _head: &str) -> bool { false }
+    fn fetch_repo_merge_method(&self, _o: &str, _r: &str) -> Result<String> { Ok("merge".into()) }
+    fn merge_pr(&self, _o: &str, _r: &str, _n: u64, _m: Option<&str>) -> Result<String> { Ok("merged".into()) }
+    fn update_pr(&self, _o: &str, _r: &str, _n: u64, _t: Option<&str>, _b: Option<&str>) -> Result<()> { Ok(()) }
+    fn update_pr_base(&self, _o: &str, _r: &str, _n: u64, _base: &str) -> Result<()> { Ok(()) }
+}
+
 /// Returns the repo's preferred merge method, using `cache` (keyed by "owner/repo") to avoid
 /// repeated API calls. Queries GitHub and populates cache on first call per repo.
 pub fn resolve_merge_method(
