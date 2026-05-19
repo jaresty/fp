@@ -319,11 +319,15 @@ pub fn rebase_stack(branches: &[String], parent_of: &HashMap<String, Option<Stri
 /// Squash-safe: uses --onto so only commits unique to `branch` are replanted.
 /// Force-pushes after a successful rebase.
 pub fn rebase_onto_after_merge(branch: &str, old_base_sha: &str, new_base: &str, dir: &Path) -> Result<()> {
+    let wt_dir = worktree::find_worktree_path(branch, dir);
+    let rebase_dir = wt_dir.as_deref().unwrap_or(dir);
     let git = |args: &[&str]| {
-        std::process::Command::new("git").args(args).current_dir(dir).output()
+        std::process::Command::new("git").args(args).current_dir(rebase_dir).output()
     };
-    let checkout = git(&["checkout", branch])?;
-    anyhow::ensure!(checkout.status.success(), "checkout {} failed: {}", branch, String::from_utf8_lossy(&checkout.stderr));
+    if wt_dir.is_none() {
+        let checkout = git(&["checkout", branch])?;
+        anyhow::ensure!(checkout.status.success(), "checkout {} failed: {}", branch, String::from_utf8_lossy(&checkout.stderr));
+    }
     let rebase = git(&["rebase", "--onto", new_base, old_base_sha, branch])?;
     if !rebase.status.success() {
         git(&["rebase", "--abort"]).ok();

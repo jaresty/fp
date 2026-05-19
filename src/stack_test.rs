@@ -287,6 +287,74 @@ mod tests {
         assert_eq!(child_parent, main_tip, "feat/child should be rebased onto main tip");
     }
 
+    // MG2: rebase_onto_after_merge works when feat/child is checked out in a linked worktree
+    #[test]
+    fn rebase_onto_after_merge_uses_worktree_when_available() {
+        use std::process::Command;
+        use tempfile::TempDir;
+
+        let remote_dir = TempDir::new().unwrap();
+        Command::new("git").args(["init", "--bare", "-b", "main"])
+            .current_dir(remote_dir.path()).output().unwrap();
+
+        let dir = TempDir::new().unwrap();
+        let path = dir.path();
+
+        let git = |args: &[&str]| {
+            Command::new("git").args(args).current_dir(path).output().unwrap()
+        };
+
+        git(&["init", "-b", "main"]);
+        git(&["config", "user.email", "test@test.com"]);
+        git(&["config", "user.name", "Test"]);
+        git(&["remote", "add", "origin", remote_dir.path().to_str().unwrap()]);
+
+        std::fs::write(path.join("a.txt"), "a").unwrap();
+        git(&["add", "."]);
+        git(&["commit", "-m", "A"]);
+        git(&["push", "origin", "main"]);
+
+        git(&["checkout", "-b", "feat/parent"]);
+        std::fs::write(path.join("b.txt"), "b").unwrap();
+        git(&["add", "."]);
+        git(&["commit", "-m", "B"]);
+        let parent_sha = String::from_utf8(
+            Command::new("git").args(["rev-parse", "feat/parent"]).current_dir(path).output().unwrap().stdout
+        ).unwrap().trim().to_string();
+
+        git(&["checkout", "-b", "feat/child"]);
+        std::fs::write(path.join("c.txt"), "c").unwrap();
+        git(&["add", "."]);
+        git(&["commit", "-m", "C"]);
+        git(&["push", "--set-upstream", "origin", "feat/child"]);
+
+        // Switch back to main so we can add feat/child as a worktree
+        git(&["checkout", "main"]);
+
+        // Check out feat/child in a linked worktree — simulates the user having it open
+        let wt_dir = TempDir::new().unwrap();
+        let wt_path = wt_dir.path();
+        let wt_out = git(&["worktree", "add", wt_path.to_str().unwrap(), "feat/child"]);
+        assert!(wt_out.status.success(), "worktree add failed: {}", String::from_utf8_lossy(&wt_out.stderr));
+
+        // Simulate squash merge of feat/parent
+        git(&["merge", "--squash", "feat/parent"]);
+        git(&["commit", "-m", "squash merge B"]);
+        git(&["push", "origin", "main"]);
+
+        // This should succeed even though feat/child is checked out in a worktree
+        let result = crate::stack::rebase_onto_after_merge("feat/child", &parent_sha, "main", path);
+        assert!(result.is_ok(), "rebase_onto_after_merge must succeed when branch is in a worktree, got: {:?}", result);
+
+        let child_parent = String::from_utf8(
+            Command::new("git").args(["rev-parse", "feat/child~1"]).current_dir(path).output().unwrap().stdout
+        ).unwrap().trim().to_string();
+        let main_tip = String::from_utf8(
+            Command::new("git").args(["rev-parse", "main"]).current_dir(path).output().unwrap().stdout
+        ).unwrap().trim().to_string();
+        assert_eq!(child_parent, main_tip, "feat/child should be rebased onto main tip even when in a worktree");
+    }
+
     // RS3: rebase_stack force-pushes each rebased branch after successful rebase
     #[test]
     fn rebase_stack_pushes_after_rebase() {

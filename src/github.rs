@@ -720,6 +720,8 @@ pub fn resolve_merge_method(
 pub use crate::credentials::{extract_github_session_from_browser_with_chrome_db, resolve_github_token};
 pub use crate::agent::agent_context_manifest_with_prs;
 
+#[cfg(test)]
+pub use crate::display::{format_open_threads, format_resolved_threads, fetch_open_threads};
 pub use crate::model::{ResolvedThreadInfo, parse_resolved_review_threads_from_graphql};
 
 pub use crate::merge::resolve_track_branch;
