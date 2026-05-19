@@ -364,13 +364,14 @@ pub fn detect_shell() -> String {
         .unwrap_or_else(|| "fish".to_string())
 }
 
-pub fn format_watch_initial_state(pr: u64, title: &str, task_list: &[tasks::Task], json: bool, lock: Option<&str>) -> String {
+pub fn format_watch_initial_state(pr: u64, title: &str, task_list: &[tasks::Task], json: bool, lock: Option<&str>, prefix: &str) -> String {
     if json {
         return serde_json::to_string(&serde_json::json!({
             "pr": pr,
             "initial_tasks": task_list,
         })).unwrap_or_default();
     }
+    let task_prefix = prefix.replace("└─ ", "   ");
     let lock_suffix = lock.map(|s| format!("  {}", s)).unwrap_or_default();
     if task_list.is_empty() {
         return format!("PR #{} {} — ready{}\n", pr, title, lock_suffix);
@@ -378,7 +379,7 @@ pub fn format_watch_initial_state(pr: u64, title: &str, task_list: &[tasks::Task
     let mut out = format!("PR #{} {} — {} task(s){}\n", pr, title, task_list.len(), lock_suffix);
     for t in task_list {
         let flag = if t.blocking { "[blocking]" } else { "[waiting]" };
-        out.push_str(&format!("  {} {:?}: {}\n", flag, t.task_type, t.description));
+        out.push_str(&format!("{}  {} {:?}: {}\n", task_prefix, flag, t.task_type, t.description));
     }
     out
 }
@@ -963,7 +964,7 @@ fn main() -> Result<()> {
                     } else {
                         let lock = worktree::lock_status(&git_dir, &tracked.branch);
                         let prefix = tree_prefixes.get(&tracked.number).cloned().unwrap_or_default();
-                        print!("{}{}", prefix, format_watch_initial_state(tracked.number, &tracked.title, &curr, json, lock.as_deref()));
+                        print!("{}{}", prefix, format_watch_initial_state(tracked.number, &tracked.title, &curr, json, lock.as_deref(), &prefix));
                     }
                     prev_tasks.insert(tracked.number, curr);
                 }
