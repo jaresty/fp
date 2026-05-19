@@ -9,6 +9,7 @@ mod worktree;
 pub mod display;
 pub mod credentials;
 pub mod agent;
+pub mod shell;
 
 #[cfg(test)]
 mod tasks_test;
@@ -30,6 +31,8 @@ mod display_test;
 mod credentials_test;
 #[cfg(test)]
 mod agent_manifest_test;
+#[cfg(test)]
+mod shell_test;
 
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
@@ -309,47 +312,7 @@ pub fn watch_notification_messages(
 }
 
 
-/// Returns the fps shell function content for the given shell.
-pub fn fps_function_content(shell: &str) -> Option<String> {
-    match shell {
-        "fish" => Some(r#"function fps
-    if test "$argv[1]" = root
-        cd (fp root)
-    else
-        set dir (fp switch $argv)
-        and cd $dir
-    end
-end"#.to_string()),
-        "zsh" | "bash" => Some(r#"fps() {
-    if [ "$1" = root ]; then
-        cd "$(fp root)"
-    else
-        local dir
-        dir=$(fp switch "$@") && cd "$dir"
-    fi
-}"#.to_string()),
-        _ => None,
-    }
-}
-
-/// Returns the path where the fps function file should be written for the given shell.
-pub fn fps_install_path(shell: &str) -> Option<std::path::PathBuf> {
-    let home = dirs::home_dir()?;
-    match shell {
-        "fish" => Some(home.join(".config/fish/functions/fps.fish")),
-        "zsh" => Some(home.join(".zshrc")),
-        "bash" => Some(home.join(".bashrc")),
-        _ => None,
-    }
-}
-
-/// Detects the current shell from $SHELL env var, returning the basename.
-pub fn detect_shell() -> String {
-    std::env::var("SHELL")
-        .ok()
-        .and_then(|s| std::path::Path::new(&s).file_name().map(|n| n.to_string_lossy().to_string()))
-        .unwrap_or_else(|| "fish".to_string())
-}
+pub use shell::{fps_function_content, fps_install_path, detect_shell};
 
 pub use display::{format_watch_initial_state, format_pr_status_all_entry, format_watch_event_json};
 
