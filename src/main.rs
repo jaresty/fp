@@ -27,7 +27,7 @@ use clap::{Parser, Subcommand};
 use std::path::PathBuf;
 
 use github::{GithubClient, detect_repo, resolve_github_token, resolve_track_branch, fetch_open_threads, format_open_threads, format_resolved_threads};
-use store::{Store, TrackedPr};
+use store::{Store, PrCache};
 use tasks::{generate_tasks, task_diff};
 
 const FP_SKILL: &str = include_str!("../assets/fp-skill.md");
@@ -447,10 +447,11 @@ pub fn resolve_merge_base(fetched: &str, stored: &str) -> String {
 }
 
 /// Returns (pr_number, indent_prefix) pairs in tree order: roots first, then children indented.
-pub fn stack_tree_order(prs: &[&TrackedPr]) -> Vec<(u64, String)> {
+/// Uses PrCache.base (from the GitHub API) to determine parent-child relationships.
+pub fn stack_tree_order(prs: &[&PrCache]) -> Vec<(u64, String)> {
     let branches: std::collections::HashSet<&str> = prs.iter().map(|p| p.branch.as_str()).collect();
     let mut result = Vec::new();
-    fn visit(branch: &str, prs: &[&TrackedPr], depth: usize, result: &mut Vec<(u64, String)>) {
+    fn visit(branch: &str, prs: &[&PrCache], depth: usize, result: &mut Vec<(u64, String)>) {
         let prefix = if depth == 0 { String::new() } else { "  ".repeat(depth - 1) + "  └─ " };
         if let Some(pr) = prs.iter().find(|p| p.branch == branch) {
             result.push((pr.number, prefix));
@@ -459,7 +460,7 @@ pub fn stack_tree_order(prs: &[&TrackedPr]) -> Vec<(u64, String)> {
             visit(&child.branch.clone(), prs, depth + 1, result);
         }
     }
-    let mut root_prs: Vec<&&TrackedPr> = prs.iter().filter(|p| !branches.contains(p.base.as_str())).collect();
+    let mut root_prs: Vec<&&PrCache> = prs.iter().filter(|p| !branches.contains(p.base.as_str())).collect();
     root_prs.sort_by_key(|p| p.number);
     for root in root_prs {
         visit(&root.branch.clone(), prs, 0, &mut result);
@@ -593,7 +594,7 @@ pub fn format_worktree_add_error(stderr: &str, _branch: &str, pr: u64) -> String
     }
 }
 
-pub fn format_conflict_hint(branch: &str, prs: &std::collections::HashMap<u64, store::TrackedPr>) -> String {
+pub fn format_conflict_hint(branch: &str, prs: &std::collections::HashMap<u64, store::PrCache>) -> String {
     if let Some(pr) = prs.values().find(|p| p.branch == branch) {
         format!("  Tip: fps {} to switch to its worktree", pr.number)
     } else {
@@ -662,16 +663,16 @@ fn main() -> Result<()> {
             let (owner, repo_name) = require_repo(detect_repo())?;
             let state = store.load()?;
             if json {
-                let items: Vec<_> = state.prs.values().collect();
+                let items = state.tracked_prs();
                 println!("{}", serde_json::to_string_pretty(&items)?);
             } else {
                 println!("{}", repo_header(&owner, &repo_name));
-                if state.prs.is_empty() {
+                if state.tracked.is_empty() {
                     println!("No tracked PRs. Use `fp track <pr>` to add one.");
                 } else {
-                    let prs: Vec<_> = state.prs.values().collect();
+                    let prs = state.tracked_prs();
                     for (number, prefix) in stack_tree_order(&prs) {
-                        if let Some(pr) = state.prs.get(&number) {
+                        if let Some(pr) = state.cache.get(&number) {
                             println!("{}#{} {} ({})", prefix, pr.number, pr.title, pr.branch);
                         }
                     }
@@ -695,9 +696,7 @@ fn main() -> Result<()> {
 
             if all {
                 if !json { println!("{}", repo_header(&repo.0, &repo.1)); }
-                let mut prs: Vec<_> = state.prs.values().collect();
-                prs.sort_by_key(|p| p.number);
-                let pr_numbers: Vec<u64> = prs.iter().map(|p| p.number).collect();
+                let pr_numbers: Vec<u64> = state.tracked.iter().copied().collect();
 
                 let fetched: std::collections::HashMap<u64, crate::model::PrState> =
                     if let Some(tok) = &token {
@@ -706,56 +705,64 @@ fn main() -> Result<()> {
                         std::collections::HashMap::new()
                     };
 
+                // Refresh cache from API so tree order uses current base branches
+                let new_cache: std::collections::HashMap<u64, PrCache> = fetched.values()
+                    .filter(|p| state.tracked.contains(&p.number))
+                    .map(|p| (p.number, PrCache { number: p.number, title: p.title.clone(), branch: p.branch.clone(), base: p.base.clone() }))
+                    .collect();
+                let _ = store.replace_cache(new_cache);
+                let state = store.load()?;
+
+                let prs = state.tracked_prs();
                 let tree_order = stack_tree_order(&prs);
                 for (number, prefix) in tree_order {
-                    let tracked = match state.prs.get(&number) { Some(t) => t, None => continue };
-                    let mut pr_state = fetched.get(&tracked.number).cloned()
+                    let cached = match state.cache.get(&number) { Some(t) => t, None => continue };
+                    let mut pr_state = fetched.get(&number).cloned()
                         .unwrap_or_else(|| crate::model::PrState {
-                            number: tracked.number,
-                            title: tracked.title.clone(),
-                            branch: tracked.branch.clone(),
-                            base: "".into(), head_sha: "".into(), draft: false, approved: false,
+                            number: cached.number,
+                            title: cached.title.clone(),
+                            branch: cached.branch.clone(),
+                            base: cached.base.clone(), head_sha: "".into(), draft: false, approved: false,
                             checks: vec![], threads: vec![], needs_parent_rebase: false, has_merge_conflict: false, codeowners_eligibility: Default::default(),
                         });
                     if let (Some(tok), Some((owner, repo_name))) = (&token, detect_repo())
-                        && let Some(parent) = prs.iter().find(|p| p.branch == tracked.base).and_then(|p| fetched.get(&p.number))
+                        && let Some(parent) = prs.iter().find(|p| p.branch == cached.base).and_then(|p| fetched.get(&p.number))
                         && !parent.head_sha.is_empty() && !pr_state.head_sha.is_empty() {
                         pr_state.needs_parent_rebase = GithubClient::new(tok.clone())
                             .is_head_behind_base(&owner, &repo_name, &parent.head_sha, &pr_state.head_sha);
                     }
                     let tasks = generate_tasks(&pr_state);
-                    let lock = worktree::lock_status(&git_dir, &tracked.branch)
+                    let lock = worktree::lock_status(&git_dir, &cached.branch)
                         .map(|s| format!("  {}", s))
                         .unwrap_or_default();
                     if json {
                         println!("{}", serde_json::to_string_pretty(&tasks).unwrap());
                     } else {
-                        print!("{}", format_pr_status_all_entry(&prefix, tracked.number, &tracked.title, &tasks, &lock));
+                        print!("{}", format_pr_status_all_entry(&prefix, cached.number, &cached.title, &tasks, &lock));
                     }
                 }
             } else {
                 let number = pr.context("specify a PR number or use --all")?;
 
-                let tracked = state.prs.get(&number)
+                let cached = state.cache.get(&number)
                     .with_context(|| format!("PR #{} is not tracked. Run `fp track {}`", number, number))?;
 
-                let pr_state = fetch(tracked.number, &tracked.branch)
+                let mut pr_state_single = fetch(cached.number, &cached.branch)
                     .unwrap_or_else(|| crate::model::PrState {
-                        number: tracked.number,
-                        title: tracked.title.clone(),
-                        branch: tracked.branch.clone(),
-                        base: "".into(), head_sha: "".into(), draft: false, approved: false,
+                        number: cached.number,
+                        title: cached.title.clone(),
+                        branch: cached.branch.clone(),
+                        base: cached.base.clone(), head_sha: "".into(), draft: false, approved: false,
                         checks: vec![], threads: vec![], needs_parent_rebase: false, has_merge_conflict: false, codeowners_eligibility: Default::default(),
                     });
-                let mut pr_state_single = pr_state;
                 if let (Some(tok), Some((owner, repo_name))) = (&token, detect_repo())
-                    && let Some(parent) = state.prs.values().find(|p| p.branch == tracked.base).and_then(|p| fetch(p.number, &p.branch))
+                    && let Some(parent) = state.tracked_prs().into_iter().find(|p| p.branch == pr_state_single.base).and_then(|p| fetch(p.number, &p.branch))
                     && !parent.head_sha.is_empty() && !pr_state_single.head_sha.is_empty() {
                     pr_state_single.needs_parent_rebase = GithubClient::new(tok.clone())
                         .is_head_behind_base(&owner, &repo_name, &parent.head_sha, &pr_state_single.head_sha);
                 }
                 let task_list = generate_tasks(&pr_state_single);
-                let lock = worktree::lock_status(&git_dir, &tracked.branch);
+                let lock = worktree::lock_status(&git_dir, &cached.branch);
 
                 if json {
                     println!("{}", serde_json::to_string_pretty(&task_list)?);
@@ -784,14 +791,15 @@ fn main() -> Result<()> {
                 let resolved_branch = resolve_track_branch(branch, fetched_branch, pr)?;
                 (resolved_title, resolved_branch, fetched_base)
             };
-            store.track(TrackedPr { number: pr, title: title.clone(), branch: resolved_branch, base })?;
+            store.track(pr)?;
+            store.update_cache(PrCache { number: pr, title: title.clone(), branch: resolved_branch, base })?;
             println!("Tracking PR #{} — {}", pr, title);
         }
 
         Commands::Untrack { pr } => {
             let branch = {
                 let state = store.load()?;
-                state.prs.get(&pr).map(|t| t.branch.clone())
+                state.cache.get(&pr).map(|t| t.branch.clone())
             };
             if let Some(branch) = branch {
                 untrack_and_cleanup(&store, &repo_root()?, &git_dir, pr, &branch)?;
@@ -803,9 +811,9 @@ fn main() -> Result<()> {
 
         Commands::Switch { pr, id, force, adopt } => {
             let state = store.load()?;
-            let tracked = state.prs.get(&pr)
+            let cached = state.cache.get(&pr)
                 .with_context(|| format!("PR #{} is not tracked. Run `fp track {}`", pr, pr))?;
-            let branch = tracked.branch.clone();
+            let branch = cached.branch.clone();
             let root = repo_root()?;
 
             if !force && worktree::repo_is_dirty(&std::env::current_dir()?)? {
@@ -907,10 +915,7 @@ fn main() -> Result<()> {
                 let state = store.load()?;
                 let token = std::env::var("GITHUB_TOKEN").ok();
                 let repo = detect_repo();
-                let mut prs: Vec<_> = state.prs.values().collect();
-                prs.sort_by_key(|p| p.number);
-
-                let pr_numbers: Vec<u64> = prs.iter().map(|p| p.number).collect();
+                let pr_numbers: Vec<u64> = state.tracked.iter().copied().collect();
                 let fetched: std::collections::HashMap<u64, model::PrState> =
                     if let (Some(tok), Some((owner, repo_name))) = (&token, &repo) {
                         let client = GithubClient::new(tok.clone());
@@ -920,22 +925,30 @@ fn main() -> Result<()> {
                         std::collections::HashMap::new()
                     };
 
+                // Refresh cache from API
+                let new_cache: std::collections::HashMap<u64, PrCache> = fetched.values()
+                    .filter(|p| state.tracked.contains(&p.number))
+                    .map(|p| (p.number, PrCache { number: p.number, title: p.title.clone(), branch: p.branch.clone(), base: p.base.clone() }))
+                    .collect();
+                let _ = store.replace_cache(new_cache);
+                let state = store.load()?;
+
+                let prs = state.tracked_prs();
                 let tree_prefixes: std::collections::HashMap<u64, String> =
                     stack_tree_order(&prs).into_iter().collect();
 
                 let mut all_tasks: Vec<tasks::Task> = Vec::new();
-                for tracked in &prs {
-                    let pr_state = fetched.get(&tracked.number).cloned()
+                for cached in &prs {
+                    let mut pr_state = fetched.get(&cached.number).cloned()
                         .unwrap_or_else(|| model::PrState {
-                            number: tracked.number,
-                            title: tracked.title.clone(),
-                            branch: tracked.branch.clone(),
-                            base: "".into(), head_sha: "".into(), draft: false, approved: false,
+                            number: cached.number,
+                            title: cached.title.clone(),
+                            branch: cached.branch.clone(),
+                            base: cached.base.clone(), head_sha: "".into(), draft: false, approved: false,
                             checks: vec![], threads: vec![], needs_parent_rebase: false, has_merge_conflict: false, codeowners_eligibility: Default::default(),
                         });
-                    let mut pr_state = pr_state;
                     if let (Some(tok), Some((owner, repo_name))) = (&token, &repo)
-                        && let Some(parent) = prs.iter().find(|p| p.branch == tracked.base).and_then(|p| fetched.get(&p.number))
+                        && let Some(parent) = prs.iter().find(|p| p.branch == pr_state.base).and_then(|p| fetched.get(&p.number))
                         && !parent.head_sha.is_empty() && !pr_state.head_sha.is_empty() {
                         pr_state.needs_parent_rebase = GithubClient::new(tok.clone())
                             .is_head_behind_base(owner, repo_name, &parent.head_sha, &pr_state.head_sha);
@@ -943,30 +956,30 @@ fn main() -> Result<()> {
                     let curr = generate_tasks(&pr_state);
                     all_tasks.extend(curr.clone());
 
-                    let prev = prev_tasks.get(&tracked.number).map(|v| v.as_slice()).unwrap_or(&[]);
+                    let prev = prev_tasks.get(&cached.number).map(|v| v.as_slice()).unwrap_or(&[]);
                     let (new, resolved) = task_diff(prev, &curr);
 
-                    if prev_tasks.contains_key(&tracked.number) {
+                    if prev_tasks.contains_key(&cached.number) {
                         if json {
-                            println!("{}", format_watch_event_json(tracked.number, &new, &resolved));
+                            println!("{}", format_watch_event_json(cached.number, &new, &resolved));
                         } else {
                             for t in &new {
                                 let flag = if t.blocking { "[blocking]" } else { "[waiting]" };
-                                println!("+ PR #{} {} {:?}: {}", tracked.number, flag, t.task_type, t.description);
+                                println!("+ PR #{} {} {:?}: {}", cached.number, flag, t.task_type, t.description);
                             }
                             for t in &resolved {
-                                println!("✓ PR #{} resolved {:?}: {}", tracked.number, t.task_type, t.description);
+                                println!("✓ PR #{} resolved {:?}: {}", cached.number, t.task_type, t.description);
                             }
-                            for (title, msg) in watch_notification_messages(tracked.number, &new, &resolved) {
+                            for (title, msg) in watch_notification_messages(cached.number, &new, &resolved) {
                                 notify_macos_titled(&title, &msg);
                             }
                         }
                     } else {
-                        let lock = worktree::lock_status(&git_dir, &tracked.branch);
-                        let prefix = tree_prefixes.get(&tracked.number).cloned().unwrap_or_default();
-                        print!("{}{}", prefix, format_watch_initial_state(tracked.number, &tracked.title, &curr, json, lock.as_deref(), &prefix));
+                        let lock = worktree::lock_status(&git_dir, &cached.branch);
+                        let prefix = tree_prefixes.get(&cached.number).cloned().unwrap_or_default();
+                        print!("{}{}", prefix, format_watch_initial_state(cached.number, &cached.title, &curr, json, lock.as_deref(), &prefix));
                     }
-                    prev_tasks.insert(tracked.number, curr);
+                    prev_tasks.insert(cached.number, curr);
                 }
 
                 if let Some(ref condition) = wait_for {
@@ -1001,7 +1014,8 @@ fn main() -> Result<()> {
                 Some(github::inject_demo_section(body.as_deref().unwrap_or(""), &demo_urls))
             };
             let pr_state = client.create_pr_with_body(&owner, &repo_name, &title, &head_branch, &base, true, final_body.as_deref())?;
-            store.track(TrackedPr {
+            store.track(pr_state.number)?;
+            store.update_cache(PrCache {
                 number: pr_state.number,
                 title: pr_state.title.clone(),
                 branch: pr_state.branch.clone(),
@@ -1023,11 +1037,12 @@ fn main() -> Result<()> {
                 let anchor_branch = client.fetch_pr_metadata(&owner, &repo_name, anchor_pr)?.1;
                 let state = store.load()?;
                 // Find tracked PR whose base is anchor_branch
-                let next_pr = state.prs.values()
+                let next_pr = state.tracked_prs().into_iter()
                     .find(|p| {
                         client.fetch_pr_base(&owner, &repo_name, p.number)
                             .ok().as_deref() == Some(&anchor_branch)
-                    });
+                    })
+                    .cloned();
                 if let Some(next) = next_pr {
                     let next_branch = next.branch.clone();
                     let next_pr_num = next.number;
@@ -1142,12 +1157,13 @@ fn main() -> Result<()> {
             println!("✓ merged PR #{} ({})", pr, merge_sha);
 
             // Find the tracked PR to get the head branch name, then rebase downstream
-            if let Some(tracked_pr) = state.prs.get(&pr) {
-                let merged_branch = tracked_pr.branch.clone();
-                let merged_base = resolve_merge_base(&fetched_base_ref, &tracked_pr.base);
+            if let Some(cached_pr) = state.cache.get(&pr) {
+                let merged_branch = cached_pr.branch.clone();
+                let merged_base = resolve_merge_base(&fetched_base_ref, &cached_pr.base);
                 let main_root = repo_root()?;
 
-                let branch_base_of: std::collections::HashMap<String, String> = state.prs.values()
+                let branch_base_of: std::collections::HashMap<String, String> = state.tracked_prs()
+                    .iter()
                     .filter(|p| p.number != pr)
                     .map(|p| (p.branch.clone(), p.base.clone()))
                     .collect();
@@ -1176,7 +1192,7 @@ fn main() -> Result<()> {
 
         Commands::RebaseStack { pr: rebase_from_pr } => {
             let mut state = store.load()?;
-            if state.prs.is_empty() {
+            if state.tracked.is_empty() {
                 println!("No tracked PRs.");
                 return Ok(());
             }
@@ -1186,11 +1202,11 @@ fn main() -> Result<()> {
             // Handle merged PRs: rebase their children onto the merge target, then untrack
             if let (Ok(token), Some((owner, repo_name))) = (resolve_github_token(), detect_repo()) {
                 let client = GithubClient::new(token);
-                let all_branches: Vec<String> = state.prs.values().map(|p| p.branch.clone()).collect();
+                let all_branches: Vec<String> = state.tracked_prs().iter().map(|p| p.branch.clone()).collect();
                 let parent_of = stack::detect_parent_of(&all_branches, &main_root)?;
 
                 let mut merged_prs: Vec<(u64, String)> = Vec::new();
-                for pr in state.prs.values() {
+                for pr in state.tracked_prs() {
                     if client.fetch_pr_is_merged(&owner, &repo_name, pr.number).unwrap_or(false) {
                         let (head_sha, base_ref) = client.fetch_pr_head_sha_and_base(&owner, &repo_name, pr.number)?;
                         // Find children of this branch and rebase them onto base_ref
@@ -1217,7 +1233,7 @@ fn main() -> Result<()> {
             }
 
             // Rebase remaining open PRs
-            let all_branches: Vec<String> = state.prs.values().map(|p| p.branch.clone()).collect();
+            let all_branches: Vec<String> = state.tracked_prs().iter().map(|p| p.branch.clone()).collect();
             if all_branches.is_empty() {
                 return Ok(());
             }
@@ -1225,7 +1241,7 @@ fn main() -> Result<()> {
 
             // If a starting PR is given, restrict to that branch and its descendants
             let branches: Vec<String> = if let Some(from_pr) = rebase_from_pr {
-                let start_branch = state.prs.get(&from_pr)
+                let start_branch = state.cache.get(&from_pr)
                     .with_context(|| format!("PR #{} is not tracked", from_pr))?
                     .branch.clone();
                 subtree_branches(&start_branch, &parent_of, &all_branches)
@@ -1250,7 +1266,7 @@ fn main() -> Result<()> {
                 .collect();
 
             // Build base_of from parallel fetch (reuses PrState.base, no extra API calls)
-            let rebase_pr_numbers: Vec<u64> = state.prs.keys().copied().collect();
+            let rebase_pr_numbers: Vec<u64> = state.tracked.iter().copied().collect();
             let base_of: std::collections::HashMap<String, String> =
                 if let (Ok(token), Some((owner, repo_name))) = (resolve_github_token(), detect_repo()) {
                     GithubClient::new(token).fetch_prs_as_map(&owner, &repo_name, &rebase_pr_numbers)
@@ -1266,7 +1282,7 @@ fn main() -> Result<()> {
             }
             for branch in &result.conflicts {
                 println!("✗ conflict on {} — resolve manually", branch);
-                let hint = format_conflict_hint(branch, &state.prs);
+                let hint = format_conflict_hint(branch, &state.cache);
                 if !hint.is_empty() { println!("{}", hint); }
             }
             if let Some(status) = &result.status_output {
@@ -1285,7 +1301,7 @@ fn main() -> Result<()> {
             let token = std::env::var("GITHUB_TOKEN").ok();
             let repo = detect_repo();
 
-            let tracked = state.prs.get(&pr)
+            let tracked = state.cache.get(&pr)
                 .with_context(|| format!("PR #{} is not tracked. Run `fp track {}`", pr, pr))?;
 
             let pr_state = if let (Some(tok), Some((owner, repo_name))) = (token, repo) {
@@ -1366,7 +1382,7 @@ fn main() -> Result<()> {
             let token = resolve_github_token().ok();
             let repo = detect_repo();
 
-            let tracked = state.prs.get(&pr)
+            let tracked = state.cache.get(&pr)
                 .with_context(|| format!("PR #{} is not tracked. Run `fp track {}`", pr, pr))?;
 
             if resolved {
@@ -1394,7 +1410,7 @@ fn main() -> Result<()> {
 
         Commands::AgentContext { json } => {
             let state = store.load()?;
-            let prs: Vec<_> = state.prs.values().cloned().collect();
+            let prs: Vec<_> = state.tracked_prs().into_iter().cloned().collect();
             let manifest = github::agent_context_manifest_with_prs(&prs);
             if json {
                 println!("{}", serde_json::to_string_pretty(&manifest)?);
@@ -1634,7 +1650,6 @@ mod tests {
     }
 
     #[test]
-    #[test]
     fn main_repo_root_returns_main_root_from_inside_worktree() {
         let tmp = tempfile::tempdir().unwrap();
         let main_root = tmp.path().join("myrepo");
@@ -1695,11 +1710,10 @@ mod tests {
         assert!(out.contains("fps feature/foo"), "must contain fps hint, got: {}", out);
     }
 
-    fn make_pr(number: u64, branch: &str, base: &str) -> TrackedPr {
-        TrackedPr { number, title: format!("PR {}", number), branch: branch.into(), base: base.into() }
+    fn make_pr(number: u64, branch: &str, base: &str) -> store::PrCache {
+        store::PrCache { number, title: format!("PR {}", number), branch: branch.into(), base: base.into() }
     }
 
-    #[test]
     #[test]
     fn format_pr_status_all_entry_shows_tasks_inline() {
         let tasks = vec![
@@ -1841,8 +1855,9 @@ mod tests {
         let store = Store::open(&git_dir);
 
         let branch = "feature/my-branch";
-        store.track(TrackedPr { number: 42, title: "test".into(), branch: branch.into(), base: "main".into() }).unwrap();
-        assert!(store.load().unwrap().prs.contains_key(&42), "PR must be tracked before cleanup");
+        store.track(42).unwrap();
+        store.update_cache(store::PrCache { number: 42, title: "test".into(), branch: branch.into(), base: "main".into() }).unwrap();
+        assert!(store.load().unwrap().tracked.contains(&42), "PR must be tracked before cleanup");
 
         // Create a fake lock file
         let lp = worktree::lock_path(&git_dir, branch);
@@ -1852,7 +1867,7 @@ mod tests {
 
         untrack_and_cleanup(&store, tmp.path(), &git_dir, 42, branch).unwrap();
 
-        assert!(!store.load().unwrap().prs.contains_key(&42), "PR must be untracked after cleanup");
+        assert!(!store.load().unwrap().tracked.contains(&42), "PR must be untracked after cleanup");
         assert!(!lp.exists(), "lock file must be removed by untrack_and_cleanup");
     }
 

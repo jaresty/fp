@@ -80,9 +80,9 @@ mod tests {
     // ADR-002 #9 D3: agent_context_manifest includes tracked_prs field
     #[test]
     fn agent_context_manifest_includes_tracked_prs() {
-        use crate::store::TrackedPr;
+        use crate::store::PrCache;
         let prs = vec![
-            TrackedPr { number: 1, title: "feat: foo".into(), branch: "feat/foo".into(), base: "main".into() },
+            PrCache { number: 1, title: "feat: foo".into(), branch: "feat/foo".into(), base: "main".into() },
         ];
         let manifest = crate::github::agent_context_manifest_with_prs(&prs);
         assert!(manifest["tracked_prs"].is_array(),
@@ -183,10 +183,10 @@ mod tests {
 
     #[test]
     fn format_conflict_hint_includes_fps_switch_when_pr_found() {
-        use crate::store::TrackedPr;
+        use crate::store::PrCache;
         use std::collections::HashMap;
-        let mut prs: HashMap<u64, TrackedPr> = HashMap::new();
-        prs.insert(42, TrackedPr { number: 42, title: "feat".into(), branch: "feat/my-branch".into(), base: "main".into() });
+        let mut prs: HashMap<u64, PrCache> = HashMap::new();
+        prs.insert(42, PrCache { number: 42, title: "feat".into(), branch: "feat/my-branch".into(), base: "main".into() });
         let hint = crate::format_conflict_hint("feat/my-branch", &prs);
         assert!(hint.contains("fps 42") || hint.contains("fp switch 42"),
             "conflict hint must mention fps 42 or fp switch 42, got: {}", hint);
@@ -194,9 +194,9 @@ mod tests {
 
     #[test]
     fn format_conflict_hint_no_pr_omits_fps() {
-        use crate::store::TrackedPr;
+        use crate::store::PrCache;
         use std::collections::HashMap;
-        let prs: HashMap<u64, TrackedPr> = HashMap::new();
+        let prs: HashMap<u64, PrCache> = HashMap::new();
         let hint = crate::format_conflict_hint("some-branch", &prs);
         assert!(!hint.contains("fps"), "no matching PR should produce no fps hint, got: {}", hint);
     }
