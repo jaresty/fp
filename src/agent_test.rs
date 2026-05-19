@@ -96,7 +96,7 @@ mod tests {
     fn is_wait_condition_met_ci_pass_when_no_ci_tasks() {
         use crate::tasks::{Task, TaskType};
         let tasks: Vec<Task> = vec![];
-        assert!(crate::is_wait_condition_met("ci-pass", &tasks),
+        assert!(crate::tasks::is_wait_condition_met("ci-pass", &tasks),
             "ci-pass should be met when no CI tasks present");
     }
 
@@ -108,7 +108,7 @@ mod tests {
             pr: 1, task_type: TaskType::AwaitingCi, blocking: false,
             description: "Waiting for ci/test".into(), context_hint: "ci/test".into(),
         }];
-        assert!(!crate::is_wait_condition_met("ci-pass", &tasks),
+        assert!(!crate::tasks::is_wait_condition_met("ci-pass", &tasks),
             "ci-pass should not be met when AwaitingCi task present");
     }
 
@@ -120,7 +120,7 @@ mod tests {
             pr: 1, task_type: TaskType::FixCi, blocking: true,
             description: "Fix failing check: ci/test".into(), context_hint: "ci/test".into(),
         }];
-        assert!(!crate::is_wait_condition_met("ci-pass", &tasks),
+        assert!(!crate::tasks::is_wait_condition_met("ci-pass", &tasks),
             "ci-pass should not be met when FixCi task present");
     }
 
@@ -132,7 +132,7 @@ mod tests {
             pr: 1, task_type: TaskType::AwaitingCi, blocking: false,
             description: "Waiting for ci/test".into(), context_hint: "ci/test".into(),
         }];
-        assert!(crate::is_wait_condition_met("ready", &tasks),
+        assert!(crate::tasks::is_wait_condition_met("ready", &tasks),
             "ready should be met when no blocking tasks");
     }
 
@@ -144,7 +144,7 @@ mod tests {
             pr: 1, task_type: TaskType::FixCi, blocking: true,
             description: "Fix failing check: ci/test".into(), context_hint: "ci/test".into(),
         }];
-        assert!(!crate::is_wait_condition_met("ready", &tasks),
+        assert!(!crate::tasks::is_wait_condition_met("ready", &tasks),
             "ready should not be met when blocking task present");
     }
 

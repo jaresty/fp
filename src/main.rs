@@ -6,6 +6,9 @@ mod ci;
 mod stack;
 mod profile;
 mod worktree;
+pub mod display;
+pub mod credentials;
+pub mod agent;
 
 #[cfg(test)]
 mod tasks_test;
@@ -21,6 +24,12 @@ mod stack_test;
 mod notify_test;
 #[cfg(test)]
 mod agent_test;
+#[cfg(test)]
+mod display_test;
+#[cfg(test)]
+mod credentials_test;
+#[cfg(test)]
+mod agent_manifest_test;
 
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
@@ -271,28 +280,6 @@ fn resolve_demo_urls(client: &github::GithubClient, owner: &str, repo: &str, dem
     Ok(urls)
 }
 
-/// Rebase `branch` onto `new_base`, cutting away `old_base`, then force-push.
-/// Equivalent to: git rebase --onto <new_base> <old_base> <branch> && git push --force-with-lease
-fn rebase_branch_onto(branch: &str, old_base: &str, new_base: &str, dir: &std::path::Path) -> anyhow::Result<()> {
-    let wt_dir = worktree::find_worktree_path(branch, dir);
-    let rebase_dir = wt_dir.as_deref().unwrap_or(dir);
-    let git = |args: &[&str]| {
-        std::process::Command::new("git").args(args).current_dir(rebase_dir).output()
-    };
-    if wt_dir.is_none() {
-        let checkout = git(&["checkout", branch])?;
-        anyhow::ensure!(checkout.status.success(), "failed to checkout {}: {}", branch, String::from_utf8_lossy(&checkout.stderr));
-    }
-    let rebase = git(&["rebase", "--onto", new_base, old_base, branch])?;
-    if !rebase.status.success() {
-        git(&["rebase", "--abort"]).ok();
-        anyhow::bail!("rebase --onto {} {} {} failed: {}", new_base, old_base, branch, String::from_utf8_lossy(&rebase.stderr));
-    }
-    let push = git(&["push", "--force-with-lease"])?;
-    anyhow::ensure!(push.status.success(), "force-push of {} failed: {}", branch, String::from_utf8_lossy(&push.stderr));
-    Ok(())
-}
-
 /// Send a macOS system notification via osascript. Silently ignores errors on non-macOS or
 /// headless environments where notifications are unavailable.
 /// Falsify exemption: fire-and-forget subprocess with no observable return value in the test
@@ -364,74 +351,9 @@ pub fn detect_shell() -> String {
         .unwrap_or_else(|| "fish".to_string())
 }
 
-pub fn format_watch_initial_state(pr: u64, title: &str, task_list: &[tasks::Task], json: bool, lock: Option<&str>, prefix: &str) -> String {
-    if json {
-        return serde_json::to_string(&serde_json::json!({
-            "pr": pr,
-            "initial_tasks": task_list,
-        })).unwrap_or_default();
-    }
-    let task_prefix = prefix.replace("└─ ", "   ");
-    let lock_suffix = lock.map(|s| format!("  {}", s)).unwrap_or_default();
-    if task_list.is_empty() {
-        return format!("PR #{} {} — ready{}\n", pr, title, lock_suffix);
-    }
-    let mut out = format!("PR #{} {} — {} task(s){}\n", pr, title, task_list.len(), lock_suffix);
-    for t in task_list {
-        let flag = if t.blocking { "[blocking]" } else { "[waiting]" };
-        out.push_str(&format!("{}  {} {:?}: {}\n", task_prefix, flag, t.task_type, t.description));
-    }
-    out
-}
+pub use display::{format_watch_initial_state, format_pr_status_all_entry, format_watch_event_json};
 
-/// Formats one PR's status line(s) for `fp status --all` output (non-JSON).
-/// Returns header + task detail lines when tasks are present, or a "ready" line when empty.
-pub fn format_pr_status_all_entry(prefix: &str, number: u64, title: &str, tasks: &[tasks::Task], lock: &str) -> String {
-    if tasks.is_empty() {
-        return format!("{}PR #{} {} — ready{}\n", prefix, number, title, lock);
-    }
-    let task_prefix = prefix.replace("└─ ", "   ");
-    let mut out = format!("{}PR #{} {} — {} task(s){}\n", prefix, number, title, tasks.len(), lock);
-    for t in tasks {
-        let flag = if t.blocking { "[blocking]" } else { "[waiting]" };
-        out.push_str(&format!("{}  {} {:?}: {}\n", task_prefix, flag, t.task_type, t.description));
-    }
-    out
-}
-
-pub fn format_watch_event_json(pr: u64, new: &[tasks::Task], resolved: &[tasks::Task]) -> String {
-    serde_json::to_string(&serde_json::json!({
-        "pr": pr,
-        "new": new,
-        "resolved": resolved,
-    })).unwrap_or_default()
-}
-
-pub fn branch_in_main_worktree_warning(branch: &str, dir: &std::path::Path) -> Option<String> {
-    let out = std::process::Command::new("git")
-        .args(["rev-parse", "--abbrev-ref", "HEAD"])
-        .current_dir(dir)
-        .output()
-        .ok()?;
-    let current = String::from_utf8(out.stdout).ok()?.trim().to_string();
-    if current == branch {
-        Some(format!("⚠ skipping {} — checked out in main worktree; run: fp switch <pr> <session> --adopt", branch))
-    } else {
-        None
-    }
-}
-
-pub fn check_not_checked_out_in_main(branch: &str, dir: &std::path::Path) -> anyhow::Result<()> {
-    let out = std::process::Command::new("git")
-        .args(["rev-parse", "--abbrev-ref", "HEAD"])
-        .current_dir(dir)
-        .output()?;
-    let current = String::from_utf8(out.stdout)?.trim().to_string();
-    if current == branch {
-        anyhow::bail!("'{}' is checked out in main worktree — run fps root first, then fp rebase-stack, or re-run with --adopt to move it to an fp worktree automatically", branch);
-    }
-    Ok(())
-}
+pub use worktree::{branch_in_main_worktree_warning, check_not_checked_out_in_main};
 
 /// Errors when merged_base is empty and there are downstream PRs that need rebasing.
 pub fn check_merge_base(merged_base: &str, has_downstream: bool) -> Result<()> {
@@ -446,27 +368,7 @@ pub fn resolve_merge_base(fetched: &str, stored: &str) -> String {
     if !fetched.is_empty() { fetched.to_string() } else { stored.to_string() }
 }
 
-/// Returns (pr_number, indent_prefix) pairs in tree order: roots first, then children indented.
-/// Uses PrCache.base (from the GitHub API) to determine parent-child relationships.
-pub fn stack_tree_order(prs: &[&PrCache]) -> Vec<(u64, String)> {
-    let branches: std::collections::HashSet<&str> = prs.iter().map(|p| p.branch.as_str()).collect();
-    let mut result = Vec::new();
-    fn visit(branch: &str, prs: &[&PrCache], depth: usize, result: &mut Vec<(u64, String)>) {
-        let prefix = if depth == 0 { String::new() } else { "  ".repeat(depth - 1) + "  └─ " };
-        if let Some(pr) = prs.iter().find(|p| p.branch == branch) {
-            result.push((pr.number, prefix));
-        }
-        for child in prs.iter().filter(|p| p.base == branch) {
-            visit(&child.branch.clone(), prs, depth + 1, result);
-        }
-    }
-    let mut root_prs: Vec<&&PrCache> = prs.iter().filter(|p| !branches.contains(p.base.as_str())).collect();
-    root_prs.sort_by_key(|p| p.number);
-    for root in root_prs {
-        visit(&root.branch.clone(), prs, 0, &mut result);
-    }
-    result
-}
+pub use stack::stack_tree_order;
 
 /// Returns a skip-warning if branch has any lock (live or dead), None if clear.
 pub fn check_branch_lock(git_dir: &std::path::Path, branch: &str) -> Option<String> {
@@ -488,129 +390,14 @@ pub fn check_branch_lock(git_dir: &std::path::Path, branch: &str) -> Option<Stri
     }
 }
 
-/// Returns all branches that are transitive descendants of any branch in `locked`.
-pub fn locked_subtree(
-    locked: &std::collections::HashSet<String>,
-    parent_of: &std::collections::HashMap<String, Option<String>>,
-) -> std::collections::HashSet<String> {
-    let mut blocked = std::collections::HashSet::new();
-    let mut frontier: Vec<&str> = locked.iter().map(|s| s.as_str()).collect();
-    while let Some(parent) = frontier.pop() {
-        for (branch, p) in parent_of {
-            if p.as_deref() == Some(parent) && !blocked.contains(branch.as_str()) {
-                blocked.insert(branch.clone());
-                frontier.push(branch.as_str());
-            }
-        }
-    }
-    blocked
-}
+pub use worktree::{locked_subtree, subtree_branches, worktree_branch_mismatch, fix_worktree_branch};
 
-/// Returns the given root branch plus all tracked descendants, in the order they appear in `all_branches`.
-pub fn subtree_branches(
-    root: &str,
-    parent_of: &std::collections::HashMap<String, Option<String>>,
-    all_branches: &[String],
-) -> Vec<String> {
-    let mut members = std::collections::HashSet::new();
-    members.insert(root.to_string());
-    let mut changed = true;
-    while changed {
-        changed = false;
-        for (branch, parent) in parent_of {
-            if parent.as_deref().map(|p| members.contains(p)).unwrap_or(false) && members.insert(branch.clone()) {
-                changed = true;
-            }
-        }
-    }
-    all_branches.iter().filter(|b| members.contains(*b)).cloned().collect()
-}
-
-/// Returns true if the worktree at wt_path is checked out to a different branch than expected.
-pub fn worktree_branch_mismatch(wt_path: &std::path::Path, expected_branch: &str) -> anyhow::Result<bool> {
-    let out = std::process::Command::new("git")
-        .args(["rev-parse", "--abbrev-ref", "HEAD"])
-        .current_dir(wt_path)
-        .output()?;
-    let current = String::from_utf8(out.stdout)?.trim().to_string();
-    Ok(current != expected_branch)
-}
-
-/// Checks out `branch` in an existing worktree. With `force`, discards uncommitted changes.
-pub fn fix_worktree_branch(wt_path: &std::path::Path, branch: &str, force: bool) -> anyhow::Result<()> {
-    let mut args = vec!["checkout"];
-    if force { args.push("-f"); }
-    args.push(branch);
-    let out = std::process::Command::new("git")
-        .args(&args)
-        .current_dir(wt_path)
-        .output()?;
-    anyhow::ensure!(out.status.success(), "git checkout failed: {}", String::from_utf8_lossy(&out.stderr));
-    Ok(())
-}
-
-pub fn format_adopt_message(branch: &str) -> String {
-    format!("Adopted {} — checked out main in main worktree, created fp worktree\n", branch)
-}
-
-pub fn format_new_worktree_output(wt_path: &std::path::Path, branch: &str) -> String {
-    format!("Created worktree at {}\nuse: fps {}\n", wt_path.display(), branch)
-}
-
-pub fn repo_header(owner: &str, repo: &str) -> String {
-    format!("{}/{}", owner, repo)
-}
+pub use display::{format_adopt_message, format_new_worktree_output, repo_header, format_single_pr_status, format_worktree_add_error, format_conflict_hint};
 
 pub fn require_repo(repo: Option<(String, String)>) -> Result<(String, String)> {
     repo.ok_or_else(|| anyhow::anyhow!("no GitHub remote detected — cannot determine which repository these PRs belong to"))
 }
 
-pub fn format_single_pr_status(pr: u64, tasks: &[tasks::Task], lock: Option<&str>) -> String {
-    let lock_str = lock.map(|s| format!("  {}", s)).unwrap_or_default();
-    if tasks.is_empty() {
-        format!("PR #{} is ready.{}", pr, lock_str)
-    } else {
-        let mut lines = vec![format!("PR #{} — {} task(s):{}", pr, tasks.len(), lock_str)];
-        for t in tasks {
-            let flag = if t.blocking { "[blocking]" } else { "[waiting]" };
-            lines.push(format!("  {} {:?}: {}", flag, t.task_type, t.description));
-        }
-        lines.join("\n")
-    }
-}
-
-pub fn format_worktree_add_error(stderr: &str, _branch: &str, pr: u64) -> String {
-    if let Some(path) = stderr.lines()
-        .find(|l| l.contains("already used by worktree at"))
-        .and_then(|l| l.split("worktree at '").nth(1))
-        .and_then(|s| s.strip_suffix('\'').or_else(|| s.split('\'').next()))
-    {
-        format!(
-            "branch already has a worktree at {} — to relocate: git worktree remove {} && fps {}",
-            path, path, pr
-        )
-    } else {
-        format!("git worktree add failed: {}", stderr.trim())
-    }
-}
-
-pub fn format_conflict_hint(branch: &str, prs: &std::collections::HashMap<u64, store::PrCache>) -> String {
-    if let Some(pr) = prs.values().find(|p| p.branch == branch) {
-        format!("  Tip: fps {} to switch to its worktree", pr.number)
-    } else {
-        String::new()
-    }
-}
-
-pub fn is_wait_condition_met(condition: &str, task_list: &[tasks::Task]) -> bool {
-    match condition {
-        "ci-pass" => !task_list.iter().any(|t| matches!(
-            t.task_type, tasks::TaskType::FixCi | tasks::TaskType::AwaitingCi
-        )),
-        "ready" => !task_list.iter().any(|t| t.blocking),
-        _ => false,
-    }
-}
 
 fn notify_macos_titled(title: &str, msg: &str) {
     let script = format!(
@@ -983,7 +770,7 @@ fn main() -> Result<()> {
                 }
 
                 if let Some(ref condition) = wait_for {
-                    if is_wait_condition_met(condition, &all_tasks) {
+                    if tasks::is_wait_condition_met(condition, &all_tasks) {
                         break;
                     }
                 } else if once {
@@ -1027,7 +814,7 @@ fn main() -> Result<()> {
             if let Some(target_pr) = restack_before {
                 let target_branch = client.fetch_pr_metadata(&owner, &repo_name, target_pr)?.1;
                 let old_base = client.fetch_pr_base(&owner, &repo_name, target_pr)?;
-                rebase_branch_onto(&target_branch, &old_base, &head_branch, &main_root)?;
+                stack::rebase_branch_onto(&target_branch, &old_base, &head_branch, &main_root)?;
                 client.update_pr_base(&owner, &repo_name, target_pr, &head_branch)?;
                 println!("Restacked PR #{} onto {} (rebased {} --onto {})", target_pr, head_branch, target_branch, head_branch);
             }
@@ -1046,7 +833,7 @@ fn main() -> Result<()> {
                 if let Some(next) = next_pr {
                     let next_branch = next.branch.clone();
                     let next_pr_num = next.number;
-                    rebase_branch_onto(&next_branch, &anchor_branch, &head_branch, &main_root)?;
+                    stack::rebase_branch_onto(&next_branch, &anchor_branch, &head_branch, &main_root)?;
                     client.update_pr_base(&owner, &repo_name, next_pr_num, &head_branch)?;
                     println!("Inserted {} between PR #{} and PR #{}", head_branch, anchor_pr, next_pr_num);
                 } else {

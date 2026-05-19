@@ -2,6 +2,27 @@ use std::collections::HashMap;
 use std::path::Path;
 use anyhow::Result;
 use crate::worktree;
+use crate::store::PrCache;
+
+pub fn stack_tree_order(prs: &[&PrCache]) -> Vec<(u64, String)> {
+    let branches: std::collections::HashSet<&str> = prs.iter().map(|p| p.branch.as_str()).collect();
+    let mut result = Vec::new();
+    fn visit(branch: &str, prs: &[&PrCache], depth: usize, result: &mut Vec<(u64, String)>) {
+        let prefix = if depth == 0 { String::new() } else { "  ".repeat(depth - 1) + "  └─ " };
+        if let Some(pr) = prs.iter().find(|p| p.branch == branch) {
+            result.push((pr.number, prefix));
+        }
+        for child in prs.iter().filter(|p| p.base == branch) {
+            visit(&child.branch.clone(), prs, depth + 1, result);
+        }
+    }
+    let mut root_prs: Vec<&&PrCache> = prs.iter().filter(|p| !branches.contains(p.base.as_str())).collect();
+    root_prs.sort_by_key(|p| p.number);
+    for root in root_prs {
+        visit(&root.branch.clone(), prs, 0, &mut result);
+    }
+    result
+}
 
 pub fn stack_order(branches: &[String], parent_of: &HashMap<String, Option<String>>) -> Vec<String> {
     let branch_set: std::collections::HashSet<&str> = branches.iter().map(String::as_str).collect();
@@ -413,4 +434,26 @@ pub fn detect_parent_of(branches: &[String], dir: &Path) -> Result<HashMap<Strin
     }
 
     Ok(parent_of)
+}
+
+/// Squash-safe single-branch rebase: rebase `branch` onto `new_base`, replacing `old_base`.
+/// Uses the branch's worktree if one exists; otherwise checks out in the main worktree.
+pub fn rebase_branch_onto(branch: &str, old_base: &str, new_base: &str, dir: &std::path::Path) -> anyhow::Result<()> {
+    let wt_dir = worktree::find_worktree_path(branch, dir);
+    let rebase_dir = wt_dir.as_deref().unwrap_or(dir);
+    let git = |args: &[&str]| {
+        std::process::Command::new("git").args(args).current_dir(rebase_dir).output()
+    };
+    if wt_dir.is_none() {
+        let checkout = git(&["checkout", branch])?;
+        anyhow::ensure!(checkout.status.success(), "failed to checkout {}: {}", branch, String::from_utf8_lossy(&checkout.stderr));
+    }
+    let rebase = git(&["rebase", "--onto", new_base, old_base, branch])?;
+    if !rebase.status.success() {
+        git(&["rebase", "--abort"]).ok();
+        anyhow::bail!("rebase --onto {} {} {} failed: {}", new_base, old_base, branch, String::from_utf8_lossy(&rebase.stderr));
+    }
+    let push = git(&["push", "--force-with-lease"])?;
+    anyhow::ensure!(push.status.success(), "force-push of {} failed: {}", branch, String::from_utf8_lossy(&push.stderr));
+    Ok(())
 }

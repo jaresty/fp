@@ -1,0 +1,92 @@
+use crate::tasks;
+use crate::store;
+
+pub fn format_watch_initial_state(pr: u64, title: &str, task_list: &[tasks::Task], json: bool, lock: Option<&str>, prefix: &str) -> String {
+    if json {
+        return serde_json::to_string(&serde_json::json!({
+            "pr": pr,
+            "initial_tasks": task_list,
+        })).unwrap_or_default();
+    }
+    let task_prefix = prefix.replace("└─ ", "   ");
+    let lock_suffix = lock.map(|s| format!("  {}", s)).unwrap_or_default();
+    if task_list.is_empty() {
+        return format!("PR #{} {} — ready{}\n", pr, title, lock_suffix);
+    }
+    let mut out = format!("PR #{} {} — {} task(s){}\n", pr, title, task_list.len(), lock_suffix);
+    for t in task_list {
+        let flag = if t.blocking { "[blocking]" } else { "[waiting]" };
+        out.push_str(&format!("{}  {} {:?}: {}\n", task_prefix, flag, t.task_type, t.description));
+    }
+    out
+}
+
+pub fn format_pr_status_all_entry(prefix: &str, number: u64, title: &str, tasks: &[tasks::Task], lock: &str) -> String {
+    if tasks.is_empty() {
+        return format!("{}PR #{} {} — ready{}\n", prefix, number, title, lock);
+    }
+    let task_prefix = prefix.replace("└─ ", "   ");
+    let mut out = format!("{}PR #{} {} — {} task(s){}\n", prefix, number, title, tasks.len(), lock);
+    for t in tasks {
+        let flag = if t.blocking { "[blocking]" } else { "[waiting]" };
+        out.push_str(&format!("{}  {} {:?}: {}\n", task_prefix, flag, t.task_type, t.description));
+    }
+    out
+}
+
+pub fn format_watch_event_json(pr: u64, new: &[tasks::Task], resolved: &[tasks::Task]) -> String {
+    serde_json::to_string(&serde_json::json!({
+        "pr": pr,
+        "new": new,
+        "resolved": resolved,
+    })).unwrap_or_default()
+}
+
+pub fn format_adopt_message(branch: &str) -> String {
+    format!("Adopted {} — checked out main in main worktree, created fp worktree\n", branch)
+}
+
+pub fn format_new_worktree_output(wt_path: &std::path::Path, branch: &str) -> String {
+    format!("Created worktree at {}\nuse: fps {}\n", wt_path.display(), branch)
+}
+
+pub fn repo_header(owner: &str, repo: &str) -> String {
+    format!("{}/{}", owner, repo)
+}
+
+pub fn format_single_pr_status(pr: u64, tasks: &[tasks::Task], lock: Option<&str>) -> String {
+    let lock_str = lock.map(|s| format!("  {}", s)).unwrap_or_default();
+    if tasks.is_empty() {
+        format!("PR #{} is ready.{}", pr, lock_str)
+    } else {
+        let mut lines = vec![format!("PR #{} — {} task(s):{}", pr, tasks.len(), lock_str)];
+        for t in tasks {
+            let flag = if t.blocking { "[blocking]" } else { "[waiting]" };
+            lines.push(format!("  {} {:?}: {}", flag, t.task_type, t.description));
+        }
+        lines.join("\n")
+    }
+}
+
+pub fn format_worktree_add_error(stderr: &str, _branch: &str, pr: u64) -> String {
+    if let Some(path) = stderr.lines()
+        .find(|l| l.contains("already used by worktree at"))
+        .and_then(|l| l.split("worktree at '").nth(1))
+        .and_then(|s| s.strip_suffix('\'').or_else(|| s.split('\'').next()))
+    {
+        format!(
+            "branch already has a worktree at {} — to relocate: git worktree remove {} && fps {}",
+            path, path, pr
+        )
+    } else {
+        format!("git worktree add failed: {}", stderr.trim())
+    }
+}
+
+pub fn format_conflict_hint(branch: &str, prs: &std::collections::HashMap<u64, store::PrCache>) -> String {
+    if let Some(pr) = prs.values().find(|p| p.branch == branch) {
+        format!("  Tip: fps {} to switch to its worktree", pr.number)
+    } else {
+        String::new()
+    }
+}

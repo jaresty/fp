@@ -1509,7 +1509,7 @@ mod tests {
     // G2: agent_context_manifest returns JSON with required top-level keys
     #[test]
     fn agent_context_manifest_contains_required_keys() {
-        use crate::github::agent_context_manifest;
+        use crate::agent::agent_context_manifest;
         let m = agent_context_manifest();
         assert!(m.get("name").is_some(), "manifest missing 'name' key");
         assert!(m.get("commands").is_some(), "manifest missing 'commands' key");
@@ -1565,7 +1565,7 @@ mod tests {
     // D1-a: resolve_github_token uses gh_token fallback when GITHUB_TOKEN is absent
     #[test]
     fn resolve_github_token_uses_gh_fallback() {
-        use crate::github::resolve_github_token_with;
+        use crate::credentials::resolve_github_token_with;
         let result = resolve_github_token_with(None, Some("gh-token-from-cli".to_string()));
         assert_eq!(result.unwrap(), "gh-token-from-cli");
     }
@@ -1573,7 +1573,7 @@ mod tests {
     // D1-b: resolve_github_token errors with enumerated remediation when both sources fail
     #[test]
     fn resolve_github_token_error_enumerates_options() {
-        use crate::github::resolve_github_token_with;
+        use crate::credentials::resolve_github_token_with;
         let err = resolve_github_token_with(None, None).unwrap_err();
         let msg = err.to_string();
         assert!(msg.contains("export GITHUB_TOKEN"), "error should mention export GITHUB_TOKEN, got: {msg}");
@@ -1583,7 +1583,7 @@ mod tests {
     // D1-c: resolve_github_token returns env var when set, without calling gh
     #[test]
     fn resolve_github_token_prefers_env_var() {
-        use crate::github::resolve_github_token_with;
+        use crate::credentials::resolve_github_token_with;
         let result = resolve_github_token_with(Some("env-token".to_string()), None);
         assert_eq!(result.unwrap(), "env-token");
     }
@@ -2220,7 +2220,7 @@ mod tests {
     #[cfg(target_os = "macos")]
     #[test]
     fn derive_chrome_aes_key_produces_known_vector() {
-        let key = crate::github::derive_chrome_aes_key(b"testpassword");
+        let key = crate::credentials::derive_chrome_aes_key(b"testpassword");
         // PBKDF2-SHA1(password="testpassword", salt="saltysalt", iterations=1003, dklen=16)
         let expected: [u8; 16] = [0x6f, 0xbf, 0xc7, 0xe7, 0x02, 0x52, 0x90, 0xf4,
                                    0x7d, 0x9c, 0x2a, 0x84, 0xd6, 0x7d, 0x5f, 0xd5];
@@ -2231,7 +2231,7 @@ mod tests {
     #[cfg(target_os = "macos")]
     #[test]
     fn decrypt_chrome_cookie_decrypts_aes_cbc_value() {
-        let key = crate::github::derive_chrome_aes_key(b"testpassword");
+        let key = crate::credentials::derive_chrome_aes_key(b"testpassword");
         // v10 + 16-space IV + AES-128-CBC ciphertext of "abc123\x0a*9" (PKCS7 padded to 16 bytes)
         // Produced by: openssl enc -aes-128-cbc -K 6fbfc7e7025290f47d9c2a84d67d5fd5 -iv 20*16 -nosalt
         // v10 prefix + ciphertext (IV is always 16 spaces, hardcoded, not stored)
@@ -2240,7 +2240,7 @@ mod tests {
             0x78, 0xb5, 0xed, 0x43, 0x5d, 0xa3, 0xdd, 0x82, // ciphertext (16 bytes)
             0x11, 0xaa, 0x51, 0xd4, 0xc1, 0x47, 0x1f, 0x01,
         ];
-        let result = crate::github::decrypt_chrome_cookie(&encrypted, &key).unwrap();
+        let result = crate::credentials::decrypt_chrome_cookie(&encrypted, &key).unwrap();
         assert_eq!(result, "abc123", "decrypted value must equal original plaintext");
     }
 
@@ -2257,7 +2257,7 @@ mod tests {
             "INSERT INTO cookies (host_key, name, encrypted_value) VALUES ('github.com', 'user_session', ?1)",
             rusqlite::params![b"testblob".as_ref()],
         ).unwrap();
-        let blob = crate::github::read_chrome_user_session_encrypted(f.path()).unwrap();
+        let blob = crate::credentials::read_chrome_user_session_encrypted(f.path()).unwrap();
         assert_eq!(blob, b"testblob", "must return the encrypted_value blob from cookies table");
     }
 

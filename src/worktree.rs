@@ -221,6 +221,89 @@ pub fn lock_status(git_dir: &Path, branch: &str) -> Option<String> {
     Some(format!("🔒 {} (pid {}, {}, {})", lock.id, lock.pid, owner, liveness))
 }
 
+pub fn branch_in_main_worktree_warning(branch: &str, dir: &std::path::Path) -> Option<String> {
+    let out = std::process::Command::new("git")
+        .args(["rev-parse", "--abbrev-ref", "HEAD"])
+        .current_dir(dir)
+        .output()
+        .ok()?;
+    let current = String::from_utf8(out.stdout).ok()?.trim().to_string();
+    if current == branch {
+        Some(format!("⚠ skipping {} — checked out in main worktree; run: fp switch <pr> <session> --adopt", branch))
+    } else {
+        None
+    }
+}
+
+pub fn check_not_checked_out_in_main(branch: &str, dir: &std::path::Path) -> anyhow::Result<()> {
+    let out = std::process::Command::new("git")
+        .args(["rev-parse", "--abbrev-ref", "HEAD"])
+        .current_dir(dir)
+        .output()?;
+    let current = String::from_utf8(out.stdout)?.trim().to_string();
+    if current == branch {
+        anyhow::bail!("'{}' is checked out in main worktree — run fps root first, then fp rebase-stack, or re-run with --adopt to move it to an fp worktree automatically", branch);
+    }
+    Ok(())
+}
+
+pub fn locked_subtree(
+    locked: &std::collections::HashSet<String>,
+    parent_of: &std::collections::HashMap<String, Option<String>>,
+) -> std::collections::HashSet<String> {
+    let mut blocked = std::collections::HashSet::new();
+    let mut frontier: Vec<&str> = locked.iter().map(|s| s.as_str()).collect();
+    while let Some(parent) = frontier.pop() {
+        for (branch, p) in parent_of {
+            if p.as_deref() == Some(parent) && !blocked.contains(branch.as_str()) {
+                blocked.insert(branch.clone());
+                frontier.push(branch.as_str());
+            }
+        }
+    }
+    blocked
+}
+
+pub fn subtree_branches(
+    root: &str,
+    parent_of: &std::collections::HashMap<String, Option<String>>,
+    all_branches: &[String],
+) -> Vec<String> {
+    let mut members = std::collections::HashSet::new();
+    members.insert(root.to_string());
+    let mut changed = true;
+    while changed {
+        changed = false;
+        for (branch, parent) in parent_of {
+            if parent.as_deref().map(|p| members.contains(p)).unwrap_or(false) && members.insert(branch.clone()) {
+                changed = true;
+            }
+        }
+    }
+    all_branches.iter().filter(|b| members.contains(*b)).cloned().collect()
+}
+
+pub fn worktree_branch_mismatch(wt_path: &std::path::Path, expected_branch: &str) -> anyhow::Result<bool> {
+    let out = std::process::Command::new("git")
+        .args(["rev-parse", "--abbrev-ref", "HEAD"])
+        .current_dir(wt_path)
+        .output()?;
+    let current = String::from_utf8(out.stdout)?.trim().to_string();
+    Ok(current != expected_branch)
+}
+
+pub fn fix_worktree_branch(wt_path: &std::path::Path, branch: &str, force: bool) -> anyhow::Result<()> {
+    let mut args = vec!["checkout"];
+    if force { args.push("-f"); }
+    args.push(branch);
+    let out = std::process::Command::new("git")
+        .args(&args)
+        .current_dir(wt_path)
+        .output()?;
+    anyhow::ensure!(out.status.success(), "git checkout failed: {}", String::from_utf8_lossy(&out.stderr));
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -514,5 +597,84 @@ mod tests {
             "session_anchor_pid() must not return self PID; got anchor={} self={}", anchor, self_pid);
         assert!(crate::worktree::pid_is_alive(anchor),
             "session_anchor_pid() must return a live process, got: {}", anchor);
+    }
+
+    #[test]
+    fn worktree_governs_branch_in_main_worktree_warning() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        std::process::Command::new("git").args(["init"]).current_dir(tmp.path()).output().unwrap();
+        std::process::Command::new("git").args(["commit","--allow-empty","-m","init"]).current_dir(tmp.path()).env("GIT_AUTHOR_NAME","t").env("GIT_AUTHOR_EMAIL","t@t").env("GIT_COMMITTER_NAME","t").env("GIT_COMMITTER_EMAIL","t@t").output().unwrap();
+        let head = std::process::Command::new("git").args(["rev-parse","--abbrev-ref","HEAD"]).current_dir(tmp.path()).output().unwrap();
+        let branch = String::from_utf8(head.stdout).unwrap().trim().to_string();
+        let warn = super::branch_in_main_worktree_warning(&branch, tmp.path());
+        assert!(warn.is_some(), "must return Some when branch is current HEAD");
+        assert!(super::branch_in_main_worktree_warning("feat/other", tmp.path()).is_none());
+    }
+
+    #[test]
+    fn worktree_governs_check_not_checked_out_in_main() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        std::process::Command::new("git").args(["init","-b","feat/active"]).current_dir(tmp.path()).output().unwrap();
+        std::process::Command::new("git").args(["config","user.email","t@t.com"]).current_dir(tmp.path()).output().unwrap();
+        std::process::Command::new("git").args(["config","user.name","T"]).current_dir(tmp.path()).output().unwrap();
+        std::fs::write(tmp.path().join("f.txt"), "x").unwrap();
+        std::process::Command::new("git").args(["add","."]).current_dir(tmp.path()).output().unwrap();
+        std::process::Command::new("git").args(["commit","-m","init"]).current_dir(tmp.path()).output().unwrap();
+        assert!(super::check_not_checked_out_in_main("feat/active", tmp.path()).is_err());
+        assert!(super::check_not_checked_out_in_main("feat/other", tmp.path()).is_ok());
+    }
+
+    #[test]
+    fn worktree_governs_locked_subtree() {
+        let locked: std::collections::HashSet<String> = ["feat/a".to_string()].into();
+        let parent_of: std::collections::HashMap<String, Option<String>> = [
+            ("feat/b".to_string(), Some("feat/a".to_string())),
+            ("feat/c".to_string(), Some("feat/b".to_string())),
+            ("feat/d".to_string(), Some("main".to_string())),
+        ].into();
+        let result = super::locked_subtree(&locked, &parent_of);
+        assert!(result.contains("feat/b") && result.contains("feat/c") && !result.contains("feat/d"));
+    }
+
+    #[test]
+    fn worktree_governs_subtree_branches() {
+        let parent_of: std::collections::HashMap<String, Option<String>> = [
+            ("feat/b".to_string(), Some("feat/a".to_string())),
+            ("feat/c".to_string(), Some("feat/b".to_string())),
+        ].into();
+        let all = vec!["feat/a".to_string(), "feat/b".to_string(), "feat/c".to_string()];
+        let result = super::subtree_branches("feat/a", &parent_of, &all);
+        assert_eq!(result, vec!["feat/a", "feat/b", "feat/c"]);
+    }
+
+    #[test]
+    fn worktree_governs_worktree_branch_mismatch() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        std::process::Command::new("git").args(["init"]).current_dir(tmp.path()).output().unwrap();
+        std::process::Command::new("git").args(["commit","--allow-empty","-m","init"]).current_dir(tmp.path()).env("GIT_AUTHOR_NAME","t").env("GIT_AUTHOR_EMAIL","t@t").env("GIT_COMMITTER_NAME","t").env("GIT_COMMITTER_EMAIL","t@t").output().unwrap();
+        let head = std::process::Command::new("git").args(["rev-parse","--abbrev-ref","HEAD"]).current_dir(tmp.path()).output().unwrap();
+        let branch = String::from_utf8(head.stdout).unwrap().trim().to_string();
+        assert!(!super::worktree_branch_mismatch(tmp.path(), &branch).unwrap());
+        assert!(super::worktree_branch_mismatch(tmp.path(), "feat/other").unwrap());
+    }
+
+    #[test]
+    fn worktree_governs_fix_worktree_branch() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let env = [("GIT_AUTHOR_NAME","t"),("GIT_AUTHOR_EMAIL","t@t"),("GIT_COMMITTER_NAME","t"),("GIT_COMMITTER_EMAIL","t@t")];
+        std::process::Command::new("git").args(["init"]).current_dir(tmp.path()).output().unwrap();
+        let mut cmd = std::process::Command::new("git");
+        cmd.args(["commit","--allow-empty","-m","init"]).current_dir(tmp.path());
+        for (k,v) in &env { cmd.env(k,v); }
+        cmd.output().unwrap();
+        let default_branch = String::from_utf8(std::process::Command::new("git").args(["rev-parse","--abbrev-ref","HEAD"]).current_dir(tmp.path()).output().unwrap().stdout).unwrap().trim().to_string();
+        std::process::Command::new("git").args(["checkout","-b","feat/other"]).current_dir(tmp.path()).output().unwrap();
+        let mut cmd2 = std::process::Command::new("git");
+        cmd2.args(["commit","--allow-empty","-m","other"]).current_dir(tmp.path());
+        for (k,v) in &env { cmd2.env(k,v); }
+        cmd2.output().unwrap();
+        super::fix_worktree_branch(tmp.path(), &default_branch, false).unwrap();
+        let head = String::from_utf8(std::process::Command::new("git").args(["rev-parse","--abbrev-ref","HEAD"]).current_dir(tmp.path()).output().unwrap().stdout).unwrap().trim().to_string();
+        assert_eq!(head, default_branch);
     }
 }

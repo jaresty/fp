@@ -194,3 +194,13 @@ fn parse_eslint_tasks(pr: u64, log: &str, blocking: bool) -> Vec<Task> {
     }
     tasks
 }
+
+pub fn is_wait_condition_met(condition: &str, task_list: &[Task]) -> bool {
+    match condition {
+        "ci-pass" => !task_list.iter().any(|t| matches!(
+            t.task_type, TaskType::FixCi | TaskType::AwaitingCi
+        )),
+        "ready" => !task_list.iter().any(|t| t.blocking),
+        _ => false,
+    }
+}

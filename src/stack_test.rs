@@ -1854,4 +1854,16 @@ mod tests {
         assert_eq!(commit_count, 1,
             "feat/child must have exactly 1 commit on top of origin/feat/parent (C only), got: {}", log_str);
     }
+
+    #[test]
+    fn stack_governs_stack_tree_order() {
+        use crate::store::PrCache;
+        let root = PrCache { number: 1, title: "root".into(), branch: "feat/root".into(), base: "main".into() };
+        let child = PrCache { number: 2, title: "child".into(), branch: "feat/child".into(), base: "feat/root".into() };
+        let prs = vec![&root, &child];
+        let order = crate::stack::stack_tree_order(&prs);
+        assert_eq!(order[0].0, 1, "root must come first");
+        assert_eq!(order[1].0, 2, "child must come second");
+        assert!(order[1].1.contains("└─"), "child must have indent prefix, got: {:?}", order[1].1);
+    }
 }
