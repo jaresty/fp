@@ -66,4 +66,18 @@ mod tests {
         assert_eq!(state.tracked.len(), 2);
     }
 
+    // store: old-format state.json (prs key) is migrated to tracked + cache
+    #[test]
+    fn legacy_format_migrates_to_tracked_and_cache() {
+        let dir = tempdir().unwrap();
+        let fp_dir = dir.path().join("fp");
+        std::fs::create_dir_all(&fp_dir).unwrap();
+        let state_path = fp_dir.join("state.json");
+        std::fs::write(&state_path, r#"{"prs":{"42":{"number":42,"title":"my pr","branch":"fix/foo","base":"main"}},"cached_merge_methods":{}}"#).unwrap();
+        let store = Store::open(dir.path());
+        let state = store.load().unwrap();
+        assert!(state.tracked.contains(&42), "legacy prs must be migrated to tracked set, got tracked={:?}", state.tracked);
+        assert_eq!(state.cache[&42].title, "my pr", "legacy pr title must appear in cache");
+    }
+
 }

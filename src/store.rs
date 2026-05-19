@@ -63,7 +63,7 @@ impl Store {
         let s = std::fs::read_to_string(&self.path)?;
         // Try new format first
         if let Ok(state) = serde_json::from_str::<State>(&s)
-            && (!state.tracked.is_empty() || state.cache.is_empty()) {
+            && !state.tracked.is_empty() {
             return Ok(state);
         }
         // Migrate from old format (had `prs` key with TrackedPr entries)
