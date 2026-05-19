@@ -67,3 +67,49 @@ pub struct PrState {
     #[serde(default)]
     pub codeowners_eligibility: CownershipEligibility,
 }
+
+#[derive(Debug, Clone)]
+pub struct ResolvedThreadInfo {
+    pub body: String,
+    pub file: Option<String>,
+    pub line: Option<u32>,
+    pub resolved_by: Option<String>,
+    pub created_at: Option<String>,
+    pub first_commit_after_opened: Option<String>,
+}
+
+pub fn parse_resolved_review_threads_from_graphql(json: &str) -> anyhow::Result<Vec<ResolvedThreadInfo>> {
+    let v: serde_json::Value = serde_json::from_str(json)?;
+    let pr = &v["data"]["repository"]["pullRequest"];
+    let commits: Vec<(String, String, String)> = pr["commits"]["nodes"]
+        .as_array()
+        .unwrap_or(&vec![])
+        .iter()
+        .map(|n| {
+            let c = &n["commit"];
+            (
+                c["committedDate"].as_str().unwrap_or("").to_string(),
+                c["abbreviatedOid"].as_str().unwrap_or("").to_string(),
+                c["messageHeadline"].as_str().unwrap_or("").to_string(),
+            )
+        })
+        .collect();
+
+    let mut result = vec![];
+    for node in pr["reviewThreads"]["nodes"].as_array().unwrap_or(&vec![]) {
+        if node["isResolved"].as_bool() != Some(true) { continue; }
+        let resolved_by = node["resolvedBy"]["login"].as_str().map(|s| s.to_string());
+        let first_comment = &node["comments"]["nodes"][0];
+        let created_at = first_comment["createdAt"].as_str().map(|s| s.to_string());
+        let body = first_comment["body"].as_str().unwrap_or("").to_string();
+        let file = first_comment["path"].as_str().filter(|s| !s.is_empty()).map(|s| s.to_string());
+        let line = first_comment["line"].as_u64().map(|n| n as u32);
+        let first_commit_after_opened = created_at.as_deref().and_then(|opened_at| {
+            commits.iter()
+                .find(|(date, _, _)| date.as_str() > opened_at)
+                .map(|(_, oid, msg)| format!("{} {}", oid, msg))
+        });
+        result.push(ResolvedThreadInfo { body, file, line, resolved_by, created_at, first_commit_after_opened });
+    }
+    Ok(result)
+}

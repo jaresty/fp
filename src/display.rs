@@ -90,3 +90,53 @@ pub fn format_conflict_hint(branch: &str, prs: &std::collections::HashMap<u64, s
         String::new()
     }
 }
+
+pub fn format_open_threads(pr: u64, threads: &[&crate::model::Thread], json: bool) -> String {
+    if json {
+        return serde_json::to_string_pretty(threads).unwrap_or_default();
+    }
+    if threads.is_empty() {
+        return format!("No open threads on PR #{}.", pr);
+    }
+    let mut out = format!("PR #{} — {} open thread(s):\n", pr, threads.len());
+    for t in threads {
+        let loc = match (&t.file, t.line) {
+            (Some(f), Some(l)) => format!(" {}:{}", f, l),
+            _ => String::new(),
+        };
+        out.push_str(&format!("  #{} ({:?}){}\n    {}\n", t.id, t.state, loc, t.body));
+    }
+    out
+}
+
+pub fn fetch_open_threads(threads: &[crate::model::Thread]) -> Vec<&crate::model::Thread> {
+    threads.iter()
+        .filter(|t| matches!(t.state, crate::model::ThreadState::Open | crate::model::ThreadState::Stale))
+        .collect()
+}
+
+pub fn format_resolved_threads(pr: u64, threads: &[crate::model::ResolvedThreadInfo], json: bool) -> String {
+    if json {
+        let arr: Vec<serde_json::Value> = threads.iter().map(|t| serde_json::json!({
+            "body": t.body, "file": t.file, "line": t.line,
+            "resolved_by": t.resolved_by, "created_at": t.created_at,
+            "first_commit_after_opened": t.first_commit_after_opened,
+        })).collect();
+        return serde_json::to_string_pretty(&arr).unwrap_or_default();
+    }
+    if threads.is_empty() {
+        return format!("No resolved threads on PR #{}.", pr);
+    }
+    let mut out = format!("PR #{} — {} resolved thread(s):\n", pr, threads.len());
+    for t in threads {
+        let loc = match (&t.file, t.line) {
+            (Some(f), Some(l)) => format!("  {}:{}", f, l),
+            _ => "  ".to_string(),
+        };
+        out.push_str(&format!("{}  resolved by: {}\n", loc, t.resolved_by.as_deref().unwrap_or("unknown")));
+        if let Some(at) = &t.created_at { out.push_str(&format!("    opened: {}\n", at)); }
+        if let Some(c) = &t.first_commit_after_opened { out.push_str(&format!("    first commit after: {}\n", c)); }
+        out.push_str(&format!("    {}\n", t.body));
+    }
+    out
+}

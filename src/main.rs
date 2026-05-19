@@ -33,6 +33,8 @@ mod credentials_test;
 mod agent_manifest_test;
 #[cfg(test)]
 mod shell_test;
+#[cfg(test)]
+mod threads_test;
 
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
