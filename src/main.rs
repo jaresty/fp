@@ -334,94 +334,15 @@ fn main() -> Result<()> {
         }
 
         Commands::Status { pr, json, all } => {
-            let state = store.load()?;
             let token = std::env::var("GITHUB_TOKEN").ok();
-            let repo = require_repo(detect_repo())?;
-
-            let fetch = |number: u64, _branch: &str| -> Option<crate::model::PrState> {
-                if let Some(tok) = &token {
-                    let client = GithubClient::new(tok.clone());
-                    client.fetch_pr(&repo.0, &repo.1, number).ok()
-                } else {
-                    None
-                }
-            };
-
+            let (owner, repo_name) = require_repo(detect_repo())?;
+            let client = token.as_ref().map(|t| GithubClient::new(t.clone()));
+            let client_ref: Option<&dyn github::GithubClientTrait> = client.as_ref().map(|c| c as &dyn github::GithubClientTrait);
             if all {
-                if !json { println!("{}", repo_header(&repo.0, &repo.1)); }
-                let pr_numbers: Vec<u64> = state.tracked.iter().copied().collect();
-
-                let fetched: std::collections::HashMap<u64, crate::model::PrState> =
-                    if let Some(tok) = &token {
-                        GithubClient::new(tok.clone()).fetch_prs_as_map(&repo.0, &repo.1, &pr_numbers)
-                    } else {
-                        std::collections::HashMap::new()
-                    };
-
-                // Refresh cache from API so tree order uses current base branches
-                let new_cache: std::collections::HashMap<u64, PrCache> = fetched.values()
-                    .filter(|p| state.tracked.contains(&p.number))
-                    .map(|p| (p.number, PrCache { number: p.number, title: p.title.clone(), branch: p.branch.clone(), base: p.base.clone() }))
-                    .collect();
-                let _ = store.replace_cache(new_cache);
-                let state = store.load()?;
-
-                let prs = state.tracked_prs();
-                let tree_order = stack_tree_order(&prs);
-                for (number, prefix) in tree_order {
-                    let cached = match state.cache.get(&number) { Some(t) => t, None => continue };
-                    let mut pr_state = fetched.get(&number).cloned()
-                        .unwrap_or_else(|| crate::model::PrState {
-                            number: cached.number,
-                            title: cached.title.clone(),
-                            branch: cached.branch.clone(),
-                            base: cached.base.clone(), head_sha: "".into(), draft: false, approved: false,
-                            checks: vec![], threads: vec![], needs_parent_rebase: false, has_merge_conflict: false, codeowners_eligibility: Default::default(),
-                        });
-                    if let (Some(tok), Some((owner, repo_name))) = (&token, detect_repo())
-                        && let Some(parent) = prs.iter().find(|p| p.branch == cached.base).and_then(|p| fetched.get(&p.number))
-                        && !parent.head_sha.is_empty() && !pr_state.head_sha.is_empty() {
-                        pr_state.needs_parent_rebase = GithubClient::new(tok.clone())
-                            .is_head_behind_base(&owner, &repo_name, &parent.head_sha, &pr_state.head_sha);
-                    }
-                    let tasks = generate_tasks(&pr_state);
-                    let lock = worktree::lock_status(&git_dir, &cached.branch)
-                        .map(|s| format!("  {}", s))
-                        .unwrap_or_default();
-                    if json {
-                        println!("{}", serde_json::to_string_pretty(&tasks).unwrap());
-                    } else {
-                        print!("{}", format_pr_status_all_entry(&prefix, cached.number, &cached.title, &tasks, &lock));
-                    }
-                }
+                print!("{}", commands::cmd_status_all(client_ref, &store, &git_dir, &owner, &repo_name, json)?);
             } else {
                 let number = pr.context("specify a PR number or use --all")?;
-
-                let cached = state.cache.get(&number)
-                    .with_context(|| format!("PR #{} is not tracked. Run `fp track {}`", number, number))?;
-
-                let mut pr_state_single = fetch(cached.number, &cached.branch)
-                    .unwrap_or_else(|| crate::model::PrState {
-                        number: cached.number,
-                        title: cached.title.clone(),
-                        branch: cached.branch.clone(),
-                        base: cached.base.clone(), head_sha: "".into(), draft: false, approved: false,
-                        checks: vec![], threads: vec![], needs_parent_rebase: false, has_merge_conflict: false, codeowners_eligibility: Default::default(),
-                    });
-                if let (Some(tok), Some((owner, repo_name))) = (&token, detect_repo())
-                    && let Some(parent) = state.tracked_prs().into_iter().find(|p| p.branch == pr_state_single.base).and_then(|p| fetch(p.number, &p.branch))
-                    && !parent.head_sha.is_empty() && !pr_state_single.head_sha.is_empty() {
-                    pr_state_single.needs_parent_rebase = GithubClient::new(tok.clone())
-                        .is_head_behind_base(&owner, &repo_name, &parent.head_sha, &pr_state_single.head_sha);
-                }
-                let task_list = generate_tasks(&pr_state_single);
-                let lock = worktree::lock_status(&git_dir, &cached.branch);
-
-                if json {
-                    println!("{}", serde_json::to_string_pretty(&task_list)?);
-                } else {
-                    println!("{}", format_single_pr_status(number, &task_list, lock.as_deref()));
-                }
+                println!("{}", commands::cmd_status_one(client_ref, &store, &git_dir, &owner, &repo_name, number, json)?);
             }
         }
 

@@ -27,6 +27,103 @@ pub fn agent_context_text(pr_count: usize) -> String {
 
 use anyhow::Context as _;
 
+pub fn cmd_status_one(
+    client: Option<&dyn crate::github::GithubClientTrait>,
+    store: &crate::store::Store,
+    git_dir: &std::path::Path,
+    owner: &str,
+    repo: &str,
+    pr_number: u64,
+    json: bool,
+) -> anyhow::Result<String> {
+    let state = store.load()?;
+    let cached = state.cache.get(&pr_number)
+        .with_context(|| format!("PR #{} is not tracked. Run `fp track {}`", pr_number, pr_number))?;
+
+    let mut pr_state = client
+        .and_then(|c| c.fetch_pr(owner, repo, cached.number).ok())
+        .unwrap_or_else(|| crate::model::PrState {
+            number: cached.number, title: cached.title.clone(), branch: cached.branch.clone(),
+            base: cached.base.clone(), head_sha: String::new(), draft: false, approved: false,
+            checks: vec![], threads: vec![], needs_parent_rebase: false, has_merge_conflict: false,
+            codeowners_eligibility: Default::default(),
+        });
+
+    if let Some(c) = client
+        && let Some(parent) = state.tracked_prs().into_iter().find(|p| p.branch == pr_state.base)
+            .and_then(|p| c.fetch_pr(owner, repo, p.number).ok())
+        && !parent.head_sha.is_empty() && !pr_state.head_sha.is_empty() {
+        pr_state.needs_parent_rebase = c.is_head_behind_base(owner, repo, &parent.head_sha, &pr_state.head_sha);
+    }
+
+    let tasks = crate::tasks::generate_tasks(&pr_state);
+    let lock = crate::worktree::lock_status(git_dir, &cached.branch);
+
+    if json {
+        Ok(serde_json::to_string_pretty(&tasks)?)
+    } else {
+        Ok(crate::display::format_single_pr_status(pr_number, &tasks, lock.as_deref()))
+    }
+}
+
+pub fn cmd_status_all(
+    client: Option<&dyn crate::github::GithubClientTrait>,
+    store: &crate::store::Store,
+    git_dir: &std::path::Path,
+    owner: &str,
+    repo: &str,
+    json: bool,
+) -> anyhow::Result<String> {
+    let state = store.load()?;
+    let pr_numbers: Vec<u64> = state.tracked.iter().copied().collect();
+
+    let fetched: std::collections::HashMap<u64, crate::model::PrState> = client
+        .map(|c| c.fetch_prs_as_map(owner, repo, &pr_numbers))
+        .unwrap_or_default();
+
+    let new_cache: std::collections::HashMap<u64, crate::store::PrCache> = fetched.values()
+        .filter(|p| state.tracked.contains(&p.number))
+        .map(|p| (p.number, crate::store::PrCache { number: p.number, title: p.title.clone(), branch: p.branch.clone(), base: p.base.clone() }))
+        .collect();
+    let _ = store.replace_cache(new_cache);
+    let state = store.load()?;
+
+    let prs = state.tracked_prs();
+    let tree_order = crate::stack::stack_tree_order(&prs);
+
+    let mut out = String::new();
+    if !json { out.push_str(&crate::display::repo_header(owner, repo)); out.push('\n'); }
+
+    for (number, prefix) in tree_order {
+        let cached = match state.cache.get(&number) { Some(t) => t, None => continue };
+        let mut pr_state = fetched.get(&number).cloned().unwrap_or_else(|| crate::model::PrState {
+            number: cached.number, title: cached.title.clone(), branch: cached.branch.clone(),
+            base: cached.base.clone(), head_sha: String::new(), draft: false, approved: false,
+            checks: vec![], threads: vec![], needs_parent_rebase: false, has_merge_conflict: false,
+            codeowners_eligibility: Default::default(),
+        });
+
+        if let Some(c) = client
+            && let Some(parent) = prs.iter().find(|p| p.branch == cached.base).and_then(|p| fetched.get(&p.number))
+            && !parent.head_sha.is_empty() && !pr_state.head_sha.is_empty() {
+            pr_state.needs_parent_rebase = c.is_head_behind_base(owner, repo, &parent.head_sha, &pr_state.head_sha);
+        }
+
+        let tasks = crate::tasks::generate_tasks(&pr_state);
+        let lock = crate::worktree::lock_status(git_dir, &cached.branch)
+            .map(|s| format!("  {}", s))
+            .unwrap_or_default();
+
+        if json {
+            out.push_str(&serde_json::to_string_pretty(&tasks).unwrap());
+            out.push('\n');
+        } else {
+            out.push_str(&crate::display::format_pr_status_all_entry(&prefix, cached.number, &cached.title, &tasks, &lock));
+        }
+    }
+    Ok(out)
+}
+
 pub fn cmd_checks(client: &dyn crate::github::GithubClientTrait, owner: &str, repo: &str, sha: &str) -> anyhow::Result<String> {
     let checks = client.fetch_checks_for_sha(owner, repo, sha)?;
     if checks.is_empty() {

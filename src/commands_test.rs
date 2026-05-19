@@ -72,6 +72,65 @@ mod tests {
         );
     }
 
+    fn make_store_with_pr(git_dir: &std::path::Path, number: u64, branch: &str) -> crate::store::Store {
+        let store = crate::store::Store::open(git_dir);
+        store.track(number).unwrap();
+        store.update_cache(crate::store::PrCache {
+            number,
+            title: format!("PR {}", number),
+            branch: branch.into(),
+            base: "main".into(),
+        }).unwrap();
+        store
+    }
+
+    #[test]
+    fn commands_governs_cmd_status_one_returns_task_output() {
+        let tmp = tempfile::tempdir().unwrap();
+        let git_dir = tmp.path().join("git_dir");
+        std::fs::create_dir_all(&git_dir).unwrap();
+        let store = make_store_with_pr(&git_dir, 7, "feat/my-feature");
+        let fake = make_fake_with_pr(7);
+        let out = crate::commands::cmd_status_one(Some(&fake), &store, &git_dir, "alice", "repo", 7, false).unwrap();
+        assert!(out.contains("7") || out.contains("PR #7") || out.contains("feat/my-feature"),
+            "output must reference PR, got: {}", out);
+    }
+
+    #[test]
+    fn commands_governs_cmd_status_one_errors_on_untracked() {
+        let tmp = tempfile::tempdir().unwrap();
+        let git_dir = tmp.path().join("git_dir");
+        std::fs::create_dir_all(&git_dir).unwrap();
+        let store = crate::store::Store::open(&git_dir);
+        let result = crate::commands::cmd_status_one(None, &store, &git_dir, "alice", "repo", 99, false);
+        assert!(result.is_err(), "must error for untracked PR");
+        assert!(result.unwrap_err().to_string().contains("not tracked"), "error must say 'not tracked'");
+    }
+
+    #[test]
+    fn commands_governs_cmd_status_one_json_returns_valid_json() {
+        let tmp = tempfile::tempdir().unwrap();
+        let git_dir = tmp.path().join("git_dir");
+        std::fs::create_dir_all(&git_dir).unwrap();
+        let store = make_store_with_pr(&git_dir, 3, "feat/json-test");
+        let fake = make_fake_with_pr(3);
+        let out = crate::commands::cmd_status_one(Some(&fake), &store, &git_dir, "alice", "repo", 3, true).unwrap();
+        let parsed: serde_json::Value = serde_json::from_str(&out)
+            .expect("cmd_status_one json must return valid JSON");
+        assert!(parsed.is_array(), "json output must be array, got: {}", out);
+    }
+
+    #[test]
+    fn commands_governs_cmd_status_all_lists_tracked_prs() {
+        let tmp = tempfile::tempdir().unwrap();
+        let git_dir = tmp.path().join("git_dir");
+        std::fs::create_dir_all(&git_dir).unwrap();
+        let store = make_store_with_pr(&git_dir, 5, "feat/all-test");
+        let fake = make_fake_with_pr(5);
+        let out = crate::commands::cmd_status_all(Some(&fake), &store, &git_dir, "alice", "repo", false).unwrap();
+        assert!(out.contains("PR #5") || out.contains("#5"), "must contain PR number, got: {}", out);
+    }
+
     fn make_fake_with_pr(number: u64) -> crate::github::FakeGithubClient {
         let mut fake = crate::github::FakeGithubClient::new();
         fake.set_pr(number, crate::model::PrState {
