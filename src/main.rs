@@ -10,6 +10,7 @@ pub mod display;
 pub mod credentials;
 pub mod agent;
 pub mod shell;
+pub mod merge;
 
 #[cfg(test)]
 mod tasks_test;
@@ -37,6 +38,8 @@ mod shell_test;
 mod threads_test;
 #[cfg(test)]
 mod repo_test;
+#[cfg(test)]
+mod merge_test;
 
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
@@ -322,18 +325,7 @@ pub use display::{format_watch_initial_state, format_pr_status_all_entry, format
 
 pub use worktree::{branch_in_main_worktree_warning, check_not_checked_out_in_main};
 
-/// Errors when merged_base is empty and there are downstream PRs that need rebasing.
-pub fn check_merge_base(merged_base: &str, has_downstream: bool) -> Result<()> {
-    if merged_base.is_empty() && has_downstream {
-        anyhow::bail!("could not determine merge base — downstream PRs were not rebased; rebase manually with: git rebase --onto <new-main-tip> <old-parent-tip> <branch>");
-    }
-    Ok(())
-}
-
-/// Returns `fetched` when non-empty (GitHub API is authoritative), else falls back to `stored`.
-pub fn resolve_merge_base(fetched: &str, stored: &str) -> String {
-    if !fetched.is_empty() { fetched.to_string() } else { stored.to_string() }
-}
+pub use merge::{check_merge_base, resolve_merge_base};
 
 pub use stack::stack_tree_order;
 
