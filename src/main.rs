@@ -12,6 +12,7 @@ pub mod agent;
 pub mod shell;
 pub mod merge;
 pub mod upload;
+pub mod platform;
 
 #[cfg(test)]
 mod tasks_test;
@@ -45,6 +46,8 @@ mod merge_test;
 mod lifecycle_test;
 #[cfg(test)]
 mod upload_test;
+#[cfg(test)]
+mod notify_ext_test;
 
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
@@ -293,33 +296,7 @@ fn resolve_demo_urls(client: &github::GithubClient, owner: &str, repo: &str, dem
     Ok(urls)
 }
 
-/// Send a macOS system notification via osascript. Silently ignores errors on non-macOS or
-/// headless environments where notifications are unavailable.
-/// Falsify exemption: fire-and-forget subprocess with no observable return value in the test
-/// process — no artifact type can detect absence of the osascript call without a subprocess harness.
-pub fn watch_notification_messages(
-    pr: u64,
-    new: &[tasks::Task],
-    resolved: &[tasks::Task],
-) -> Vec<(String, String)> {
-    let title = format!("fp: #{}", pr);
-    let mut msgs = Vec::new();
-    for t in resolved {
-        match t.task_type {
-            tasks::TaskType::FixCi => msgs.push((title.clone(), format!("CI passing: {}", t.context_hint))),
-            tasks::TaskType::AwaitingReview => msgs.push((title.clone(), "PR approved".into())),
-            _ => {}
-        }
-    }
-    for t in new {
-        match t.task_type {
-            tasks::TaskType::RespondThread => msgs.push((title.clone(), format!("New review thread: {}", t.description))),
-            tasks::TaskType::FixCi => msgs.push((title.clone(), format!("CI failing: {}", t.context_hint))),
-            _ => {}
-        }
-    }
-    msgs
-}
+pub use display::watch_notification_messages;
 
 
 pub use shell::{fps_function_content, fps_install_path, detect_shell};
@@ -343,10 +320,7 @@ pub fn require_repo(repo: Option<(String, String)>) -> Result<(String, String)> 
 }
 
 
-fn notify_macos_titled(title: &str, msg: &str) {
-    let script = format!(r#"display notification "{}" with title "{}""#, msg.replace('"', "'"), title.replace('"', "'"));
-    let _ = std::process::Command::new("osascript").args(["-e", &script]).output();
-}
+use platform::notify_macos_titled;
 
 use worktree::{git_dir, repo_root, untrack_and_cleanup};
 

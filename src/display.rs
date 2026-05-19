@@ -140,3 +140,23 @@ pub fn format_resolved_threads(pr: u64, threads: &[crate::model::ResolvedThreadI
     }
     out
 }
+
+pub fn watch_notification_messages(pr: u64, new: &[crate::tasks::Task], resolved: &[crate::tasks::Task]) -> Vec<(String, String)> {
+    let title = format!("fp: #{}", pr);
+    let mut msgs = Vec::new();
+    for t in resolved {
+        match t.task_type {
+            tasks::TaskType::FixCi => msgs.push((title.clone(), format!("CI passing: {}", t.context_hint))),
+            tasks::TaskType::AwaitingReview => msgs.push((title.clone(), "PR approved".into())),
+            _ => {}
+        }
+    }
+    for t in new {
+        match t.task_type {
+            tasks::TaskType::RespondThread => msgs.push((title.clone(), format!("New review thread: {}", t.description))),
+            tasks::TaskType::FixCi => msgs.push((title.clone(), format!("CI failing: {}", t.context_hint))),
+            _ => {}
+        }
+    }
+    msgs
+}
