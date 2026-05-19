@@ -73,8 +73,12 @@ fp watch --interval 60
 |------|----------|---------|
 | `fix_ci` | yes | A required CI check is failing |
 | `respond_thread` | yes | An open or stale review thread needs a reply |
+| `merge_conflict` | yes | The branch has a merge conflict |
+| `rebase_on_parent` | yes | Parent PR has new commits — run `fp rebase-stack` |
 | `awaiting_ci` | no | A required CI check is still running |
 | `awaiting_review` | no | No approving review yet |
+| `mark_ready` | no | PR is still in draft — run `fp ready` |
+| `ready_unverified` | no | Approval received but CODEOWNERS eligibility could not be verified |
 
 An empty task list means the PR is ready to merge.
 
