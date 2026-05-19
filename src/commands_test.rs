@@ -375,4 +375,27 @@ mod tests {
         let other = state.cache.get(&3).unwrap();
         assert_eq!(other.base, "main", "unrelated PR base must be unchanged, got: {}", other.base);
     }
+
+    #[test]
+    fn commands_governs_normalize_base_of_replaces_untracked_base_with_main() {
+        let tracked: std::collections::HashSet<String> = ["feat/child".to_string()].into();
+        let mut base_of = std::collections::HashMap::new();
+        base_of.insert("feat/child".to_string(), "feat/old-parent".to_string());
+
+        let result = crate::commands::normalize_base_of(base_of, &tracked);
+        assert_eq!(result.get("feat/child").map(String::as_str), Some("main"),
+            "base must be replaced with main when declared parent is not tracked, got: {:?}", result);
+    }
+
+    #[test]
+    fn commands_governs_normalize_base_of_keeps_tracked_base_unchanged() {
+        let tracked: std::collections::HashSet<String> =
+            ["feat/child".to_string(), "feat/parent".to_string()].into();
+        let mut base_of = std::collections::HashMap::new();
+        base_of.insert("feat/child".to_string(), "feat/parent".to_string());
+
+        let result = crate::commands::normalize_base_of(base_of, &tracked);
+        assert_eq!(result.get("feat/child").map(String::as_str), Some("feat/parent"),
+            "base must be kept when declared parent IS tracked, got: {:?}", result);
+    }
 }

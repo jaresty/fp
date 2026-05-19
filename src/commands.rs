@@ -242,6 +242,18 @@ pub fn cmd_untrack(store: &crate::store::Store, repo_root: &std::path::Path, git
     Ok(format!("Untracked PR #{}", pr))
 }
 
+pub fn normalize_base_of(
+    base_of: std::collections::HashMap<String, String>,
+    tracked_branches: &std::collections::HashSet<String>,
+) -> std::collections::HashMap<String, String> {
+    base_of.into_iter()
+        .map(|(branch, base)| {
+            let normalized = if tracked_branches.contains(&base) { base } else { "main".to_string() };
+            (branch, normalized)
+        })
+        .collect()
+}
+
 pub fn update_children_base(store: &crate::store::Store, merged_branch: &str, new_base: &str) -> anyhow::Result<()> {
     let state = store.load()?;
     for pr in state.tracked_prs() {

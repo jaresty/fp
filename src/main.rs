@@ -750,7 +750,11 @@ fn main() -> Result<()> {
             if all_branches.is_empty() {
                 return Ok(());
             }
-            let cached_base_of: std::collections::HashMap<String, String> = state.tracked_prs().iter().map(|p| (p.branch.clone(), p.base.clone())).collect();
+            let tracked_set: std::collections::HashSet<String> = all_branches.iter().cloned().collect();
+            let cached_base_of = commands::normalize_base_of(
+                state.tracked_prs().iter().map(|p| (p.branch.clone(), p.base.clone())).collect(),
+                &tracked_set,
+            );
             let parent_of = stack::detect_parent_of(&all_branches, &main_root, &cached_base_of)?;
 
             // If a starting PR is given, restrict to that branch and its descendants
@@ -780,11 +784,15 @@ fn main() -> Result<()> {
                 .collect();
 
             // Build base_of from parallel fetch (reuses PrState.base, no extra API calls)
+            // Normalize: if a PR's declared base is not a tracked branch, use "main" instead.
             let rebase_pr_numbers: Vec<u64> = state.tracked.iter().copied().collect();
             let base_of: std::collections::HashMap<String, String> =
                 if let (Ok(token), Some((owner, repo_name))) = (resolve_github_token(), detect_repo()) {
-                    GithubClient::new(token).fetch_prs_as_map(&owner, &repo_name, &rebase_pr_numbers)
-                        .into_values().map(|p| (p.branch, p.base)).collect()
+                    commands::normalize_base_of(
+                        GithubClient::new(token).fetch_prs_as_map(&owner, &repo_name, &rebase_pr_numbers)
+                            .into_values().map(|p| (p.branch, p.base)).collect(),
+                        &tracked_set,
+                    )
                 } else {
                     std::collections::HashMap::new()
                 };
