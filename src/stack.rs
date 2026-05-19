@@ -88,13 +88,24 @@ pub fn rebase_stack(branches: &[String], parent_of: &HashMap<String, Option<Stri
 
     // Snapshot parent SHA for each branch before any rebasing begins.
     // Used for the diff invariant check: pre-rebase diff must use the original parent SHA.
+    let resolve_root_parent = |branch: &str| -> String {
+        let base = base_of.get(branch).map(String::as_str).unwrap_or("main");
+        let candidate = format!("origin/{}", base);
+        let exists = std::process::Command::new("git")
+            .args(["rev-parse", "--verify", &candidate])
+            .current_dir(dir).output()
+            .map(|o| o.status.success())
+            .unwrap_or(false);
+        if exists { candidate } else { "origin/main".to_string() }
+    };
+
     let pre_rebase_parent_shas: HashMap<String, String> = ordered.iter().filter_map(|branch| {
         let parent_ref = match parent_of.get(branch).and_then(|p| p.as_ref()) {
             Some(p) => p.as_str(),
             None => {
-                let base = base_of.get(branch.as_str()).map(String::as_str).unwrap_or("main");
+                let resolved = resolve_root_parent(branch);
                 return std::process::Command::new("git")
-                    .args(["rev-parse", &format!("origin/{}", base)])
+                    .args(["rev-parse", &resolved])
                     .current_dir(dir).output().ok()
                     .and_then(|o| String::from_utf8(o.stdout).ok())
                     .map(|s| (branch.clone(), s.trim().to_string()));
@@ -112,8 +123,7 @@ pub fn rebase_stack(branches: &[String], parent_of: &HashMap<String, Option<Stri
         let parent = match parent_of.get(branch).and_then(|p| p.as_ref()) {
             Some(p) => p.as_str(),
             None => {
-                let base = base_of.get(branch).map(String::as_str).unwrap_or("main");
-                parent_owned = format!("origin/{}", base);
+                parent_owned = resolve_root_parent(branch);
                 &parent_owned
             }
         };
@@ -149,8 +159,7 @@ pub fn rebase_stack(branches: &[String], parent_of: &HashMap<String, Option<Stri
         // Two signals, either sufficient:
         // 1. git merge-base --is-ancestor <parent> origin/<base>: parent's tip is in base (regular merge)
         // 2. origin/<parent> remote tracking ref is gone after fetch (squash/rebase merge with auto-delete)
-        let base_for_parent = base_of.get(branch.as_str()).map(String::as_str).unwrap_or("main");
-        let origin_base = format!("origin/{}", base_for_parent);
+        let origin_base = resolve_root_parent(branch);
         let parent_merged_into_base = !parent.starts_with("origin/") && {
             let parent_exists = std::process::Command::new("git")
                 .args(["rev-parse", "--verify", parent])

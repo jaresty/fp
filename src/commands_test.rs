@@ -336,4 +336,43 @@ mod tests {
         assert!(result.is_err(), "must error for untracked PR");
         assert!(result.unwrap_err().to_string().contains("not tracked"), "error must say 'not tracked'");
     }
+
+    #[test]
+    fn commands_governs_update_children_base_updates_children_of_merged_branch() {
+        let tmp = tempfile::tempdir().unwrap();
+        let git_dir = tmp.path().join("git_dir");
+        std::fs::create_dir_all(&git_dir).unwrap();
+        let store = crate::store::Store::open(&git_dir);
+
+        // Set up: parent PR #1 (branch: feat/parent, base: main)
+        //         child PR #2 (branch: feat/child, base: feat/parent)
+        store.track(1).unwrap();
+        store.update_cache(crate::store::PrCache { number: 1, title: "parent".into(), branch: "feat/parent".into(), base: "main".into() }).unwrap();
+        store.track(2).unwrap();
+        store.update_cache(crate::store::PrCache { number: 2, title: "child".into(), branch: "feat/child".into(), base: "feat/parent".into() }).unwrap();
+
+        // After merging feat/parent into main, update child's base to main
+        crate::commands::update_children_base(&store, "feat/parent", "main").unwrap();
+
+        let state = store.load().unwrap();
+        let child = state.cache.get(&2).unwrap();
+        assert_eq!(child.base, "main", "child base must be updated to merged_base after parent merges, got: {}", child.base);
+    }
+
+    #[test]
+    fn commands_governs_update_children_base_leaves_unrelated_prs_unchanged() {
+        let tmp = tempfile::tempdir().unwrap();
+        let git_dir = tmp.path().join("git_dir");
+        std::fs::create_dir_all(&git_dir).unwrap();
+        let store = crate::store::Store::open(&git_dir);
+
+        store.track(3).unwrap();
+        store.update_cache(crate::store::PrCache { number: 3, title: "other".into(), branch: "feat/other".into(), base: "main".into() }).unwrap();
+
+        crate::commands::update_children_base(&store, "feat/parent", "main").unwrap();
+
+        let state = store.load().unwrap();
+        let other = state.cache.get(&3).unwrap();
+        assert_eq!(other.base, "main", "unrelated PR base must be unchanged, got: {}", other.base);
+    }
 }

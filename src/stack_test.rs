@@ -2067,4 +2067,68 @@ mod tests {
         assert_eq!(order[1].0, 2, "child must come second");
         assert!(order[1].1.contains("└─"), "child must have indent prefix, got: {:?}", order[1].1);
     }
+
+    // RS_RECOVERY: when declared base branch no longer exists as a remote ref (e.g. parent was merged
+    // and untracked), rebase_stack falls back to origin/main so the branch still gets rebased.
+    #[test]
+    fn rebase_stack_falls_back_to_main_when_declared_base_branch_not_on_remote() {
+        use std::process::Command;
+        use tempfile::TempDir;
+
+        let remote_dir = TempDir::new().unwrap();
+        Command::new("git").args(["init", "--bare", "-b", "main"])
+            .current_dir(remote_dir.path()).output().unwrap();
+
+        let dir = TempDir::new().unwrap();
+        let path = dir.path();
+
+        let git = |args: &[&str]| {
+            Command::new("git").args(args).current_dir(path).output().unwrap()
+        };
+
+        git(&["init", "-b", "main"]);
+        git(&["config", "user.email", "test@test.com"]);
+        git(&["config", "user.name", "Test"]);
+        git(&["remote", "add", "origin", remote_dir.path().to_str().unwrap()]);
+
+        // main: commit A
+        std::fs::write(path.join("a.txt"), "a").unwrap();
+        git(&["add", "."]);
+        git(&["commit", "-m", "A"]);
+        git(&["push", "origin", "main"]);
+
+        // feat/child branches from main, commit C, push
+        git(&["checkout", "-b", "feat/child"]);
+        std::fs::write(path.join("c.txt"), "c").unwrap();
+        git(&["add", "."]);
+        git(&["commit", "-m", "C"]);
+        git(&["push", "--set-upstream", "origin", "feat/child"]);
+
+        // main advances (simulates parent PR merge + other work)
+        git(&["checkout", "main"]);
+        std::fs::write(path.join("m.txt"), "m").unwrap();
+        git(&["add", "."]);
+        git(&["commit", "-m", "M"]);
+        git(&["push", "origin", "main"]);
+        git(&["checkout", "main"]);
+
+        // feat/child's cache says base is "feat/parent" (which no longer exists on remote)
+        let branches = vec!["feat/child".to_string()];
+        let mut parent_of = std::collections::HashMap::new();
+        parent_of.insert("feat/child".to_string(), None);
+        let mut base_of = std::collections::HashMap::new();
+        base_of.insert("feat/child".to_string(), "feat/parent".to_string()); // stale — branch gone
+
+        let result = rebase_stack(&branches, &parent_of, &base_of, path, &|_| {}).unwrap();
+        assert!(result.conflicts.is_empty(), "must succeed with fallback to main, conflicts: {:?}", result.conflicts);
+        assert!(result.rebased.contains(&"feat/child".to_string()), "feat/child must be rebased onto main, got: {:?}", result.rebased);
+
+        let child_parent = String::from_utf8(
+            Command::new("git").args(["rev-parse", "feat/child~1"]).current_dir(path).output().unwrap().stdout
+        ).unwrap().trim().to_string();
+        let main_tip = String::from_utf8(
+            Command::new("git").args(["rev-parse", "origin/main"]).current_dir(path).output().unwrap().stdout
+        ).unwrap().trim().to_string();
+        assert_eq!(child_parent, main_tip, "feat/child must be rebased onto origin/main when declared base is gone");
+    }
 }

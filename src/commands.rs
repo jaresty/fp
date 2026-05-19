@@ -242,6 +242,21 @@ pub fn cmd_untrack(store: &crate::store::Store, repo_root: &std::path::Path, git
     Ok(format!("Untracked PR #{}", pr))
 }
 
+pub fn update_children_base(store: &crate::store::Store, merged_branch: &str, new_base: &str) -> anyhow::Result<()> {
+    let state = store.load()?;
+    for pr in state.tracked_prs() {
+        if pr.base == merged_branch {
+            store.update_cache(crate::store::PrCache {
+                number: pr.number,
+                title: pr.title.clone(),
+                branch: pr.branch.clone(),
+                base: new_base.to_string(),
+            })?;
+        }
+    }
+    Ok(())
+}
+
 pub fn cmd_comment(client: &dyn crate::github::GithubClientTrait, owner: &str, repo: &str, pr: u64, message: &str) -> anyhow::Result<String> {
     let url = client.post_pr_comment(owner, repo, pr, message)?;
     Ok(format!("Comment posted: {}", url))

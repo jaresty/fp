@@ -692,6 +692,9 @@ fn main() -> Result<()> {
                         println!("✓ rebased downstream stack onto {}", merged_base);
                     }
                 }
+                // Update children's cached base to the merge target so future operations
+                // (rebase-stack, status) know the parent is gone and base is now merged_base.
+                let _ = commands::update_children_base(&store, &merged_branch, &merged_base);
             }
 
             // Untrack the merged PR
