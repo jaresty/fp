@@ -575,17 +575,7 @@ fn main() -> Result<()> {
             let (owner, repo_name) = detect_repo()
                 .context("could not detect GitHub repo from git remote")?;
             let client = GithubClient::new(token);
-
-            // Determine merge method: explicit flag, or auto-detect from repo settings
-            let explicit_method: Option<&str> = if squash {
-                Some("squash")
-            } else if rebase {
-                Some("rebase")
-            } else if merge_commit {
-                Some("merge")
-            } else {
-                None
-            };
+            let explicit_method: Option<&str> = if squash { Some("squash") } else if rebase { Some("rebase") } else if merge_commit { Some("merge") } else { None };
             let mut state = store.load()?;
             let resolved_method: String;
             let merge_method: &str = if let Some(m) = explicit_method {
@@ -595,49 +585,7 @@ fn main() -> Result<()> {
                 store.save(&state)?;
                 &resolved_method
             };
-
-            // Fetch the PR's head branch and base before merging (need head_sha for rebase --onto)
-            let (head_sha, fetched_base_ref) = client.fetch_pr_head_sha_and_base(&owner, &repo_name, pr)?;
-
-            // Perform the merge
-            let merge_sha = client.merge_pr(&owner, &repo_name, pr, Some(merge_method))?;
-            println!("✓ merged PR #{} ({})", pr, merge_sha);
-
-            // Find the tracked PR to get the head branch name, then rebase downstream
-            if let Some(cached_pr) = state.cache.get(&pr) {
-                let merged_branch = cached_pr.branch.clone();
-                let merged_base = resolve_merge_base(&fetched_base_ref, &cached_pr.base);
-                let main_root = repo_root()?;
-
-                let branch_base_of: std::collections::HashMap<String, String> = state.tracked_prs()
-                    .iter()
-                    .filter(|p| p.number != pr)
-                    .map(|p| (p.branch.clone(), p.base.clone()))
-                    .collect();
-                let has_downstream = branch_base_of.values().any(|parent| parent == &merged_branch);
-                if let Err(e) = check_merge_base(&merged_base, has_downstream) {
-                    println!("✗ {}", e);
-                } else {
-                    let errors = stack::rebase_downstream_stack(
-                        &merged_branch, &head_sha, &merged_base, &branch_base_of, &main_root, &|b| {
-                            println!("  rebasing {}...", b);
-                        }
-                    );
-                    for e in &errors {
-                        println!("✗ {}", e);
-                    }
-                    if errors.is_empty() {
-                        println!("✓ rebased downstream stack onto {}", merged_base);
-                    }
-                }
-                // Update children's cached base to the merge target so future operations
-                // (rebase-stack, status) know the parent is gone and base is now merged_base.
-                let _ = commands::update_children_base(&store, &merged_branch, &merged_base);
-            }
-
-            // Untrack the merged PR
-            store.untrack(pr)?;
-            println!("✓ untracked PR #{}", pr);
+            print!("{}", commands::cmd_merge(&client, &owner, &repo_name, pr, commands::MergeContext { store: &store, dir: &repo_root()?, git_dir: &git_dir, merge_method })?);
         }
 
         Commands::RebaseStack { pr: rebase_from_pr, verbose } => {

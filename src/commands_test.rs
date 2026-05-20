@@ -550,4 +550,33 @@ mod tests {
         let out = result.unwrap();
         assert!(out.contains("not found"), "must say not found: {}", out);
     }
+
+    #[test]
+    fn cmd_merge_returns_merged_message() {
+        let tmp = tempfile::tempdir().unwrap();
+        let git_dir = tmp.path().join("git_dir");
+        std::fs::create_dir_all(&git_dir).unwrap();
+        let store = crate::store::Store::open(&git_dir);
+        store.track(10).unwrap();
+        store.update_cache(crate::store::PrCache { number: 10, title: "T".into(), branch: "feat/x".into(), base: "main".into() }).unwrap();
+        let fake = crate::github::FakeGithubClient::new_with_pr(10, "feat/x", "T", "main");
+        let result = crate::commands::cmd_merge(&fake, "o", "r", 10, crate::commands::MergeContext { store: &store, dir: tmp.path(), git_dir: &git_dir, merge_method: "squash" });
+        assert!(result.is_ok(), "cmd_merge must succeed: {:?}", result);
+        let msg = result.unwrap();
+        assert!(msg.contains("merged PR #10"), "must mention merged PR: {}", msg);
+    }
+
+    #[test]
+    fn cmd_merge_untracks_pr_from_store() {
+        let tmp = tempfile::tempdir().unwrap();
+        let git_dir = tmp.path().join("git_dir");
+        std::fs::create_dir_all(&git_dir).unwrap();
+        let store = crate::store::Store::open(&git_dir);
+        store.track(10).unwrap();
+        store.update_cache(crate::store::PrCache { number: 10, title: "T".into(), branch: "feat/x".into(), base: "main".into() }).unwrap();
+        let fake = crate::github::FakeGithubClient::new_with_pr(10, "feat/x", "T", "main");
+        crate::commands::cmd_merge(&fake, "o", "r", 10, crate::commands::MergeContext { store: &store, dir: tmp.path(), git_dir: &git_dir, merge_method: "squash" }).unwrap();
+        let state = store.load().unwrap();
+        assert!(!state.tracked.contains(&10), "cmd_merge must untrack the PR");
+    }
 }

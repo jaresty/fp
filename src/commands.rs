@@ -431,3 +431,48 @@ pub fn cmd_context(client: &dyn crate::github::GithubClientTrait, owner: &str, r
         Ok(format!("Check '{}' not found in PR #{}\n", hint, pr))
     }
 }
+
+pub struct MergeContext<'a> {
+    pub store: &'a crate::store::Store,
+    pub dir: &'a std::path::Path,
+    pub git_dir: &'a std::path::Path,
+    pub merge_method: &'a str,
+}
+
+pub fn cmd_merge(
+    client: &dyn crate::github::GithubClientTrait,
+    owner: &str,
+    repo: &str,
+    pr: u64,
+    ctx: MergeContext<'_>,
+) -> anyhow::Result<String> {
+    let MergeContext { store, dir, git_dir, merge_method } = ctx;
+    let state = store.load()?;
+    let (head_sha, fetched_base_ref) = client.fetch_pr_head_sha_and_base(owner, repo, pr)?;
+    let merge_sha = client.merge_pr(owner, repo, pr, Some(merge_method))?;
+    let mut out = format!("✓ merged PR #{} ({})\n", pr, merge_sha);
+
+    if let Some(cached_pr) = state.cache.get(&pr) {
+        let merged_branch = cached_pr.branch.clone();
+        let merged_base = crate::merge::resolve_merge_base(&fetched_base_ref, &cached_pr.base);
+        let branch_base_of: std::collections::HashMap<String, String> = state.tracked_prs()
+            .iter().filter(|p| p.number != pr)
+            .map(|p| (p.branch.clone(), p.base.clone())).collect();
+        let has_downstream = branch_base_of.values().any(|parent| parent == &merged_branch);
+        if let Err(e) = crate::merge::check_merge_base(&merged_base, has_downstream) {
+            out.push_str(&format!("✗ {}\n", e));
+        } else {
+            let errors = crate::stack::rebase_downstream_stack(
+                &merged_branch, &head_sha, &merged_base, &branch_base_of, dir,
+                &|b| { let _ = b; },
+            );
+            for e in &errors { out.push_str(&format!("✗ {}\n", e)); }
+            if errors.is_empty() { out.push_str(&format!("✓ rebased downstream stack onto {}\n", merged_base)); }
+        }
+        let _ = update_children_base(store, &merged_branch, &merged_base);
+        let _ = crate::worktree::untrack_and_cleanup(store, dir, git_dir, pr, &merged_branch);
+    }
+    store.untrack(pr)?;
+    out.push_str(&format!("✓ untracked PR #{}\n", pr));
+    Ok(out)
+}
