@@ -355,6 +355,75 @@ mod tests {
         assert_eq!(child_parent, main_tip, "feat/child should be rebased onto main tip even when in a worktree");
     }
 
+    // MG4: rebase_onto_after_merge creates an fp-managed worktree when none exists, instead of
+    // checking out the branch in the main repo. The main repo HEAD stays unchanged.
+    #[test]
+    fn rebase_onto_after_merge_creates_worktree_when_none_exists() {
+        use std::process::Command;
+        use tempfile::TempDir;
+
+        let remote_dir = TempDir::new().unwrap();
+        Command::new("git").args(["init", "--bare", "-b", "main"])
+            .current_dir(remote_dir.path()).output().unwrap();
+
+        // Use a named temp dir so worktree_path (sibling dir) is predictable
+        let base = TempDir::new().unwrap();
+        let repo_path = base.path().join("myrepo");
+        std::fs::create_dir_all(&repo_path).unwrap();
+        let path = &repo_path;
+
+        let git = |args: &[&str]| {
+            Command::new("git").args(args).current_dir(path).output().unwrap()
+        };
+
+        git(&["init", "-b", "main"]);
+        git(&["config", "user.email", "test@test.com"]);
+        git(&["config", "user.name", "Test"]);
+        git(&["remote", "add", "origin", remote_dir.path().to_str().unwrap()]);
+
+        std::fs::write(path.join("a.txt"), "a").unwrap();
+        git(&["add", "."]);
+        git(&["commit", "-m", "A"]);
+        git(&["push", "origin", "main"]);
+
+        git(&["checkout", "-b", "feat/parent"]);
+        std::fs::write(path.join("b.txt"), "b").unwrap();
+        git(&["add", "."]);
+        git(&["commit", "-m", "B"]);
+        let parent_sha = String::from_utf8(
+            Command::new("git").args(["rev-parse", "feat/parent"]).current_dir(path).output().unwrap().stdout
+        ).unwrap().trim().to_string();
+
+        git(&["checkout", "-b", "feat/child"]);
+        std::fs::write(path.join("c.txt"), "c").unwrap();
+        git(&["add", "."]);
+        git(&["commit", "-m", "C"]);
+        git(&["push", "--set-upstream", "origin", "feat/child"]);
+
+        git(&["checkout", "main"]);
+        git(&["merge", "--squash", "feat/parent"]);
+        git(&["commit", "-m", "squash merge B"]);
+        git(&["push", "origin", "main"]);
+
+        // main repo HEAD is on "main" — must remain so after the call
+        let head_before = String::from_utf8(
+            Command::new("git").args(["symbolic-ref", "HEAD"]).current_dir(path).output().unwrap().stdout
+        ).unwrap().trim().to_string();
+        assert_eq!(head_before, "refs/heads/main");
+
+        crate::stack::rebase_onto_after_merge("feat/child", &parent_sha, "main", path).unwrap();
+
+        // main repo HEAD must still be "main" — no checkout happened
+        let head_after = String::from_utf8(
+            Command::new("git").args(["symbolic-ref", "HEAD"]).current_dir(path).output().unwrap().stdout
+        ).unwrap().trim().to_string();
+        assert_eq!(head_after, "refs/heads/main", "main repo HEAD must not change after rebase_onto_after_merge");
+
+        // A worktree must exist at the fp-managed path
+        let wt_path = crate::worktree::worktree_path(path, "feat/child");
+        assert!(wt_path.exists(), "fp-managed worktree must exist at {:?}", wt_path);
+    }
+
     // MG3: rebase_onto_after_merge returns an error containing conflict resolution instructions
     // when a conflict occurs, and leaves the rebase in progress (does NOT call git rebase --abort).
     #[test]
@@ -417,10 +486,17 @@ mod tests {
         assert!(err_msg.contains("Conflict — resolve with"), "error must contain 'Conflict — resolve with'; got: {}", err_msg);
         assert!(err_msg.contains("fp rebase-stack"), "error must include 'fp rebase-stack' instruction; got: {}", err_msg);
 
-        // The rebase must be left in progress — rebase-merge directory should exist
-        let rebase_in_progress = path.join(".git").join("rebase-merge").exists()
-            || path.join(".git").join("rebase-apply").exists();
-        assert!(rebase_in_progress, "rebase must be left in progress (not aborted) after conflict");
+        // The rebase must be left in progress. It runs in the fp-managed worktree, so check
+        // git status there (the worktree's git state, not the main repo).
+        let wt_path = crate::worktree::worktree_path(path, "feat/child");
+        let status_out = std::process::Command::new("git")
+            .args(["status"])
+            .current_dir(&wt_path)
+            .output()
+            .map(|o| String::from_utf8_lossy(&o.stdout).to_string())
+            .unwrap_or_default();
+        assert!(status_out.contains("rebase in progress") || status_out.contains("You are currently rebasing"),
+            "rebase must be left in progress (not aborted) after conflict; git status:\n{}", status_out);
     }
 
     // RS3: rebase_stack force-pushes each rebased branch after successful rebase

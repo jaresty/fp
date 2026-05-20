@@ -367,14 +367,19 @@ pub fn rebase_stack(branches: &[String], parent_of: &HashMap<String, Option<Stri
 /// Force-pushes after a successful rebase.
 pub fn rebase_onto_after_merge(branch: &str, old_base_sha: &str, new_base: &str, dir: &Path) -> Result<()> {
     let wt_dir = worktree::find_worktree_path(branch, dir);
-    let rebase_dir = wt_dir.as_deref().unwrap_or(dir);
-    let git = |args: &[&str]| {
-        std::process::Command::new("git").args(args).current_dir(rebase_dir).output()
+    let rebase_dir = if let Some(ref p) = wt_dir {
+        p.clone()
+    } else {
+        let wt_path = worktree::worktree_path(dir, branch);
+        let add = std::process::Command::new("git")
+            .args(["worktree", "add", wt_path.to_str().unwrap_or(""), branch])
+            .current_dir(dir).output()?;
+        anyhow::ensure!(add.status.success(), "worktree add for {} failed: {}", branch, String::from_utf8_lossy(&add.stderr));
+        wt_path
     };
-    if wt_dir.is_none() {
-        let checkout = git(&["checkout", branch])?;
-        anyhow::ensure!(checkout.status.success(), "checkout {} failed: {}", branch, String::from_utf8_lossy(&checkout.stderr));
-    }
+    let git = |args: &[&str]| {
+        std::process::Command::new("git").args(args).current_dir(&rebase_dir).output()
+    };
     let rebase = git(&["rebase", "--onto", new_base, old_base_sha, branch])?;
     if !rebase.status.success() {
         anyhow::bail!(
