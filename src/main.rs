@@ -526,7 +526,8 @@ fn main() -> Result<()> {
                 (None, String::new(), String::new())
             };
             print!("{}", commands::cmd_rebase_stack(
-                client.as_deref(), &owner, &repo_name, &store, &repo_root()?, &git_dir, rebase_from_pr, verbose,
+                client.as_deref(), &owner, &repo_name, &store, &repo_root()?, &git_dir, rebase_from_pr,
+                &|msg| if verbose { eprintln!("{}", msg) },
             )?);
         }
 

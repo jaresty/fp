@@ -681,7 +681,7 @@ mod tests {
         let store = crate::store::Store::open(&git_dir);
         let fake = crate::github::FakeGithubClient::new();
         let result = crate::commands::cmd_rebase_stack(
-            Some(&fake), "o", "r", &store, tmp.path(), &git_dir, None, false,
+            Some(&fake), "o", "r", &store, tmp.path(), &git_dir, None, &|_| {},
         );
         assert!(result.is_ok(), "cmd_rebase_stack must succeed: {:?}", result);
         let msg = result.unwrap();
@@ -726,11 +726,151 @@ mod tests {
         let fake = crate::github::FakeGithubClient::new_with_pr(1, "feat/x", "X", "main");
 
         let result = crate::commands::cmd_rebase_stack(
-            Some(&fake), "o", "r", &store, &repo, &git_dir, None, false,
+            Some(&fake), "o", "r", &store, &repo, &git_dir, None, &|_| {},
         );
         assert!(result.is_ok(), "cmd_rebase_stack must succeed: {:?}", result);
         let msg = result.unwrap();
         assert!(msg.contains("up to date"), "must say up to date: {}", msg);
+    }
+
+    // VB1: cmd_rebase_stack --verbose emits progress markers for each blocking operation
+    // so a user can identify which git/API call is hanging.
+    #[test]
+    fn cmd_rebase_stack_verbose_emits_progress_markers() {
+        use std::process::Command;
+
+        let tmp = tempfile::tempdir().unwrap();
+        let remote = tmp.path().join("remote");
+        let repo = tmp.path().join("repo");
+        std::fs::create_dir_all(&remote).unwrap();
+        std::fs::create_dir_all(&repo).unwrap();
+        let git_dir = repo.join(".git");
+
+        Command::new("git").args(["init", "--bare", "-b", "main"]).current_dir(&remote).output().unwrap();
+        Command::new("git").args(["init", "-b", "main"]).current_dir(&repo).output().unwrap();
+        Command::new("git").args(["config", "user.email", "t@t.com"]).current_dir(&repo).output().unwrap();
+        Command::new("git").args(["config", "user.name", "T"]).current_dir(&repo).output().unwrap();
+        Command::new("git").args(["remote", "add", "origin", remote.to_str().unwrap()]).current_dir(&repo).output().unwrap();
+
+        let git = |args: &[&str]| Command::new("git").args(args).current_dir(&repo).output().unwrap();
+
+        std::fs::write(repo.join("main.txt"), "main\n").unwrap();
+        git(&["add", "."]);
+        git(&["commit", "-m", "M"]);
+        git(&["push", "-u", "origin", "main"]);
+
+        git(&["checkout", "-b", "feat/a"]);
+        std::fs::write(repo.join("a.txt"), "a\n").unwrap();
+        git(&["add", "."]);
+        git(&["commit", "-m", "A"]);
+        git(&["push", "-u", "origin", "feat/a"]);
+
+        let store = crate::store::Store::open(&git_dir);
+        store.track(1).unwrap();
+        store.update_cache(crate::store::PrCache {
+            number: 1, title: "A".into(), branch: "feat/a".into(), base: "main".into()
+        }).unwrap();
+
+        let fake = crate::github::FakeGithubClient::new_with_pr(1, "feat/a", "A", "main");
+
+        let log = std::cell::RefCell::new(Vec::<String>::new());
+        let result = crate::commands::cmd_rebase_stack(
+            Some(&fake), "o", "r", &store, &repo, &git_dir, None,
+            &|msg| log.borrow_mut().push(msg.to_string()),
+        );
+        assert!(result.is_ok(), "cmd_rebase_stack verbose must succeed: {:?}", result);
+        let captured = log.borrow().join("\n");
+
+        assert!(captured.contains("[fp] checking merged PRs"),
+            "verbose output must contain merged-PR check marker; got:\n{}", captured);
+        assert!(captured.contains("[fp] fetch_pr_is_merged"),
+            "verbose output must contain per-PR check marker; got:\n{}", captured);
+        assert!(captured.contains("git fetch origin"),
+            "verbose output must contain fetch marker; got:\n{}", captured);
+
+        // ls-remote and push only fire when a stacked branch is rebased — tested in VB2 below
+
+    }
+
+    // VB2: ls-remote (checking if parent branch is deleted) and push fire when a stacked
+    // child branch is rebased after the parent was force-pushed.
+    #[test]
+    fn cmd_rebase_stack_verbose_emits_ls_remote_and_push_markers() {
+        use std::process::Command;
+
+        let tmp = tempfile::tempdir().unwrap();
+        let remote = tmp.path().join("remote");
+        let repo = tmp.path().join("repo");
+        std::fs::create_dir_all(&remote).unwrap();
+        std::fs::create_dir_all(&repo).unwrap();
+        let git_dir = repo.join(".git");
+
+        Command::new("git").args(["init", "--bare", "-b", "main"]).current_dir(&remote).output().unwrap();
+        Command::new("git").args(["init", "-b", "main"]).current_dir(&repo).output().unwrap();
+        Command::new("git").args(["config", "user.email", "t@t.com"]).current_dir(&repo).output().unwrap();
+        Command::new("git").args(["config", "user.name", "T"]).current_dir(&repo).output().unwrap();
+        Command::new("git").args(["remote", "add", "origin", remote.to_str().unwrap()]).current_dir(&repo).output().unwrap();
+
+        let git = |args: &[&str]| Command::new("git").args(args).current_dir(&repo).output().unwrap();
+
+        std::fs::write(repo.join("main.txt"), "main\n").unwrap();
+        git(&["add", "."]);
+        git(&["commit", "-m", "M"]);
+        git(&["push", "-u", "origin", "main"]);
+
+        // feat/parent: stacked on main
+        git(&["checkout", "-b", "feat/parent"]);
+        std::fs::write(repo.join("p.txt"), "p\n").unwrap();
+        git(&["add", "."]);
+        git(&["commit", "-m", "P"]);
+        git(&["push", "-u", "origin", "feat/parent"]);
+
+        // feat/child: stacked on feat/parent
+        git(&["checkout", "-b", "feat/child"]);
+        std::fs::write(repo.join("c.txt"), "c\n").unwrap();
+        git(&["add", "."]);
+        git(&["commit", "-m", "C"]);
+        git(&["push", "-u", "origin", "feat/child"]);
+
+        // Force-push feat/parent with a new commit so feat/child needs rebasing
+        git(&["checkout", "feat/parent"]);
+        std::fs::write(repo.join("p2.txt"), "p2\n").unwrap();
+        git(&["add", "."]);
+        git(&["commit", "-m", "P2"]);
+        git(&["push", "--force-with-lease", "origin", "feat/parent"]);
+        // Check out main so neither tracked branch is locked in the main worktree
+        git(&["checkout", "main"]);
+
+        let store = crate::store::Store::open(&git_dir);
+        store.track(1).unwrap();
+        store.update_cache(crate::store::PrCache {
+            number: 1, title: "Parent".into(), branch: "feat/parent".into(), base: "main".into()
+        }).unwrap();
+        store.track(2).unwrap();
+        store.update_cache(crate::store::PrCache {
+            number: 2, title: "Child".into(), branch: "feat/child".into(), base: "feat/parent".into()
+        }).unwrap();
+
+        let mut fake = crate::github::FakeGithubClient::new_with_pr(1, "feat/parent", "Parent", "main");
+        fake.set_pr(2, crate::model::PrState {
+            number: 2, title: "Child".into(), branch: "feat/child".into(), base: "feat/parent".into(),
+            head_sha: String::new(), draft: false, approved: false, checks: vec![], threads: vec![],
+            needs_parent_rebase: false, has_merge_conflict: false,
+            codeowners_eligibility: Default::default(),
+        });
+
+        let log = std::cell::RefCell::new(Vec::<String>::new());
+        let result = crate::commands::cmd_rebase_stack(
+            Some(&fake), "o", "r", &store, &repo, &git_dir, None,
+            &|msg| log.borrow_mut().push(msg.to_string()),
+        );
+        assert!(result.is_ok(), "cmd_rebase_stack verbose must succeed: {:?}", result);
+        let captured = log.borrow().join("\n");
+
+        assert!(captured.contains("git ls-remote"),
+            "verbose output must contain ls-remote marker (checking if parent branch deleted); got:\n{}", captured);
+        assert!(captured.contains("git push --force-with-lease"),
+            "verbose output must contain push marker; got:\n{}", captured);
     }
 
     // RS3: cmd_rebase_stack rebases a child branch correctly when its parent PR was
@@ -829,7 +969,7 @@ mod tests {
         });
 
         let result = crate::commands::cmd_rebase_stack(
-            Some(&fake), "o", "r", &store, &repo, &git_dir, None, false,
+            Some(&fake), "o", "r", &store, &repo, &git_dir, None, &|_| {},
         );
         assert!(result.is_ok(), "cmd_rebase_stack must succeed: {:?}", result);
 
@@ -947,7 +1087,7 @@ mod tests {
         });
 
         let result = crate::commands::cmd_rebase_stack(
-            Some(&fake), "o", "r", &store, &repo, &git_dir, None, false,
+            Some(&fake), "o", "r", &store, &repo, &git_dir, None, &|_| {},
         );
         assert!(result.is_ok(), "cmd_rebase_stack must succeed: {:?}", result);
 

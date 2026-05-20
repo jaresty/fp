@@ -75,6 +75,7 @@ pub fn rebase_stack(branches: &[String], parent_of: &HashMap<String, Option<Stri
     }
 
     // Fetch to get latest remote state before rebasing
+    debug("git fetch origin (network)");
     std::process::Command::new("git")
         .args(["fetch", "origin"])
         .current_dir(dir)
@@ -181,6 +182,7 @@ pub fn rebase_stack(branches: &[String], parent_of: &HashMap<String, Option<Stri
                     .args(["merge-base", "--is-ancestor", parent, &origin_base])
                     .current_dir(dir).output()?.status.success();
                 // Squash/rebase merge: remote branch is gone (use ls-remote for authoritative check)
+                debug(&format!("git ls-remote origin {} (network)", parent));
                 let ls_remote_out = std::process::Command::new("git")
                     .args(["ls-remote", "--exit-code", "--heads", "origin", parent])
                     .current_dir(dir).output()?;
@@ -324,7 +326,8 @@ pub fn rebase_stack(branches: &[String], parent_of: &HashMap<String, Option<Stri
                     "{}: diff vs parent changed after rebase — review carefully", branch
                 ));
             }
-            progress(&format!("pushing {}", branch));
+            progress(&format!("[fp] git push --force-with-lease {} (network)", branch));
+            debug(&format!("git push --force-with-lease {} (network)", branch));
             let push = std::process::Command::new("git")
                 .args(["push", "origin", branch, "--force-with-lease"])
                 .current_dir(&wt_path)

@@ -486,7 +486,7 @@ pub fn cmd_rebase_stack(
     dir: &std::path::Path,
     git_dir: &std::path::Path,
     from_pr: Option<u64>,
-    verbose: bool,
+    on_progress: &dyn Fn(&str),
 ) -> anyhow::Result<String> {
     let mut state = store.load()?;
     if state.tracked.is_empty() {
@@ -494,11 +494,7 @@ pub fn cmd_rebase_stack(
     }
 
     let mut out = String::new();
-    let debug_fn: Box<dyn Fn(&str)> = if verbose {
-        Box::new(|s: &str| eprintln!("[fp verbose] {}", s))
-    } else {
-        Box::new(|_: &str| {})
-    };
+    let debug_fn: Box<dyn Fn(&str)> = Box::new(|s: &str| on_progress(&format!("[fp verbose] {}", s)));
 
     // Handle merged PRs
     if let Some(client) = client {
@@ -506,8 +502,11 @@ pub fn cmd_rebase_stack(
         let cached_base_of: std::collections::HashMap<String, String> = state.tracked_prs().iter().map(|p| (p.branch.clone(), p.base.clone())).collect();
         let parent_of = crate::stack::detect_parent_of(&all_branches, dir, &cached_base_of, &|_| {})?;
         let mut merged_prs: Vec<(u64, String)> = Vec::new();
+        on_progress("[fp] checking merged PRs (GitHub API)");
         for pr in state.tracked_prs() {
+            on_progress(&format!("[fp] fetch_pr_is_merged PR #{} (GitHub API)", pr.number));
             if client.fetch_pr_is_merged(owner, repo, pr.number).unwrap_or(false) {
+                on_progress(&format!("[fp] fetch head SHA for merged PR #{} (GitHub API)", pr.number));
                 let (head_sha, base_ref) = client.fetch_pr_head_sha_and_base(owner, repo, pr.number)?;
                 for (branch, parent) in &parent_of {
                     if parent.as_deref() == Some(&pr.branch) {
@@ -616,7 +615,7 @@ pub fn cmd_rebase_stack(
         )
     } else { std::collections::HashMap::new() };
 
-    let result = crate::stack::rebase_stack(&branches, &parent_of, &base_of, dir, &|msg| eprintln!("{}", msg), debug_fn.as_ref())?;
+    let result = crate::stack::rebase_stack(&branches, &parent_of, &base_of, dir, &|msg| on_progress(msg), debug_fn.as_ref())?;
 
     for branch in &result.rebased { out.push_str(&format!("✓ rebased {}\n", branch)); }
     for branch in &result.conflicts {
