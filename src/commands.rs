@@ -338,3 +338,15 @@ pub fn cmd_edit(client: &dyn crate::github::GithubClientTrait, owner: &str, repo
     client.update_pr(owner, repo, pr, title.as_deref(), body.as_deref())?;
     Ok(format!("✓ PR #{} updated", pr))
 }
+
+pub fn cmd_new(branch: &str, base: &str, dir: &std::path::Path) -> anyhow::Result<String> {
+    let wt_path = crate::worktree::worktree_path(dir, branch);
+    std::process::Command::new("git")
+        .args(["fetch", "origin", base])
+        .current_dir(dir).output()?;
+    let out = std::process::Command::new("git")
+        .args(["worktree", "add", wt_path.to_str().unwrap_or(""), "-b", branch, &format!("origin/{}", base)])
+        .current_dir(dir).output()?;
+    anyhow::ensure!(out.status.success(), "git worktree add failed: {}", String::from_utf8_lossy(&out.stderr));
+    Ok(crate::display::format_new_worktree_output(&wt_path, branch))
+}

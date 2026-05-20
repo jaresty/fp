@@ -432,4 +432,39 @@ mod tests {
         let result = crate::commands::cmd_edit(&fake, "owner", "repo", 7, None, Some("explicit body".to_string()), vec![]);
         assert!(result.is_ok(), "cmd_edit must succeed with explicit body: {:?}", result);
     }
+
+    #[test]
+    fn cmd_new_creates_worktree_at_expected_path() {
+        let tmp = tempfile::tempdir().unwrap();
+        let origin = tmp.path().join("origin.git");
+        let repo = tmp.path().join("myrepo");
+        std::fs::create_dir_all(&origin).unwrap();
+        std::fs::create_dir_all(&repo).unwrap();
+        // create bare origin with a main branch
+        std::process::Command::new("git").args(["init", "--bare"]).current_dir(&origin).output().unwrap();
+        std::process::Command::new("git").args(["init"]).current_dir(&repo).output().unwrap();
+        std::process::Command::new("git").args(["config", "user.email", "test@test.com"]).current_dir(&repo).output().unwrap();
+        std::process::Command::new("git").args(["config", "user.name", "Test"]).current_dir(&repo).output().unwrap();
+        std::process::Command::new("git").args(["remote", "add", "origin", origin.to_str().unwrap()]).current_dir(&repo).output().unwrap();
+        std::fs::write(repo.join("init.txt"), "init").unwrap();
+        std::process::Command::new("git").args(["add", "."]).current_dir(&repo).output().unwrap();
+        std::process::Command::new("git").args(["commit", "-m", "init"]).current_dir(&repo).output().unwrap();
+        std::process::Command::new("git").args(["push", "origin", "HEAD:main"]).current_dir(&repo).output().unwrap();
+
+        let result = crate::commands::cmd_new("feat/my-branch", "main", &repo);
+        assert!(result.is_ok(), "cmd_new must succeed: {:?}", result);
+        let output = result.unwrap();
+        assert!(output.contains("feat/my-branch"), "cmd_new output must mention branch: {}", output);
+        let wt_path = crate::worktree::worktree_path(&repo, "feat/my-branch");
+        assert!(wt_path.exists(), "cmd_new must create worktree at {:?}", wt_path);
+    }
+
+    #[test]
+    fn cmd_new_errors_when_git_worktree_add_fails() {
+        let tmp = tempfile::tempdir().unwrap();
+        let not_a_repo = tmp.path().join("notrepo");
+        std::fs::create_dir_all(&not_a_repo).unwrap();
+        let result = crate::commands::cmd_new("feat/x", "main", &not_a_repo);
+        assert!(result.is_err(), "cmd_new must error in non-git directory");
+    }
 }

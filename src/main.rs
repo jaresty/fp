@@ -560,16 +560,7 @@ fn main() -> Result<()> {
         }
 
         Commands::New { branch, base } => {
-            let root = repo_root()?;
-            let wt_path = worktree::worktree_path(&root, &branch);
-            std::process::Command::new("git")
-                .args(["fetch", "origin", &base])
-                .output()?;
-            let out = std::process::Command::new("git")
-                .args(["worktree", "add", wt_path.to_str().unwrap_or(""), "-b", &branch, &format!("origin/{}", base)])
-                .output()?;
-            anyhow::ensure!(out.status.success(), "git worktree add failed: {}", String::from_utf8_lossy(&out.stderr));
-            print!("{}", format_new_worktree_output(&wt_path, &branch));
+            print!("{}", commands::cmd_new(&branch, &base, &repo_root()?)?);
         }
 
         Commands::Root => {
