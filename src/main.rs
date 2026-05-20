@@ -58,7 +58,6 @@ use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
 use github::{GithubClient, detect_repo, resolve_github_token, resolve_track_branch};
 use store::{Store, PrCache};
-use tasks::{generate_tasks, task_diff};
 
 
 #[derive(Parser)]
@@ -321,8 +320,6 @@ pub use worktree::{locked_subtree, subtree_branches, worktree_branch_mismatch, f
 
 pub use display::{format_adopt_message, format_new_worktree_output, repo_header, format_single_pr_status, format_worktree_add_error, format_conflict_hint};
 
-use platform::notify_macos_titled;
-
 use worktree::{git_dir, repo_root, require_repo};
 
 fn main() -> Result<()> {
@@ -414,87 +411,20 @@ fn main() -> Result<()> {
         }
 
         Commands::Watch { once, interval, json, wait_for } => {
-            let mut prev_tasks: std::collections::HashMap<u64, Vec<tasks::Task>> = std::collections::HashMap::new();
-            loop {
-                let state = store.load()?;
-                let token = std::env::var("GITHUB_TOKEN").ok();
-                let repo = detect_repo();
-                let pr_numbers: Vec<u64> = state.tracked.iter().copied().collect();
-                let fetched: std::collections::HashMap<u64, model::PrState> =
-                    if let (Some(tok), Some((owner, repo_name))) = (&token, &repo) {
-                        let client = GithubClient::new(tok.clone());
-                        client.fetch_prs_parallel(owner, repo_name, &pr_numbers)
-                            .into_iter().map(|p| (p.number, p)).collect()
-                    } else {
-                        std::collections::HashMap::new()
-                    };
-
-                // Refresh cache from API
-                let new_cache: std::collections::HashMap<u64, PrCache> = fetched.values()
-                    .filter(|p| state.tracked.contains(&p.number))
-                    .map(|p| (p.number, PrCache { number: p.number, title: p.title.clone(), branch: p.branch.clone(), base: p.base.clone() }))
-                    .collect();
-                let _ = store.replace_cache(new_cache);
-                let state = store.load()?;
-
-                let prs = state.tracked_prs();
-                let tree_prefixes: std::collections::HashMap<u64, String> =
-                    stack_tree_order(&prs).into_iter().collect();
-
-                let mut all_tasks: Vec<tasks::Task> = Vec::new();
-                for cached in &prs {
-                    let mut pr_state = fetched.get(&cached.number).cloned()
-                        .unwrap_or_else(|| model::PrState {
-                            number: cached.number,
-                            title: cached.title.clone(),
-                            branch: cached.branch.clone(),
-                            base: cached.base.clone(), head_sha: "".into(), draft: false, approved: false,
-                            checks: vec![], threads: vec![], needs_parent_rebase: false, has_merge_conflict: false, codeowners_eligibility: Default::default(),
-                        });
-                    if let (Some(tok), Some((owner, repo_name))) = (&token, &repo)
-                        && let Some(parent) = prs.iter().find(|p| p.branch == pr_state.base).and_then(|p| fetched.get(&p.number))
-                        && !parent.head_sha.is_empty() && !pr_state.head_sha.is_empty() {
-                        pr_state.needs_parent_rebase = GithubClient::new(tok.clone())
-                            .is_head_behind_base(owner, repo_name, &parent.head_sha, &pr_state.head_sha);
-                    }
-                    let curr = generate_tasks(&pr_state);
-                    all_tasks.extend(curr.clone());
-
-                    let prev = prev_tasks.get(&cached.number).map(|v| v.as_slice()).unwrap_or(&[]);
-                    let (new, resolved) = task_diff(prev, &curr);
-
-                    if prev_tasks.contains_key(&cached.number) {
-                        if json {
-                            println!("{}", format_watch_event_json(cached.number, &new, &resolved));
-                        } else {
-                            for t in &new {
-                                let flag = if t.blocking { "[blocking]" } else { "[waiting]" };
-                                println!("+ PR #{} {} {:?}: {}", cached.number, flag, t.task_type, t.description);
-                            }
-                            for t in &resolved {
-                                println!("✓ PR #{} resolved {:?}: {}", cached.number, t.task_type, t.description);
-                            }
-                            for (title, msg) in watch_notification_messages(cached.number, &new, &resolved) {
-                                notify_macos_titled(&title, &msg);
-                            }
-                        }
-                    } else {
-                        let lock = worktree::lock_status(&git_dir, &cached.branch);
-                        let prefix = tree_prefixes.get(&cached.number).cloned().unwrap_or_default();
-                        print!("{}{}", prefix, format_watch_initial_state(cached.number, &cached.title, &curr, json, lock.as_deref(), &prefix));
-                    }
-                    prev_tasks.insert(cached.number, curr);
-                }
-
-                if let Some(ref condition) = wait_for {
-                    if tasks::is_wait_condition_met(condition, &all_tasks) {
-                        break;
-                    }
-                } else if once {
-                    break;
-                }
-                if !once { std::thread::sleep(std::time::Duration::from_secs(interval)); }
-            }
+            let token = std::env::var("GITHUB_TOKEN").ok();
+            let repo = detect_repo();
+            let (client, owner, repo_name): (Option<GithubClient>, String, String) =
+                if let (Some(tok), Some((o, r))) = (token, repo) {
+                    (Some(GithubClient::new(tok)), o, r)
+                } else {
+                    (None, String::new(), String::new())
+                };
+            let out = commands::cmd_watch(
+                client.as_ref().map(|c| c as &dyn github::GithubClientTrait),
+                &owner, &repo_name,
+                &store, &git_dir, once, interval, json, wait_for,
+            )?;
+            print!("{}", out);
         }
 
         Commands::Create { title, base, body, demo, restack_before, insert_after } => {

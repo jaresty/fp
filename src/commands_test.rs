@@ -581,6 +581,99 @@ mod tests {
     }
 
     #[test]
+    fn cmd_watch_once_empty_store_returns_ok() {
+        let tmp = tempfile::tempdir().unwrap();
+        let git_dir = tmp.path().join(".git");
+        std::fs::create_dir_all(&git_dir).unwrap();
+        let store = crate::store::Store::open(&git_dir);
+        let fake = crate::github::FakeGithubClient::new();
+        let result = crate::commands::cmd_watch(
+            Some(&fake), "", "", &store, &git_dir, true, 5, false, None,
+        );
+        assert!(result.is_ok(), "cmd_watch with empty store must succeed: {:?}", result);
+    }
+
+    #[test]
+    fn cmd_watch_once_with_tracked_pr_returns_initial_state_output() {
+        let tmp = tempfile::tempdir().unwrap();
+        let git_dir = tmp.path().join(".git");
+        std::fs::create_dir_all(&git_dir).unwrap();
+        let store = crate::store::Store::open(&git_dir);
+        store.track(42).unwrap();
+        store.update_cache(crate::store::PrCache { number: 42, title: "my PR".into(), branch: "feat/test".into(), base: "main".into() }).unwrap();
+        let fake = crate::github::FakeGithubClient::new_with_pr(42, "feat/test", "my PR", "main");
+        let result = crate::commands::cmd_watch(
+            Some(&fake), "", "", &store, &git_dir, true, 5, false, None,
+        );
+        assert!(result.is_ok(), "cmd_watch must succeed with tracked PR: {:?}", result);
+        let out = result.unwrap();
+        assert!(out.contains("my PR"), "output must contain PR title 'my PR': {}", out);
+    }
+
+    #[test]
+    fn cmd_watch_once_wait_for_never_exits_when_condition_unmet() {
+        // with once=true, should exit after one iteration regardless of wait_for
+        let tmp = tempfile::tempdir().unwrap();
+        let git_dir = tmp.path().join(".git");
+        std::fs::create_dir_all(&git_dir).unwrap();
+        let store = crate::store::Store::open(&git_dir);
+        let fake = crate::github::FakeGithubClient::new();
+        let result = crate::commands::cmd_watch(
+            Some(&fake), "", "", &store, &git_dir, true, 5, false, Some("all-ready".into()),
+        );
+        assert!(result.is_ok(), "cmd_watch with once=true and unmet wait_for must still return ok: {:?}", result);
+    }
+
+    #[test]
+    fn cmd_watch_detects_needs_parent_rebase_when_child_behind_parent() {
+        let tmp = tempfile::tempdir().unwrap();
+        let git_dir = tmp.path().join(".git");
+        std::fs::create_dir_all(&git_dir).unwrap();
+        let store = crate::store::Store::open(&git_dir);
+        // parent PR #1, child PR #2 whose base is the parent branch
+        store.track(1).unwrap();
+        store.update_cache(crate::store::PrCache { number: 1, title: "parent".into(), branch: "feat/parent".into(), base: "main".into() }).unwrap();
+        store.track(2).unwrap();
+        store.update_cache(crate::store::PrCache { number: 2, title: "child".into(), branch: "feat/child".into(), base: "feat/parent".into() }).unwrap();
+
+        let mut fake = crate::github::FakeGithubClient::new();
+        // parent has non-empty SHA so is_head_behind_base check runs
+        fake.set_pr(1, crate::model::PrState {
+            number: 1, title: "parent".into(), branch: "feat/parent".into(), base: "main".into(),
+            head_sha: "parent_sha".into(), draft: false, approved: false,
+            checks: vec![], threads: vec![], needs_parent_rebase: false, has_merge_conflict: false,
+            codeowners_eligibility: Default::default(),
+        });
+        fake.set_pr(2, crate::model::PrState {
+            number: 2, title: "child".into(), branch: "feat/child".into(), base: "feat/parent".into(),
+            head_sha: "child_sha".into(), draft: false, approved: false,
+            checks: vec![], threads: vec![], needs_parent_rebase: false, has_merge_conflict: false,
+            codeowners_eligibility: Default::default(),
+        });
+        fake.head_behind = true; // child is behind parent
+
+        let result = crate::commands::cmd_watch(
+            Some(&fake), "owner", "repo", &store, &git_dir, true, 5, false, None,
+        );
+        assert!(result.is_ok(), "cmd_watch must succeed: {:?}", result);
+        let out = result.unwrap();
+        assert!(out.contains("parent PR has new commits"), "output must surface rebase task: {}", out);
+    }
+
+    #[test]
+    fn cmd_watch_once_returns_ok() {
+        let tmp = tempfile::tempdir().unwrap();
+        let git_dir = tmp.path().join(".git");
+        std::fs::create_dir_all(&git_dir).unwrap();
+        let store = crate::store::Store::open(&git_dir);
+        let fake = crate::github::FakeGithubClient::new();
+        let result = crate::commands::cmd_watch(
+            None, "", "", &store, &git_dir, true, 5, false, None,
+        );
+        assert!(result.is_ok(), "cmd_watch with no client must succeed: {:?}", result);
+    }
+
+    #[test]
     fn cmd_rebase_stack_returns_up_to_date_when_no_tracked_prs() {
         let tmp = tempfile::tempdir().unwrap();
         let git_dir = tmp.path().join("git_dir");
