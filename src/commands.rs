@@ -326,3 +326,15 @@ pub fn cmd_ls(store: &crate::store::Store, owner: &str, repo: &str, json: bool) 
     }
     Ok(out)
 }
+
+pub fn cmd_track(client: &dyn crate::github::GithubClientTrait, owner: &str, repo: &str, pr: u64, title: Option<String>, _branch: Option<String>) -> anyhow::Result<(String, String, String)> {
+    let (fetched_title, fetched_branch) = client.fetch_pr_metadata(owner, repo, pr).unwrap_or_default();
+    let base = client.fetch_pr_base(owner, repo, pr).unwrap_or_default();
+    let resolved_title = title.unwrap_or_else(|| if fetched_title.is_empty() { format!("PR #{}", pr) } else { fetched_title });
+    Ok((resolved_title, fetched_branch, base))
+}
+
+pub fn cmd_edit(client: &dyn crate::github::GithubClientTrait, owner: &str, repo: &str, pr: u64, title: Option<String>, body: Option<String>, _demo: Vec<String>) -> anyhow::Result<String> {
+    client.update_pr(owner, repo, pr, title.as_deref(), body.as_deref())?;
+    Ok(format!("✓ PR #{} updated", pr))
+}

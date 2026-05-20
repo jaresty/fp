@@ -655,6 +655,11 @@ pub struct FakeGithubClient {
 #[cfg(test)]
 impl FakeGithubClient {
     pub fn new() -> Self { Self { prs: std::collections::HashMap::new(), checks: std::collections::HashMap::new() } }
+    pub fn new_with_pr(number: u64, branch: &str, title: &str, base: &str) -> Self {
+        let mut client = Self::new();
+        client.set_pr(number, PrState { number, title: title.into(), branch: branch.into(), base: base.into(), head_sha: String::new(), draft: false, approved: false, checks: vec![], threads: vec![], needs_parent_rebase: false, has_merge_conflict: false, codeowners_eligibility: Default::default() });
+        client
+    }
     pub fn set_pr(&mut self, number: u64, pr: PrState) { self.prs.insert(number, pr); }
     pub fn set_checks(&mut self, sha: &str, checks: Vec<Check>) { self.checks.insert(sha.into(), checks); }
 }

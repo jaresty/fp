@@ -350,27 +350,16 @@ fn main() -> Result<()> {
         }
 
         Commands::Track { pr, title, branch } => {
-            let (title, resolved_branch, base) = {
-                let token = resolve_github_token().ok();
-                let repo = detect_repo();
-                let (fetched_title, fetched_branch, fetched_base) = if let (Some(tok), Some((owner, repo_name))) = (token, repo) {
-                    let client = GithubClient::new(tok);
-                    client.fetch_pr_metadata(&owner, &repo_name, pr).ok()
-                        .map(|(t, b)| {
-                            let base = client.fetch_pr_base(&owner, &repo_name, pr).unwrap_or_default();
-                            (Some(t), Some(b), base)
-                        })
-                        .unwrap_or((None, None, String::new()))
-                } else {
-                    (None, None, String::new())
-                };
-                let resolved_title = title.or(fetched_title).unwrap_or_else(|| format!("PR #{}", pr));
-                let resolved_branch = resolve_track_branch(branch, fetched_branch, pr)?;
-                (resolved_title, resolved_branch, fetched_base)
+            let (resolved_title, fetched_branch, base) = if let (Some(tok), Some((owner, repo_name))) = (resolve_github_token().ok(), detect_repo()) {
+                let client = GithubClient::new(tok);
+                commands::cmd_track(&client, &owner, &repo_name, pr, title.clone(), branch.clone())?
+            } else {
+                (title.clone().unwrap_or_else(|| format!("PR #{}", pr)), String::new(), String::new())
             };
+            let resolved_branch = resolve_track_branch(branch, Some(fetched_branch).filter(|b| !b.is_empty()), pr)?;
             store.track(pr)?;
-            store.update_cache(PrCache { number: pr, title: title.clone(), branch: resolved_branch, base })?;
-            println!("Tracking PR #{} — {}", pr, title);
+            store.update_cache(PrCache { number: pr, title: resolved_title.clone(), branch: resolved_branch, base })?;
+            println!("Tracking PR #{} — {}", pr, resolved_title);
         }
 
         Commands::Untrack { pr } => {
@@ -415,15 +404,13 @@ fn main() -> Result<()> {
                 body
             } else {
                 let demo_urls = resolve_demo_urls(&client, &owner, &repo_name, &demo)?;
-                // Fetch current PR body if --body not provided, so we don't discard it
                 let base_body = match body {
                     Some(ref b) => b.clone(),
                     None => client.fetch_pr_body(&owner, &repo_name, pr)?,
                 };
                 Some(github::inject_demo_section(&base_body, &demo_urls))
             };
-            client.update_pr(&owner, &repo_name, pr, title.as_deref(), final_body.as_deref())?;
-            println!("✓ PR #{} updated", pr);
+            println!("{}", commands::cmd_edit(&client, &owner, &repo_name, pr, title, final_body, vec![])?);
         }
 
         Commands::Watch { once, interval, json, wait_for } => {

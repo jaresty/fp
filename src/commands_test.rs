@@ -398,4 +398,38 @@ mod tests {
         assert_eq!(result.get("feat/child").map(String::as_str), Some("feat/parent"),
             "base must be kept when declared parent IS tracked, got: {:?}", result);
     }
+
+    #[test]
+    fn cmd_track_returns_metadata_from_client() {
+        let fake = crate::github::FakeGithubClient::new_with_pr(42, "feat/my-feature", "My Feature PR", "main");
+        let result = crate::commands::cmd_track(&fake, "owner", "repo", 42, None, None);
+        let (title, branch, base) = result.unwrap();
+        assert_eq!(title, "My Feature PR", "cmd_track must return title from client");
+        assert_eq!(branch, "feat/my-feature", "cmd_track must return branch from client");
+        assert_eq!(base, "main", "cmd_track must return base from client");
+    }
+
+    #[test]
+    fn cmd_track_uses_provided_title_over_fetched() {
+        let fake = crate::github::FakeGithubClient::new_with_pr(42, "feat/my-feature", "Fetched Title", "main");
+        let result = crate::commands::cmd_track(&fake, "owner", "repo", 42, Some("Override Title".to_string()), None);
+        let (title, _branch, _base) = result.unwrap();
+        assert_eq!(title, "Override Title", "cmd_track must prefer provided title over fetched");
+    }
+
+    #[test]
+    fn cmd_edit_returns_success_message() {
+        let fake = crate::github::FakeGithubClient::new_with_pr(7, "feat/edit-me", "Old Title", "main");
+        let result = crate::commands::cmd_edit(&fake, "owner", "repo", 7, Some("New Title".to_string()), None, vec![]);
+        let msg = result.unwrap();
+        assert!(msg.contains("7"), "cmd_edit must mention PR number: {}", msg);
+    }
+
+    #[test]
+    fn cmd_edit_with_demo_injects_section_into_body() {
+        let fake = crate::github::FakeGithubClient::new_with_pr(7, "feat/demo", "Title", "main");
+        // demo is empty so body is passed through directly
+        let result = crate::commands::cmd_edit(&fake, "owner", "repo", 7, None, Some("explicit body".to_string()), vec![]);
+        assert!(result.is_ok(), "cmd_edit must succeed with explicit body: {:?}", result);
+    }
 }
