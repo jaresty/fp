@@ -15,6 +15,7 @@ pub mod upload;
 pub mod platform;
 pub mod commands;
 pub mod process_store;
+pub mod app_config;
 
 #[cfg(test)]
 mod tasks_test;
@@ -56,6 +57,8 @@ mod commands_test;
 mod profile_test;
 #[cfg(test)]
 mod process_store_test;
+#[cfg(test)]
+mod app_config_test;
 
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
@@ -256,6 +259,16 @@ enum Commands {
         /// Branch name (not PR number)
         branch: String,
     },
+    /// Manage app lifecycle configs (bootstrap, teardown, health check)
+    App {
+        #[command(subcommand)]
+        subcommand: AppCommands,
+    },
+    /// Manage per-PR overrides (config assignment, etc.)
+    Pr {
+        #[command(subcommand)]
+        subcommand: PrCommands,
+    },
     /// Print the main repo root directory (works from inside a worktree)
     Root,
     /// Install the fps shell function for the current shell (fish, zsh, or bash)
@@ -272,6 +285,28 @@ enum Commands {
         /// Alternative output path (overrides default ~/.claude/skills/fp/SKILL.md)
         #[arg(long)]
         path: Option<std::path::PathBuf>,
+    },
+}
+
+#[derive(Subcommand)]
+enum AppCommands {
+    /// Assign a named app config to all PRs on a repo
+    SetConfig {
+        /// Repository slug (e.g. acme/payments-api)
+        repo: String,
+        /// Name of the app config to assign
+        config_name: String,
+    },
+}
+
+#[derive(Subcommand)]
+enum PrCommands {
+    /// Override the app config for a specific PR
+    SetConfig {
+        /// PR number
+        pr: u64,
+        /// Name of the app config to assign
+        config_name: String,
     },
 }
 
@@ -451,6 +486,26 @@ fn main() -> Result<()> {
 
         Commands::New { branch, base } => {
             print!("{}", commands::cmd_new(&branch, &base, &repo_root()?)?);
+        }
+
+        Commands::App { subcommand } => {
+            let store = app_config::AppConfigStore::open(app_config::AppConfigStore::default_path()?);
+            match subcommand {
+                AppCommands::SetConfig { repo, config_name } => {
+                    let out = commands::cmd_app_set_config(&store, &repo, &config_name)?;
+                    println!("{}", out);
+                }
+            }
+        }
+
+        Commands::Pr { subcommand } => {
+            let store = app_config::AppConfigStore::open(app_config::AppConfigStore::default_path()?);
+            match subcommand {
+                PrCommands::SetConfig { pr, config_name } => {
+                    let out = commands::cmd_pr_set_config(&store, pr, &config_name)?;
+                    println!("{}", out);
+                }
+            }
         }
 
         Commands::Root => {

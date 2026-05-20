@@ -1442,4 +1442,28 @@ mod tests {
         assert_eq!(mid_count, 1,
             "feat/mid must have exactly 1 commit above main after rebase, got {}:\n{}", mid_count, mid_str);
     }
+
+    // CLI: fp app set-config saves repo→config-name and exits ok
+    #[test]
+    fn cmd_app_set_config_governs_saves_repo_assignment() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = crate::app_config::AppConfigStore::open(dir.path().join("config.toml"));
+        let result = crate::commands::cmd_app_set_config(&store, "acme/payments-api", "payments-api");
+        assert!(result.is_ok(), "cmd_app_set_config must succeed: {:?}", result);
+        let assigned = store.get_repo_config("acme/payments-api").unwrap();
+        assert_eq!(assigned, Some("payments-api".to_string()),
+            "cmd_app_set_config must persist repo assignment, got: {:?}", assigned);
+    }
+
+    // CLI: fp pr set-config saves pr→config-name and exits ok
+    #[test]
+    fn cmd_pr_set_config_governs_saves_pr_assignment() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = crate::app_config::AppConfigStore::open(dir.path().join("config.toml"));
+        let result = crate::commands::cmd_pr_set_config(&store, 123, "payments-api");
+        assert!(result.is_ok(), "cmd_pr_set_config must succeed: {:?}", result);
+        let assigned = store.get_pr_config(123).unwrap();
+        assert_eq!(assigned, Some("payments-api".to_string()),
+            "cmd_pr_set_config must persist PR assignment, got: {:?}", assigned);
+    }
 }

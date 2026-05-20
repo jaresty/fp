@@ -738,3 +738,13 @@ pub fn cmd_watch(
 
     Ok(out)
 }
+
+pub fn cmd_app_set_config(store: &crate::app_config::AppConfigStore, repo: &str, config_name: &str) -> anyhow::Result<String> {
+    store.set_repo_config(repo, config_name)?;
+    Ok(format!("Assigned config '{}' to repo '{}'", config_name, repo))
+}
+
+pub fn cmd_pr_set_config(store: &crate::app_config::AppConfigStore, pr: u64, config_name: &str) -> anyhow::Result<String> {
+    store.set_pr_config(pr, config_name)?;
+    Ok(format!("Assigned config '{}' to PR #{}", config_name, pr))
+}
