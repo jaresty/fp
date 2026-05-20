@@ -748,3 +748,26 @@ pub fn cmd_pr_set_config(store: &crate::app_config::AppConfigStore, pr: u64, con
     store.set_pr_config(pr, config_name)?;
     Ok(format!("Assigned config '{}' to PR #{}", config_name, pr))
 }
+
+pub fn cmd_feature_new(ps: &crate::process_store::ProcessStateStore, name: &str) -> anyhow::Result<String> {
+    crate::feature::feature_new(ps, name)?;
+    Ok(format!("Created feature envelope '{}'", name))
+}
+
+pub fn cmd_feature_list(ps: &crate::process_store::ProcessStateStore) -> anyhow::Result<String> {
+    let list = crate::feature::feature_list(ps)?;
+    if list.is_empty() {
+        return Ok("No feature envelopes.".to_string());
+    }
+    let mut out = String::new();
+    for f in &list {
+        out.push_str(&format!("  {} ({} PR(s)): {}\n", f.name, f.prs.len(),
+            f.prs.iter().map(|p| format!("#{}", p)).collect::<Vec<_>>().join(", ")));
+    }
+    Ok(out.trim_end().to_string())
+}
+
+pub fn cmd_feature_add(ps: &crate::process_store::ProcessStateStore, store: &crate::store::Store, name: &str, pr: u64) -> anyhow::Result<String> {
+    crate::feature::feature_add(ps, store, name, pr)?;
+    Ok(format!("Added PR #{} to feature '{}'", pr, name))
+}

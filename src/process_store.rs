@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::PathBuf;
 use anyhow::Result;
@@ -16,6 +16,8 @@ pub struct ProcessRecord {
 #[derive(Debug, Default, Serialize, Deserialize)]
 pub struct ProcessState {
     pub records: HashMap<u64, ProcessRecord>,
+    #[serde(default)]
+    pub feature_envelopes: HashSet<String>,
 }
 
 pub struct ProcessStateStore {
@@ -39,6 +41,15 @@ impl ProcessStateStore {
         let json = fs::read_to_string(&self.path)?;
         let state = serde_json::from_str(&json)?;
         Ok(state)
+    }
+
+    pub fn save_state(&self, state: ProcessState) -> Result<()> {
+        let json = serde_json::to_string_pretty(&state)?;
+        if let Some(parent) = self.path.parent() {
+            fs::create_dir_all(parent)?;
+        }
+        fs::write(&self.path, json)?;
+        Ok(())
     }
 
     pub fn activate(&self, record: ProcessRecord) -> Result<()> {

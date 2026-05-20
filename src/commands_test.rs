@@ -1466,4 +1466,28 @@ mod tests {
         assert_eq!(assigned, Some("payments-api".to_string()),
             "cmd_pr_set_config must persist PR assignment, got: {:?}", assigned);
     }
+
+    // CLI: fp feature new creates envelope
+    #[test]
+    fn cmd_feature_new_governs_creates_envelope() {
+        let dir = tempfile::tempdir().unwrap();
+        let ps = crate::process_store::ProcessStateStore::open(dir.path().join("process-state.json"));
+        let result = crate::commands::cmd_feature_new(&ps, "auth-refactor");
+        assert!(result.is_ok(), "cmd_feature_new must succeed: {:?}", result);
+        let list = crate::feature::feature_list(&ps).unwrap();
+        assert!(list.iter().any(|f| f.name == "auth-refactor"),
+            "cmd_feature_new must create envelope, got: {:?}", list);
+    }
+
+    // CLI: fp feature list returns output
+    #[test]
+    fn cmd_feature_list_governs_returns_output() {
+        let dir = tempfile::tempdir().unwrap();
+        let ps = crate::process_store::ProcessStateStore::open(dir.path().join("process-state.json"));
+        crate::feature::feature_new(&ps, "my-feature").unwrap();
+        let result = crate::commands::cmd_feature_list(&ps);
+        assert!(result.is_ok(), "cmd_feature_list must succeed: {:?}", result);
+        assert!(result.unwrap().contains("my-feature"),
+            "cmd_feature_list output must contain 'my-feature'");
+    }
 }

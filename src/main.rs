@@ -16,6 +16,7 @@ pub mod platform;
 pub mod commands;
 pub mod process_store;
 pub mod app_config;
+pub mod feature;
 
 #[cfg(test)]
 mod tasks_test;
@@ -59,6 +60,8 @@ mod profile_test;
 mod process_store_test;
 #[cfg(test)]
 mod app_config_test;
+#[cfg(test)]
+mod feature_test;
 
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
@@ -259,6 +262,11 @@ enum Commands {
         /// Branch name (not PR number)
         branch: String,
     },
+    /// Manage feature envelopes (groups of PRs activated together)
+    Feature {
+        #[command(subcommand)]
+        subcommand: FeatureCommands,
+    },
     /// Manage app lifecycle configs (bootstrap, teardown, health check)
     App {
         #[command(subcommand)]
@@ -286,6 +294,16 @@ enum Commands {
         #[arg(long)]
         path: Option<std::path::PathBuf>,
     },
+}
+
+#[derive(Subcommand)]
+enum FeatureCommands {
+    /// Create a new feature envelope
+    New { name: String },
+    /// Add a PR to a feature envelope (auto-tracks if untracked)
+    Add { name: String, pr: u64 },
+    /// List feature envelopes and their member PRs
+    List,
 }
 
 #[derive(Subcommand)]
@@ -486,6 +504,25 @@ fn main() -> Result<()> {
 
         Commands::New { branch, base } => {
             print!("{}", commands::cmd_new(&branch, &base, &repo_root()?)?);
+        }
+
+        Commands::Feature { subcommand } => {
+            let ps = process_store::ProcessStateStore::open(process_store::ProcessStateStore::default_path()?);
+            match subcommand {
+                FeatureCommands::New { name } => {
+                    let out = commands::cmd_feature_new(&ps, &name)?;
+                    println!("{}", out);
+                }
+                FeatureCommands::Add { name, pr } => {
+                    let store = Store::open(&git_dir);
+                    let out = commands::cmd_feature_add(&ps, &store, &name, pr)?;
+                    println!("{}", out);
+                }
+                FeatureCommands::List => {
+                    let out = commands::cmd_feature_list(&ps)?;
+                    println!("{}", out);
+                }
+            }
         }
 
         Commands::App { subcommand } => {
