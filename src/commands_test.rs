@@ -732,4 +732,95 @@ mod tests {
         let msg = result.unwrap();
         assert!(msg.contains("up to date"), "must say up to date: {}", msg);
     }
+
+    // RS3: cmd_rebase_stack rebases a child branch correctly when its parent PR was
+    // squash-merged into main but was NOT tracked by fp (untracked squash-merged parent).
+    // The child should end up with only its own commits on top of main, not parent+child.
+    #[test]
+    fn cmd_rebase_stack_rebases_child_after_untracked_parent_squash_merged() {
+        use std::process::Command;
+
+        let tmp = tempfile::tempdir().unwrap();
+        let remote = tmp.path().join("remote");
+        let repo = tmp.path().join("repo");
+        std::fs::create_dir_all(&remote).unwrap();
+        std::fs::create_dir_all(&repo).unwrap();
+        let git_dir = repo.join(".git");
+
+        Command::new("git").args(["init", "--bare", "-b", "main"]).current_dir(&remote).output().unwrap();
+        Command::new("git").args(["init", "-b", "main"]).current_dir(&repo).output().unwrap();
+        Command::new("git").args(["config", "user.email", "t@t.com"]).current_dir(&repo).output().unwrap();
+        Command::new("git").args(["config", "user.name", "T"]).current_dir(&repo).output().unwrap();
+        Command::new("git").args(["remote", "add", "origin", remote.to_str().unwrap()]).current_dir(&repo).output().unwrap();
+
+        let git = |args: &[&str]| Command::new("git").args(args).current_dir(&repo).output().unwrap();
+
+        // M: initial commit on main
+        std::fs::write(repo.join("main.txt"), "main\n").unwrap();
+        git(&["add", "."]);
+        git(&["commit", "-m", "M"]);
+        git(&["push", "-u", "origin", "main"]);
+
+        // feat/parent: P1 creates runner.ts="v1", P2 changes it to "v2" — untracked in fp.
+        // Squash will land "v2" on main. Replaying P1 (which "adds" runner.ts="v1") onto
+        // main (which has "v2") produces an add/add conflict — that's the bug.
+        git(&["checkout", "-b", "feat/parent"]);
+        std::fs::write(repo.join("runner.ts"), "v1\n").unwrap();
+        git(&["add", "."]);
+        git(&["commit", "-m", "P1: add runner.ts v1"]);
+        std::fs::write(repo.join("runner.ts"), "v2\n").unwrap();
+        git(&["add", "."]);
+        git(&["commit", "-m", "P2: update runner.ts to v2"]);
+        git(&["push", "-u", "origin", "feat/parent"]);
+
+        // Record feat/parent tip before squash
+        let parent_tip = String::from_utf8(
+            Command::new("git").args(["rev-parse", "feat/parent"]).current_dir(&repo).output().unwrap().stdout
+        ).unwrap().trim().to_string();
+
+        // feat/child: stacked on feat/parent. Unique commit C1 modifies runner.ts v2→v3.
+        git(&["checkout", "-b", "feat/child"]);
+        std::fs::write(repo.join("runner.ts"), "v3\n").unwrap();
+        git(&["add", "."]);
+        git(&["commit", "-m", "C1: update runner.ts to v3"]);
+        git(&["push", "-u", "origin", "feat/child"]);
+
+        // Squash-merge feat/parent into main with "(#42)" in message
+        git(&["checkout", "main"]);
+        git(&["merge", "--squash", "feat/parent"]);
+        git(&["commit", "-m", "squash: feat/parent (#42)"]);
+        git(&["push", "origin", "main"]);
+        git(&["fetch", "origin"]);
+
+        // fp state: tracks feat/child (PR #99) but NOT feat/parent (#42)
+        let store = crate::store::Store::open(&git_dir);
+        store.track(99).unwrap();
+        store.update_cache(crate::store::PrCache {
+            number: 99, title: "Child".into(), branch: "feat/child".into(), base: "main".into()
+        }).unwrap();
+
+        // FakeGithubClient knows PR #42 (untracked) with the parent tip sha
+        let mut fake = crate::github::FakeGithubClient::new_with_pr(99, "feat/child", "Child", "main");
+        fake.set_pr(42, crate::model::PrState {
+            number: 42, title: "Parent".into(), branch: "feat/parent".into(), base: "main".into(),
+            head_sha: parent_tip.clone(),
+            draft: false, approved: false, checks: vec![], threads: vec![],
+            needs_parent_rebase: false, has_merge_conflict: false,
+            codeowners_eligibility: Default::default(),
+        });
+
+        let result = crate::commands::cmd_rebase_stack(
+            Some(&fake), "o", "r", &store, &repo, &git_dir, None, false,
+        );
+        assert!(result.is_ok(), "cmd_rebase_stack must succeed: {:?}", result);
+
+        // feat/child must have exactly 1 commit on top of main (C1 only, not P1+P2+C1)
+        let log = Command::new("git")
+            .args(["log", "--oneline", "origin/main..feat/child"])
+            .current_dir(&repo).output().unwrap();
+        let log_str = String::from_utf8_lossy(&log.stdout);
+        let commit_count = log_str.trim().lines().filter(|l| !l.is_empty()).count();
+        assert_eq!(commit_count, 1,
+            "feat/child must have exactly 1 commit (C1) above main after rebase, got {}:\n{}", commit_count, log_str);
+    }
 }

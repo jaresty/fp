@@ -528,6 +528,57 @@ pub fn cmd_rebase_stack(
             out.push_str(&format!("✓ untracked merged PR #{}\n", number));
         }
         state = store.load()?;
+
+        // Detect untracked squash-merged PRs whose tip is an ancestor of a tracked branch.
+        // Scenario: parent PR was merged but not tracked by fp; child branch still has parent
+        // commits in its history. Replaying those commits causes add/add conflicts. Fix: find the
+        // squash commit on origin/main, look up the PR's head SHA via API, and use it as the
+        // --onto cut point so only child-unique commits are replayed.
+        let current_branches: Vec<String> = state.tracked_prs().iter().map(|p| p.branch.clone()).collect();
+        let oldest_mb = current_branches.iter()
+            .filter_map(|b| {
+                std::process::Command::new("git")
+                    .args(["merge-base", b, "origin/main"])
+                    .current_dir(dir).output().ok()
+                    .and_then(|o| String::from_utf8(o.stdout).ok())
+                    .map(|s| s.trim().to_string())
+                    .filter(|s| !s.is_empty())
+            })
+            .min_by_key(|sha| {
+                std::process::Command::new("git")
+                    .args(["rev-list", "--count", sha])
+                    .current_dir(dir).output().ok()
+                    .and_then(|o| String::from_utf8(o.stdout).ok())
+                    .and_then(|s| s.trim().parse::<usize>().ok())
+                    .unwrap_or(usize::MAX)
+            })
+            .unwrap_or_default();
+        if !oldest_mb.is_empty() {
+            let pr_numbers = crate::stack::squash_pr_numbers_since("origin/main", &oldest_mb, dir);
+            for pr_num in pr_numbers {
+                if state.tracked.contains(&pr_num) { continue; }
+                let Ok((head_sha, base_ref)) = client.fetch_pr_head_sha_and_base(owner, repo, pr_num) else { continue; };
+                let _ = std::process::Command::new("git")
+                    .args(["fetch", "origin", &head_sha])
+                    .current_dir(dir).output();
+                for branch in &current_branches {
+                    let is_ancestor = std::process::Command::new("git")
+                        .args(["merge-base", "--is-ancestor", &head_sha, branch])
+                        .current_dir(dir).output()
+                        .map(|o| o.status.success())
+                        .unwrap_or(false);
+                    if is_ancestor {
+                        if let Some(warn) = crate::worktree::check_branch_lock(git_dir, branch) {
+                            out.push_str(&format!("{}\n", warn)); continue;
+                        }
+                        match crate::stack::rebase_onto_after_merge(branch, &head_sha, &base_ref, dir) {
+                            Ok(()) => out.push_str(&format!("✓ rebased {} after untracked squash of PR #{}\n", branch, pr_num)),
+                            Err(e) => out.push_str(&format!("✗ failed to rebase {} after squash of PR #{}: {}\n", branch, pr_num, e)),
+                        }
+                    }
+                }
+            }
+        }
     }
 
     let all_branches: Vec<String> = state.tracked_prs().iter().map(|p| p.branch.clone()).collect();

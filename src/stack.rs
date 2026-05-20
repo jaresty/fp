@@ -516,6 +516,23 @@ pub fn detect_parent_of(branches: &[String], dir: &Path, base_of: &HashMap<Strin
     Ok(parent_of)
 }
 
+/// Parses PR numbers from "(#N)" patterns in git log subject lines between since_sha and base_ref.
+pub fn squash_pr_numbers_since(base_ref: &str, since_sha: &str, dir: &std::path::Path) -> Vec<u64> {
+    let Ok(out) = std::process::Command::new("git")
+        .args(["log", "--format=%s", &format!("{}..{}", since_sha, base_ref)])
+        .current_dir(dir)
+        .output() else { return vec![]; };
+    String::from_utf8_lossy(&out.stdout)
+        .lines()
+        .filter_map(|line| {
+            let start = line.rfind("(#")?;
+            let rest = &line[start + 2..];
+            let end = rest.find(')')?;
+            rest[..end].parse::<u64>().ok()
+        })
+        .collect()
+}
+
 /// Squash-safe single-branch rebase: rebase `branch` onto `new_base`, replacing `old_base`.
 /// Uses the branch's worktree if one exists; otherwise checks out in the main worktree.
 pub fn rebase_branch_onto(branch: &str, old_base: &str, new_base: &str, dir: &std::path::Path) -> anyhow::Result<()> {
