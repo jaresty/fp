@@ -14,6 +14,7 @@ pub mod merge;
 pub mod upload;
 pub mod platform;
 pub mod commands;
+pub mod process_store;
 
 #[cfg(test)]
 mod tasks_test;
@@ -53,6 +54,8 @@ mod notify_ext_test;
 mod commands_test;
 #[cfg(test)]
 mod profile_test;
+#[cfg(test)]
+mod process_store_test;
 
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};

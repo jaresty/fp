@@ -911,14 +911,20 @@ mod tests {
 
         git(&["checkout", "main"]);
         git(&["merge", "--squash", "feat/parent"]);
-        git(&["commit", "-m", "squash: feat/parent (#42)"]);
+        // Explicit future date so --since=<child_tip_date> finds this squash commit deterministically.
+        Command::new("git").args(["commit", "--date=2024-01-02T12:00:00", "-m", "squash: feat/parent (#42)"])
+            .env("GIT_COMMITTER_DATE", "2024-01-02T12:00:00")
+            .current_dir(&repo).output().unwrap();
         git(&["push", "origin", "main"]);
 
         // feat/child tracks PR #99, NOT #42; forked from feat/parent so squash commit is its ancestor
         git(&["checkout", "-b", "feat/child", "feat/parent"]);
         std::fs::write(repo.join("c.txt"), "c\n").unwrap();
         git(&["add", "."]);
-        git(&["commit", "-m", "C: add c.txt"]);
+        // Explicit past date so min_tip_date < squash commit date, making --since find the squash.
+        Command::new("git").args(["commit", "--date=2024-01-01T12:00:00", "-m", "C: add c.txt"])
+            .env("GIT_COMMITTER_DATE", "2024-01-01T12:00:00")
+            .current_dir(&repo).output().unwrap();
         git(&["push", "-u", "origin", "feat/child"]);
         git(&["checkout", "main"]);
         git(&["fetch", "origin"]);
