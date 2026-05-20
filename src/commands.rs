@@ -502,17 +502,10 @@ pub fn cmd_rebase_stack(
         let cached_base_of: std::collections::HashMap<String, String> = state.tracked_prs().iter().map(|p| (p.branch.clone(), p.base.clone())).collect();
         let parent_of = crate::stack::detect_parent_of(&all_branches, dir, &cached_base_of, &|_| {})?;
         let mut merged_prs: Vec<(u64, String)> = Vec::new();
-        let mut min_created_at: Option<String> = None;
         on_progress("[fp] checking merged PRs (GitHub API)");
         for pr in state.tracked_prs() {
             on_progress(&format!("[fp] fetch_pr_is_merged PR #{} (GitHub API)", pr.number));
-            let (is_merged, created_at) = client.fetch_pr_is_merged(owner, repo, pr.number).unwrap_or((false, None));
-            if let Some(ref date) = created_at {
-                min_created_at = Some(match min_created_at {
-                    None => date.clone(),
-                    Some(ref prev) => if date < prev { date.clone() } else { prev.clone() },
-                });
-            }
+            let (is_merged, _) = client.fetch_pr_is_merged(owner, repo, pr.number).unwrap_or((false, None));
             if is_merged {
                 on_progress(&format!("[fp] fetch head SHA for merged PR #{} (GitHub API)", pr.number));
                 let (head_sha, base_ref) = client.fetch_pr_head_sha_and_base(owner, repo, pr.number)?;
@@ -542,11 +535,20 @@ pub fn cmd_rebase_stack(
         // squash commit on origin/main, look up the PR's head SHA via API, and use it as the
         // --onto cut point so only child-unique commits are replayed.
         let current_branches: Vec<String> = state.tracked_prs().iter().map(|p| p.branch.clone()).collect();
-        // Use the earliest tracked PR creation date as the lower bound for squash detection.
-        // A parent PR cannot have been squash-merged before the child PR was created, so
-        // scanning further back is wasteful. This avoids the merge-base --octopus computation
-        // and gives a tight, semantically correct bound regardless of branch topology.
-        if let Some(ref since_date) = min_created_at {
+        // Use the oldest tracked branch tip date as the lower bound for squash detection.
+        // Any squash merge of a parent PR must have happened after the branch's last commit —
+        // if the branch has already been rebased past it, no action is needed. This gives a
+        // tight bound that scales with how recently you've been working, regardless of when
+        // the PR was opened or how deep the merge-base is.
+        let min_tip_date: Option<String> = current_branches.iter().filter_map(|branch| {
+            std::process::Command::new("git")
+                .args(["log", "--format=%ci", "-1", branch])
+                .current_dir(dir).output().ok()
+                .and_then(|o| String::from_utf8(o.stdout).ok())
+                .map(|s| s.trim().to_string())
+                .filter(|s| !s.is_empty())
+        }).min();
+        if let Some(ref since_date) = min_tip_date {
             let squash_commits = crate::stack::squash_pr_numbers_since_date("origin/main", since_date, 200, dir);
             let relevant: Vec<(String, u64)> = squash_commits.into_iter()
                 .filter(|(squash_sha, pr_num)| {
