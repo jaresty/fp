@@ -550,9 +550,11 @@ pub fn cmd_rebase_stack(
                 .unwrap_or_default()
         };
         if !oldest_mb.is_empty() {
-            let pr_numbers = crate::stack::squash_pr_numbers_since("origin/main", &oldest_mb, dir);
+            let pr_numbers = crate::stack::squash_pr_numbers_since("origin/main", &oldest_mb, 200, dir);
+            on_progress(&format!("[fp] squash detection: {} untracked PR(s) to check", pr_numbers.iter().filter(|n| !state.tracked.contains(n)).count()));
             for pr_num in pr_numbers {
                 if state.tracked.contains(&pr_num) { continue; }
+                on_progress(&format!("[fp] fetch head SHA for squash PR #{} (GitHub API)", pr_num));
                 let Ok((head_sha, base_ref)) = client.fetch_pr_head_sha_and_base(owner, repo, pr_num) else { continue; };
                 // Do not fetch head_sha from origin — git fetch of a bare SHA can hang on GitHub
                 // when the remote branch has been deleted. The sha is available locally if the

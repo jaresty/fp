@@ -520,9 +520,10 @@ pub fn detect_parent_of(branches: &[String], dir: &Path, base_of: &HashMap<Strin
 }
 
 /// Parses PR numbers from "(#N)" patterns in git log subject lines between since_sha and base_ref.
-pub fn squash_pr_numbers_since(base_ref: &str, since_sha: &str, dir: &std::path::Path) -> Vec<u64> {
+pub fn squash_pr_numbers_since(base_ref: &str, since_sha: &str, max_count: usize, dir: &std::path::Path) -> Vec<u64> {
+    let max_count_arg = format!("--max-count={}", max_count);
     let Ok(out) = std::process::Command::new("git")
-        .args(["log", "--format=%s", &format!("{}..{}", since_sha, base_ref)])
+        .args(["log", "--format=%s", &max_count_arg, &format!("{}..{}", since_sha, base_ref)])
         .current_dir(dir)
         .output() else { return vec![]; };
     String::from_utf8_lossy(&out.stdout)

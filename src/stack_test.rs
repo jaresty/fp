@@ -1,6 +1,6 @@
 #[cfg(test)]
 mod tests {
-    use crate::stack::{stack_order, detect_parent_of, rebase_stack};
+    use crate::stack::{stack_order, detect_parent_of, rebase_stack, squash_pr_numbers_since};
     use std::collections::HashMap;
 
     // RS1: linear stack A <- B <- C returns [A, B, C] (parent first)
@@ -2413,6 +2413,38 @@ mod tests {
         assert_eq!(commit_count, 1,
             "feat/child must have exactly 1 commit on top of feat/parent (C1 only), got {} commits:\n{}",
             commit_count, log_str);
+    }
+
+    // SQ1: squash_pr_numbers_since respects max_count — with 2 squash commits in range,
+    // calling with max_count=1 returns at most 1 result.
+    #[test]
+    fn squash_pr_numbers_since_respects_max_count() {
+        use std::process::Command;
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path();
+        Command::new("git").args(["init", "-b", "main"]).current_dir(dir).output().unwrap();
+        Command::new("git").args(["config", "user.email", "t@t.com"]).current_dir(dir).output().unwrap();
+        Command::new("git").args(["config", "user.name", "T"]).current_dir(dir).output().unwrap();
+        let git = |args: &[&str]| Command::new("git").args(args).current_dir(dir).output().unwrap();
+
+        std::fs::write(dir.join("base.txt"), "base\n").unwrap();
+        git(&["add", "."]);
+        git(&["commit", "-m", "initial"]);
+        let since_sha = String::from_utf8(
+            Command::new("git").args(["rev-parse", "HEAD"]).current_dir(dir).output().unwrap().stdout
+        ).unwrap().trim().to_string();
+
+        // Two squash-merge commits in range
+        std::fs::write(dir.join("a.txt"), "a\n").unwrap();
+        git(&["add", "."]);
+        git(&["commit", "-m", "squash: feat/a (#10)"]);
+        std::fs::write(dir.join("b.txt"), "b\n").unwrap();
+        git(&["add", "."]);
+        git(&["commit", "-m", "squash: feat/b (#20)"]);
+
+        let result = squash_pr_numbers_since("HEAD", &since_sha, 1, dir);
+        assert!(result.len() <= 1,
+            "max_count=1 must return at most 1 result; got {} results: {:?}", result.len(), result);
     }
 
 }
