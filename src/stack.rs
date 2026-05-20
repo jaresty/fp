@@ -167,8 +167,10 @@ pub fn rebase_stack(branches: &[String], parent_of: &HashMap<String, Option<Stri
                 .args(["rev-parse", "--verify", parent])
                 .current_dir(dir).output()?.status.success();
             if parent_exists {
-                // Regular merge: parent's tip is an ancestor of origin/<base>
-                let is_ancestor = std::process::Command::new("git")
+                // Regular merge: parent's tip is an ancestor of origin/<base>.
+                // Skip when origin_base IS origin/<parent>: is_ancestor would be trivially true
+                // after a force-push (local == remote), causing a false positive for stacked PRs.
+                let is_ancestor = origin_base != format!("origin/{}", parent) && std::process::Command::new("git")
                     .args(["merge-base", "--is-ancestor", parent, &origin_base])
                     .current_dir(dir).output()?.status.success();
                 // Squash/rebase merge: remote branch is gone (use ls-remote for authoritative check)

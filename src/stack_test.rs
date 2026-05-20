@@ -2304,4 +2304,115 @@ mod tests {
             "feat/child must have feat/parent as parent, got: {:?}", parent_of.get("feat/child"));
     }
 
+    // RS_STACKED_ONTO: when a stacked child's parent has multiple commits and was force-pushed
+    // (local == origin/parent), is_ancestor(parent, origin/parent) fires trivially → false-positive
+    // parent_merged_into_base → rev-list | last() returns oldest parent commit as cut point →
+    // rebase replays ALL parent commits plus child commits instead of child-only commits.
+    // Fix: skip is_ancestor when origin_base == "origin/<parent>" (parent is still alive).
+    #[test]
+    fn rebase_stack_stacked_child_replays_only_its_own_commits_when_parent_force_pushed() {
+        use std::process::Command;
+        use tempfile::TempDir;
+
+        let remote_dir = TempDir::new().unwrap();
+        Command::new("git").args(["init", "--bare", "-b", "main"])
+            .current_dir(remote_dir.path()).output().unwrap();
+
+        let dir = TempDir::new().unwrap();
+        let path = dir.path();
+        let git = |args: &[&str]| Command::new("git").args(args).current_dir(path).output().unwrap();
+        let base_env = [("GIT_AUTHOR_NAME","t"),("GIT_AUTHOR_EMAIL","t@t"),("GIT_COMMITTER_NAME","t"),("GIT_COMMITTER_EMAIL","t@t")];
+        let git_env = |args: &[&str], extra: &[(&str, &str)]| {
+            let mut c = Command::new("git"); c.args(args).current_dir(path);
+            for (k, v) in &base_env { c.env(k, v); }
+            for (k, v) in extra { c.env(k, v); }
+            c.output().unwrap()
+        };
+
+        git(&["init", "-b", "main"]);
+        git(&["config", "user.email", "t@t.com"]);
+        git(&["config", "user.name", "T"]);
+        git(&["remote", "add", "origin", remote_dir.path().to_str().unwrap()]);
+
+        // M: shared.txt = "v1"
+        std::fs::write(path.join("shared.txt"), "v1\n").unwrap();
+        git(&["add", "."]);
+        git_env(&["commit", "-m", "M"], &[]);
+        git(&["push", "-u", "origin", "main"]);
+
+        // feat/parent: P1 changes shared.txt "v1"→"parent-v2"; P2 changes it "parent-v2"→"parent-v3"
+        // (P2 depends on P1's content); P3 adds independent p3.txt
+        git(&["checkout", "-b", "feat/parent"]);
+        std::fs::write(path.join("shared.txt"), "parent-v2\n").unwrap();
+        git(&["add", "."]);
+        git_env(&["commit", "-m", "P1-change-shared"], &[]);
+        std::fs::write(path.join("shared.txt"), "parent-v3\n").unwrap();
+        git(&["add", "."]);
+        git_env(&["commit", "-m", "P2-change-shared-again"], &[]);
+        std::fs::write(path.join("p3.txt"), "p3\n").unwrap();
+        git(&["add", "."]);
+        git_env(&["commit", "-m", "P3"], &[]);
+        git(&["push", "-u", "origin", "feat/parent"]);
+
+        // feat/child stacked on feat/parent: ONE commit C1 (unique file, no conflict)
+        git(&["checkout", "-b", "feat/child"]);
+        std::fs::write(path.join("c.txt"), "child\n").unwrap();
+        git(&["add", "."]);
+        git_env(&["commit", "-m", "C1"], &[]);
+        git(&["push", "-u", "origin", "feat/child"]);
+
+        // main advances: changes shared.txt to "main-v2" (conflicts with P1's "parent-v2")
+        git(&["checkout", "main"]);
+        std::fs::write(path.join("shared.txt"), "main-v2\n").unwrap();
+        git(&["add", "."]);
+        git_env(&["commit", "-m", "M2-change-shared"], &[]);
+        git(&["push", "origin", "main"]);
+
+        // Rebase feat/parent onto new main with conflict resolution:
+        // P1 conflicts (main-v2 vs parent-v2) → resolve as "resolved-v3"
+        // P2 then conflicts (expects parent-v2 base, sees resolved-v3) → resolve as "resolved-v4"
+        git(&["checkout", "feat/parent"]);
+        git(&["fetch", "origin"]);
+        let r = git_env(&["rebase", "origin/main"], &[]);
+        if !r.status.success() {
+            std::fs::write(path.join("shared.txt"), "resolved-v3\n").unwrap();
+            git(&["add", "shared.txt"]);
+            let r2 = git_env(&["rebase", "--continue"], &[("GIT_EDITOR", "true")]);
+            if !r2.status.success() {
+                std::fs::write(path.join("shared.txt"), "resolved-v4\n").unwrap();
+                git(&["add", "shared.txt"]);
+                git_env(&["rebase", "--continue"], &[("GIT_EDITOR", "true")]);
+            }
+        }
+        git(&["push", "--force-with-lease", "origin", "feat/parent"]);
+        git(&["fetch", "origin"]);  // local feat/parent == origin/feat/parent now
+
+        git(&["checkout", "main"]);
+
+        // feat/child: parent=feat/parent (alive), base=feat/parent (3-deep stack)
+        // base_of[feat/child] = "feat/parent" → resolve_root_parent = "origin/feat/parent"
+        // → is_ancestor(feat/parent, origin/feat/parent) = true (equal after fetch) → false positive
+        let branches = vec!["feat/child".to_string()];
+        let mut parent_of = std::collections::HashMap::new();
+        parent_of.insert("feat/child".to_string(), Some("feat/parent".to_string()));
+        let mut base_of = std::collections::HashMap::new();
+        base_of.insert("feat/child".to_string(), "feat/parent".to_string());
+
+        let result = rebase_stack(&branches, &parent_of, &base_of, path, &|_| {}, &|_| {}).unwrap();
+        assert!(result.conflicts.is_empty(),
+            "no conflicts expected, got: {:?}", result.conflicts);
+        assert!(result.rebased.contains(&"feat/child".to_string()),
+            "feat/child must be rebased, got: {:?}", result.rebased);
+
+        // feat/child must have exactly 1 commit on top of feat/parent (C1 only, NOT P1+P2+P3+C1)
+        let log = Command::new("git")
+            .args(["log", "--oneline", "feat/parent..feat/child"])
+            .current_dir(path).output().unwrap();
+        let log_str = String::from_utf8_lossy(&log.stdout);
+        let commit_count = log_str.trim().lines().count();
+        assert_eq!(commit_count, 1,
+            "feat/child must have exactly 1 commit on top of feat/parent (C1 only), got {} commits:\n{}",
+            commit_count, log_str);
+    }
+
 }
