@@ -457,18 +457,9 @@ impl GithubClient {
             }
         }
 
-        // 4. Reviews → approval
+        // 4. Reviews → threads; approval from mergeable_state (GitHub's own verdict)
         let reviews_json = self.get_paginated(&format!("/repos/{}/{}/pulls/{}/reviews", owner, repo, pr_number))?;
-        let any_approved = reviews_json
-            .as_array()
-            .unwrap_or(&vec![])
-            .iter()
-            .any(|r| r["state"].as_str() == Some("APPROVED"));
-        let rr = self.get(&format!("/repos/{}/{}/pulls/{}/requested_reviewers", owner, repo, pr_number))
-            .unwrap_or_default();
-        let rr_users = rr["users"].as_array().map(|a| a.len()).unwrap_or(0);
-        let rr_teams = rr["teams"].as_array().map(|a| a.len()).unwrap_or(0);
-        let approved = any_approved && rr_users == 0 && rr_teams == 0;
+        let approved = matches!(pr_json["mergeable_state"].as_str(), Some("clean") | Some("unstable"));
 
         // 4b. Review bodies → threads (CHANGES_REQUESTED/COMMENTED with non-empty body, non-bot, non-author)
         let pr_author = pr_json["user"]["login"].as_str().unwrap_or("").to_string();

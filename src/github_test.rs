@@ -512,7 +512,7 @@ mod tests {
             .mock("GET", "/repos/owner/repo/pulls/8")
             .with_status(200)
             .with_header("content-type", "application/json")
-            .with_body(r#"{"number":8,"title":"t","draft":false,"head":{"ref":"b"},"user":{"login":"author"}}"#)
+            .with_body(r#"{"number":8,"title":"t","draft":false,"head":{"ref":"b"},"user":{"login":"author"},"mergeable_state":"clean"}"#)
             .create();
         server
             .mock("GET", "/repos/owner/repo/commits/b/check-runs")
@@ -551,7 +551,7 @@ mod tests {
             .mock("GET", "/repos/owner/repo/pulls/9")
             .with_status(200)
             .with_header("content-type", "application/json")
-            .with_body(r#"{"number":9,"title":"t","draft":false,"head":{"ref":"b"},"user":{"login":"author"}}"#)
+            .with_body(r#"{"number":9,"title":"t","draft":false,"head":{"ref":"b"},"user":{"login":"author"},"mergeable_state":"blocked"}"#)
             .create();
         server
             .mock("GET", "/repos/owner/repo/commits/b/check-runs")
@@ -1157,7 +1157,7 @@ mod tests {
 
         server.mock("GET", "/repos/owner/repo/pulls/45")
             .with_status(200).with_header("content-type", "application/json")
-            .with_body(r#"{"number":45,"title":"t","draft":false,"head":{"ref":"b"},"user":{"login":"author"}}"#)
+            .with_body(r#"{"number":45,"title":"t","draft":false,"head":{"ref":"b"},"user":{"login":"author"},"mergeable_state":"clean"}"#)
             .create();
         server.mock("GET", "/repos/owner/repo/commits/b/check-runs")
             .with_status(200).with_header("content-type", "application/json")
@@ -1670,6 +1670,114 @@ mod tests {
 
         let pr = mock_client(&server).fetch_pr("owner", "repo", 99).unwrap();
         assert!(!pr.approved, "approved must be false when teams are still pending in requested_reviewers");
+    }
+
+    // RR2: bot users in requested_reviewers are ignored; approved is true when only bots are pending
+    #[test]
+    fn approved_true_when_only_bot_users_pending_in_requested_reviewers() {
+        let mut server = mockito::Server::new();
+        server.mock("GET", "/repos/owner/repo/pulls/99")
+            .with_status(200).with_header("content-type","application/json")
+            .with_body(r#"{"number":99,"title":"t","draft":false,"head":{"ref":"b","sha":"sha99"},"base":{"ref":"main"},"user":{"login":"author"},"mergeable_state":"clean"}"#)
+            .create();
+        server.mock("GET", "/repos/owner/repo/commits/b/check-runs")
+            .with_status(200).with_header("content-type","application/json")
+            .with_body(r#"{"check_runs":[]}"#).create();
+        server.mock("GET", "/repos/owner/repo/branches/main/protection")
+            .with_status(200).with_header("content-type","application/json")
+            .with_body(r#"{"required_status_checks":{"contexts":[]}}"#).create();
+        server.mock("GET", "/repos/owner/repo/branches/b/protection")
+            .with_status(404).create();
+        server.mock("GET", "/repos/owner/repo/commits/sha99/statuses")
+            .with_status(200).with_header("content-type","application/json")
+            .with_body(r#"[]"#).create();
+        server.mock("GET", "/repos/owner/repo/pulls/99/reviews?per_page=100&page=1")
+            .with_status(200).with_header("content-type","application/json")
+            .with_body(r#"[{"state":"APPROVED","user":{"login":"reviewer1","type":"User"}}]"#).create();
+        server.mock("GET", "/repos/owner/repo/pulls/99/comments?per_page=100&page=1")
+            .with_status(200).with_header("content-type","application/json")
+            .with_body(r#"[]"#).create();
+        server.mock("GET", "/repos/owner/repo/issues/99/comments?per_page=100&page=1")
+            .with_status(200).with_header("content-type","application/json").with_body(r#"[]"#).create();
+
+        let pr = mock_client(&server).fetch_pr("owner", "repo", 99).unwrap();
+        assert!(pr.approved, "approved must be true when only bot users are pending in requested_reviewers, got false");
+    }
+
+    // MS1: approved true when mergeable_state is "clean"
+    #[test]
+    fn approved_true_when_mergeable_state_clean() {
+        let mut server = mockito::Server::new();
+        server.mock("GET", "/repos/owner/repo/pulls/200")
+            .with_status(200).with_header("content-type","application/json")
+            .with_body(r#"{"number":200,"title":"t","draft":false,"head":{"ref":"b","sha":"sha200"},"base":{"ref":"main"},"user":{"login":"author"},"mergeable_state":"clean"}"#)
+            .create();
+        server.mock("GET", "/repos/owner/repo/commits/b/check-runs").with_status(200).with_header("content-type","application/json").with_body(r#"{"check_runs":[]}"#).create();
+        server.mock("GET", "/repos/owner/repo/branches/main/protection").with_status(404).create();
+        server.mock("GET", "/repos/owner/repo/commits/sha200/statuses").with_status(200).with_header("content-type","application/json").with_body(r#"[]"#).create();
+        server.mock("GET", "/repos/owner/repo/pulls/200/reviews?per_page=100&page=1").with_status(200).with_header("content-type","application/json").with_body(r#"[]"#).create();
+        server.mock("GET", "/repos/owner/repo/pulls/200/comments?per_page=100&page=1").with_status(200).with_header("content-type","application/json").with_body(r#"[]"#).create();
+        server.mock("GET", "/repos/owner/repo/issues/200/comments?per_page=100&page=1").with_status(200).with_header("content-type","application/json").with_body(r#"[]"#).create();
+
+        let pr = mock_client(&server).fetch_pr("owner", "repo", 200).unwrap();
+        assert!(pr.approved, "approved must be true when mergeable_state is clean, got false");
+    }
+
+    // MS2: approved true when mergeable_state is "unstable"
+    #[test]
+    fn approved_true_when_mergeable_state_unstable() {
+        let mut server = mockito::Server::new();
+        server.mock("GET", "/repos/owner/repo/pulls/201")
+            .with_status(200).with_header("content-type","application/json")
+            .with_body(r#"{"number":201,"title":"t","draft":false,"head":{"ref":"b","sha":"sha201"},"base":{"ref":"main"},"user":{"login":"author"},"mergeable_state":"unstable"}"#)
+            .create();
+        server.mock("GET", "/repos/owner/repo/commits/b/check-runs").with_status(200).with_header("content-type","application/json").with_body(r#"{"check_runs":[]}"#).create();
+        server.mock("GET", "/repos/owner/repo/branches/main/protection").with_status(404).create();
+        server.mock("GET", "/repos/owner/repo/commits/sha201/statuses").with_status(200).with_header("content-type","application/json").with_body(r#"[]"#).create();
+        server.mock("GET", "/repos/owner/repo/pulls/201/reviews?per_page=100&page=1").with_status(200).with_header("content-type","application/json").with_body(r#"[]"#).create();
+        server.mock("GET", "/repos/owner/repo/pulls/201/comments?per_page=100&page=1").with_status(200).with_header("content-type","application/json").with_body(r#"[]"#).create();
+        server.mock("GET", "/repos/owner/repo/issues/201/comments?per_page=100&page=1").with_status(200).with_header("content-type","application/json").with_body(r#"[]"#).create();
+
+        let pr = mock_client(&server).fetch_pr("owner", "repo", 201).unwrap();
+        assert!(pr.approved, "approved must be true when mergeable_state is unstable, got false");
+    }
+
+    // MS3: approved false when mergeable_state is "blocked"
+    #[test]
+    fn approved_false_when_mergeable_state_blocked() {
+        let mut server = mockito::Server::new();
+        server.mock("GET", "/repos/owner/repo/pulls/202")
+            .with_status(200).with_header("content-type","application/json")
+            .with_body(r#"{"number":202,"title":"t","draft":false,"head":{"ref":"b","sha":"sha202"},"base":{"ref":"main"},"user":{"login":"author"},"mergeable_state":"blocked"}"#)
+            .create();
+        server.mock("GET", "/repos/owner/repo/commits/b/check-runs").with_status(200).with_header("content-type","application/json").with_body(r#"{"check_runs":[]}"#).create();
+        server.mock("GET", "/repos/owner/repo/branches/main/protection").with_status(404).create();
+        server.mock("GET", "/repos/owner/repo/commits/sha202/statuses").with_status(200).with_header("content-type","application/json").with_body(r#"[]"#).create();
+        server.mock("GET", "/repos/owner/repo/pulls/202/reviews?per_page=100&page=1").with_status(200).with_header("content-type","application/json").with_body(r#"[]"#).create();
+        server.mock("GET", "/repos/owner/repo/pulls/202/comments?per_page=100&page=1").with_status(200).with_header("content-type","application/json").with_body(r#"[]"#).create();
+        server.mock("GET", "/repos/owner/repo/issues/202/comments?per_page=100&page=1").with_status(200).with_header("content-type","application/json").with_body(r#"[]"#).create();
+
+        let pr = mock_client(&server).fetch_pr("owner", "repo", 202).unwrap();
+        assert!(!pr.approved, "approved must be false when mergeable_state is blocked, got true");
+    }
+
+    // MS4: approved false when mergeable_state is absent (null/missing)
+    #[test]
+    fn approved_false_when_mergeable_state_absent() {
+        let mut server = mockito::Server::new();
+        server.mock("GET", "/repos/owner/repo/pulls/203")
+            .with_status(200).with_header("content-type","application/json")
+            .with_body(r#"{"number":203,"title":"t","draft":false,"head":{"ref":"b","sha":"sha203"},"base":{"ref":"main"},"user":{"login":"author"}}"#)
+            .create();
+        server.mock("GET", "/repos/owner/repo/commits/b/check-runs").with_status(200).with_header("content-type","application/json").with_body(r#"{"check_runs":[]}"#).create();
+        server.mock("GET", "/repos/owner/repo/branches/main/protection").with_status(404).create();
+        server.mock("GET", "/repos/owner/repo/commits/sha203/statuses").with_status(200).with_header("content-type","application/json").with_body(r#"[]"#).create();
+        server.mock("GET", "/repos/owner/repo/pulls/203/reviews?per_page=100&page=1").with_status(200).with_header("content-type","application/json").with_body(r#"[]"#).create();
+        server.mock("GET", "/repos/owner/repo/pulls/203/comments?per_page=100&page=1").with_status(200).with_header("content-type","application/json").with_body(r#"[]"#).create();
+        server.mock("GET", "/repos/owner/repo/issues/203/comments?per_page=100&page=1").with_status(200).with_header("content-type","application/json").with_body(r#"[]"#).create();
+
+        let pr = mock_client(&server).fetch_pr("owner", "repo", 203).unwrap();
+        assert!(!pr.approved, "approved must be false when mergeable_state is absent, got true");
     }
 
     // CR2: create_pr sends body field in POST payload when provided
