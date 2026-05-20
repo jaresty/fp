@@ -476,3 +476,106 @@ pub fn cmd_merge(
     out.push_str(&format!("✓ untracked PR #{}\n", pr));
     Ok(out)
 }
+
+#[allow(clippy::too_many_arguments)]
+pub fn cmd_rebase_stack(
+    client: Option<&dyn crate::github::GithubClientTrait>,
+    owner: &str,
+    repo: &str,
+    store: &crate::store::Store,
+    dir: &std::path::Path,
+    git_dir: &std::path::Path,
+    from_pr: Option<u64>,
+    verbose: bool,
+) -> anyhow::Result<String> {
+    let mut state = store.load()?;
+    if state.tracked.is_empty() {
+        return Ok("No tracked PRs.\n".to_string());
+    }
+
+    let mut out = String::new();
+    let debug_fn: Box<dyn Fn(&str)> = if verbose {
+        Box::new(|s: &str| eprintln!("[fp verbose] {}", s))
+    } else {
+        Box::new(|_: &str| {})
+    };
+
+    // Handle merged PRs
+    if let Some(client) = client {
+        let all_branches: Vec<String> = state.tracked_prs().iter().map(|p| p.branch.clone()).collect();
+        let cached_base_of: std::collections::HashMap<String, String> = state.tracked_prs().iter().map(|p| (p.branch.clone(), p.base.clone())).collect();
+        let parent_of = crate::stack::detect_parent_of(&all_branches, dir, &cached_base_of, &|_| {})?;
+        let mut merged_prs: Vec<(u64, String)> = Vec::new();
+        for pr in state.tracked_prs() {
+            if client.fetch_pr_is_merged(owner, repo, pr.number).unwrap_or(false) {
+                let (head_sha, base_ref) = client.fetch_pr_head_sha_and_base(owner, repo, pr.number)?;
+                for (branch, parent) in &parent_of {
+                    if parent.as_deref() == Some(&pr.branch) {
+                        if let Some(warn) = crate::worktree::check_branch_lock(git_dir, branch) {
+                            out.push_str(&format!("{}\n", warn)); continue;
+                        }
+                        match crate::stack::rebase_onto_after_merge(branch, &head_sha, &base_ref, dir) {
+                            Ok(()) => out.push_str(&format!("✓ rebased {} onto {} (merged PR #{})\n", branch, base_ref, pr.number)),
+                            Err(e) => out.push_str(&format!("✗ failed to rebase {} after merge: {}\n", branch, e)),
+                        }
+                    }
+                }
+                merged_prs.push((pr.number, pr.branch.clone()));
+            }
+        }
+        for (number, branch) in merged_prs {
+            crate::worktree::untrack_and_cleanup(store, dir, git_dir, number, &branch)?;
+            out.push_str(&format!("✓ untracked merged PR #{}\n", number));
+        }
+        state = store.load()?;
+    }
+
+    let all_branches: Vec<String> = state.tracked_prs().iter().map(|p| p.branch.clone()).collect();
+    if all_branches.is_empty() { return Ok(out); }
+    let tracked_set: std::collections::HashSet<String> = all_branches.iter().cloned().collect();
+    let cached_base_of = normalize_base_of(
+        state.tracked_prs().iter().map(|p| (p.branch.clone(), p.base.clone())).collect(),
+        &tracked_set,
+    );
+    let parent_of = crate::stack::detect_parent_of(&all_branches, dir, &cached_base_of, debug_fn.as_ref())?;
+
+    let branches: Vec<String> = if let Some(fp) = from_pr {
+        let start_branch = state.cache.get(&fp)
+            .with_context(|| format!("PR #{} is not tracked", fp))?.branch.clone();
+        crate::worktree::subtree_branches(&start_branch, &parent_of, &all_branches)
+    } else { all_branches };
+
+    let directly_locked: std::collections::HashSet<String> = branches.iter()
+        .filter_map(|b| {
+            crate::worktree::branch_in_main_worktree_warning(b, dir)
+                .or_else(|| crate::worktree::check_branch_lock(git_dir, b))
+                .map(|w| { out.push_str(&format!("{}\n", w)); b.clone() })
+        }).collect();
+    let also_blocked = crate::worktree::locked_subtree(&directly_locked, &parent_of);
+    for b in &also_blocked { out.push_str(&format!("⚠ skipping {} — parent branch is locked\n", b)); }
+    let branches: Vec<String> = branches.into_iter()
+        .filter(|b| !directly_locked.contains(b) && !also_blocked.contains(b)).collect();
+
+    let base_of: std::collections::HashMap<String, String> = if let Some(c) = client {
+        normalize_base_of(
+            c.fetch_prs_as_map(owner, repo, &state.tracked.iter().copied().collect::<Vec<_>>())
+                .into_values().map(|p| (p.branch, p.base)).collect(),
+            &tracked_set,
+        )
+    } else { std::collections::HashMap::new() };
+
+    let result = crate::stack::rebase_stack(&branches, &parent_of, &base_of, dir, &|msg| eprintln!("{}", msg), debug_fn.as_ref())?;
+
+    for branch in &result.rebased { out.push_str(&format!("✓ rebased {}\n", branch)); }
+    for branch in &result.conflicts {
+        out.push_str(&format!("✗ conflict on {} — resolve manually\n", branch));
+        let hint = crate::display::format_conflict_hint(branch, &state.cache);
+        if !hint.is_empty() { out.push_str(&format!("{}\n", hint)); }
+    }
+    if let Some(status) = &result.status_output { out.push_str(&format!("\ngit status:\n{}\n", status)); }
+    for warn in &result.invariant_warnings { out.push_str(&format!("⚠ {}\n", warn)); }
+    if result.rebased.is_empty() && result.conflicts.is_empty() {
+        out.push_str("Stack is already up to date.\n");
+    }
+    Ok(out)
+}

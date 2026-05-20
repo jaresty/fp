@@ -579,4 +579,53 @@ mod tests {
         let state = store.load().unwrap();
         assert!(!state.tracked.contains(&10), "cmd_merge must untrack the PR");
     }
+
+    #[test]
+    fn cmd_rebase_stack_returns_up_to_date_when_no_tracked_prs() {
+        let tmp = tempfile::tempdir().unwrap();
+        let git_dir = tmp.path().join("git_dir");
+        std::fs::create_dir_all(&git_dir).unwrap();
+        let store = crate::store::Store::open(&git_dir);
+        let fake = crate::github::FakeGithubClient::new();
+        let result = crate::commands::cmd_rebase_stack(
+            Some(&fake), "o", "r", &store, tmp.path(), &git_dir, None, false,
+        );
+        assert!(result.is_ok(), "cmd_rebase_stack must succeed: {:?}", result);
+        let msg = result.unwrap();
+        assert!(msg.contains("No tracked PRs"), "must say no tracked PRs: {}", msg);
+    }
+
+    #[test]
+    fn cmd_rebase_stack_returns_up_to_date_when_all_rebased() {
+        // Set up a real git repo with a tracked branch that is already up to date
+        let tmp = tempfile::tempdir().unwrap();
+        let repo = tmp.path().join("repo");
+        std::fs::create_dir_all(&repo).unwrap();
+        let git_dir = repo.join(".git");
+        std::process::Command::new("git").args(["init"]).current_dir(&repo).output().unwrap();
+        std::process::Command::new("git").args(["config", "user.email", "t@t.com"]).current_dir(&repo).output().unwrap();
+        std::process::Command::new("git").args(["config", "user.name", "T"]).current_dir(&repo).output().unwrap();
+        std::fs::write(repo.join("a.txt"), "a").unwrap();
+        std::process::Command::new("git").args(["add", "."]).current_dir(&repo).output().unwrap();
+        std::process::Command::new("git").args(["commit", "-m", "init"]).current_dir(&repo).output().unwrap();
+        // Create feat/x branch
+        std::process::Command::new("git").args(["checkout", "-b", "feat/x"]).current_dir(&repo).output().unwrap();
+        std::fs::write(repo.join("b.txt"), "b").unwrap();
+        std::process::Command::new("git").args(["add", "."]).current_dir(&repo).output().unwrap();
+        std::process::Command::new("git").args(["commit", "-m", "feat"]).current_dir(&repo).output().unwrap();
+        std::process::Command::new("git").args(["checkout", "master"]).current_dir(&repo)
+            .output().unwrap_or_else(|_| std::process::Command::new("git").args(["checkout", "main"]).current_dir(&repo).output().unwrap());
+
+        let store = crate::store::Store::open(&git_dir);
+        store.track(1).unwrap();
+        store.update_cache(crate::store::PrCache { number: 1, title: "X".into(), branch: "feat/x".into(), base: "main".into() }).unwrap();
+        let fake = crate::github::FakeGithubClient::new_with_pr(1, "feat/x", "X", "main");
+
+        let result = crate::commands::cmd_rebase_stack(
+            Some(&fake), "o", "r", &store, &repo, &git_dir, None, false,
+        );
+        assert!(result.is_ok(), "cmd_rebase_stack must succeed: {:?}", result);
+        let msg = result.unwrap();
+        assert!(msg.contains("up to date"), "must say up to date: {}", msg);
+    }
 }

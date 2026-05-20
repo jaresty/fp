@@ -323,7 +323,7 @@ pub use display::{format_adopt_message, format_new_worktree_output, repo_header,
 
 use platform::notify_macos_titled;
 
-use worktree::{git_dir, repo_root, untrack_and_cleanup, require_repo};
+use worktree::{git_dir, repo_root, require_repo};
 
 fn main() -> Result<()> {
     let cli = Cli::parse();
@@ -589,124 +589,15 @@ fn main() -> Result<()> {
         }
 
         Commands::RebaseStack { pr: rebase_from_pr, verbose } => {
-            let mut state = store.load()?;
-            if state.tracked.is_empty() {
-                println!("No tracked PRs.");
-                return Ok(());
-            }
-
-            let main_root = repo_root()?;
-
-            // Handle merged PRs: rebase their children onto the merge target, then untrack
-            if let (Ok(token), Some((owner, repo_name))) = (resolve_github_token(), detect_repo()) {
-                let client = GithubClient::new(token);
-                let all_branches: Vec<String> = state.tracked_prs().iter().map(|p| p.branch.clone()).collect();
-                let cached_base_of: std::collections::HashMap<String, String> = state.tracked_prs().iter().map(|p| (p.branch.clone(), p.base.clone())).collect();
-                let parent_of = stack::detect_parent_of(&all_branches, &main_root, &cached_base_of, &|_| {})?;
-
-                let mut merged_prs: Vec<(u64, String)> = Vec::new();
-                for pr in state.tracked_prs() {
-                    if client.fetch_pr_is_merged(&owner, &repo_name, pr.number).unwrap_or(false) {
-                        let (head_sha, base_ref) = client.fetch_pr_head_sha_and_base(&owner, &repo_name, pr.number)?;
-                        // Find children of this branch and rebase them onto base_ref
-                        for (branch, parent) in &parent_of {
-                            if parent.as_deref() == Some(&pr.branch) {
-                                if let Some(warn) = check_branch_lock(&git_dir, branch) {
-                                    println!("{}", warn);
-                                    continue;
-                                }
-                                match stack::rebase_onto_after_merge(branch, &head_sha, &base_ref, &main_root) {
-                                    Ok(()) => println!("✓ rebased {} onto {} (merged PR #{})", branch, base_ref, pr.number),
-                                    Err(e) => println!("✗ failed to rebase {} after merge: {}", branch, e),
-                                }
-                            }
-                        }
-                        merged_prs.push((pr.number, pr.branch.clone()));
-                    }
-                }
-                for (number, branch) in merged_prs {
-                    untrack_and_cleanup(&store, &repo_root()?, &git_dir, number, &branch)?;
-                    println!("✓ untracked merged PR #{}", number);
-                }
-                state = store.load()?;
-            }
-
-            // Rebase remaining open PRs
-            let all_branches: Vec<String> = state.tracked_prs().iter().map(|p| p.branch.clone()).collect();
-            if all_branches.is_empty() {
-                return Ok(());
-            }
-            let tracked_set: std::collections::HashSet<String> = all_branches.iter().cloned().collect();
-            let cached_base_of = commands::normalize_base_of(
-                state.tracked_prs().iter().map(|p| (p.branch.clone(), p.base.clone())).collect(),
-                &tracked_set,
-            );
-            let debug_fn: Box<dyn Fn(&str)> = if verbose {
-                Box::new(|s: &str| eprintln!("[fp verbose] {}", s))
+            let (client, owner, repo_name) = if let (Ok(tok), Some((o, r))) = (resolve_github_token(), detect_repo()) {
+                let c: Box<dyn github::GithubClientTrait> = Box::new(GithubClient::new(tok));
+                (Some(c), o, r)
             } else {
-                Box::new(|_: &str| {})
+                (None, String::new(), String::new())
             };
-            let parent_of = stack::detect_parent_of(&all_branches, &main_root, &cached_base_of, debug_fn.as_ref())?;
-
-            // If a starting PR is given, restrict to that branch and its descendants
-            let branches: Vec<String> = if let Some(from_pr) = rebase_from_pr {
-                let start_branch = state.cache.get(&from_pr)
-                    .with_context(|| format!("PR #{} is not tracked", from_pr))?
-                    .branch.clone();
-                subtree_branches(&start_branch, &parent_of, &all_branches)
-            } else {
-                all_branches
-            };
-
-            // Skip branches checked out in main worktree (and locked branches) and their descendants
-            let directly_locked: std::collections::HashSet<String> = branches.iter()
-                .filter_map(|b| {
-                    branch_in_main_worktree_warning(b, &main_root)
-                        .or_else(|| check_branch_lock(&git_dir, b))
-                        .map(|w| { println!("{}", w); b.clone() })
-                })
-                .collect();
-            let also_blocked = locked_subtree(&directly_locked, &parent_of);
-            for b in &also_blocked {
-                println!("⚠ skipping {} — parent branch is locked", b);
-            }
-            let branches: Vec<String> = branches.into_iter()
-                .filter(|b| !directly_locked.contains(b) && !also_blocked.contains(b))
-                .collect();
-
-            // Build base_of from parallel fetch (reuses PrState.base, no extra API calls)
-            // Normalize: if a PR's declared base is not a tracked branch, use "main" instead.
-            let rebase_pr_numbers: Vec<u64> = state.tracked.iter().copied().collect();
-            let base_of: std::collections::HashMap<String, String> =
-                if let (Ok(token), Some((owner, repo_name))) = (resolve_github_token(), detect_repo()) {
-                    commands::normalize_base_of(
-                        GithubClient::new(token).fetch_prs_as_map(&owner, &repo_name, &rebase_pr_numbers)
-                            .into_values().map(|p| (p.branch, p.base)).collect(),
-                        &tracked_set,
-                    )
-                } else {
-                    std::collections::HashMap::new()
-                };
-
-            let result = stack::rebase_stack(&branches, &parent_of, &base_of, &main_root, &|msg| eprintln!("{}", msg), debug_fn.as_ref())?;
-
-            for branch in &result.rebased {
-                println!("✓ rebased {}", branch);
-            }
-            for branch in &result.conflicts {
-                println!("✗ conflict on {} — resolve manually", branch);
-                let hint = format_conflict_hint(branch, &state.cache);
-                if !hint.is_empty() { println!("{}", hint); }
-            }
-            if let Some(status) = &result.status_output {
-                println!("\ngit status:\n{}", status);
-            }
-            for warn in &result.invariant_warnings {
-                println!("⚠ {}", warn);
-            }
-            if result.rebased.is_empty() && result.conflicts.is_empty() {
-                println!("Stack is already up to date.");
-            }
+            print!("{}", commands::cmd_rebase_stack(
+                client.as_deref(), &owner, &repo_name, &store, &repo_root()?, &git_dir, rebase_from_pr, verbose,
+            )?);
         }
 
         Commands::Context { pr, hint, full_log } => {
