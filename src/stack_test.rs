@@ -2131,4 +2131,81 @@ mod tests {
         ).unwrap().trim().to_string();
         assert_eq!(child_parent, main_tip, "feat/child must be rebased onto origin/main when declared base is gone");
     }
+
+    // DETECT_PARENT_CYCLE: when a root branch (base_of = "main") is force-pushed so its tip
+    // shares the same merge-base distance as the child branch, topology detection incorrectly
+    // assigns the child as the root's parent → cycle → stack_order returns empty → "Stack is
+    // already up to date". Fix: if base_of[branch] is set but not in branches, return None early.
+    #[test]
+    fn detect_parent_of_root_branch_not_assigned_child_as_parent_after_force_push() {
+        use std::process::Command;
+        use tempfile::TempDir;
+
+        let remote_dir = TempDir::new().unwrap();
+        Command::new("git").args(["init", "--bare", "-b", "main"])
+            .current_dir(remote_dir.path()).output().unwrap();
+
+        let dir = TempDir::new().unwrap();
+        let path = dir.path();
+        let git = |args: &[&str]| Command::new("git").args(args).current_dir(path).output().unwrap();
+        let env = [("GIT_AUTHOR_NAME","t"),("GIT_AUTHOR_EMAIL","t@t"),("GIT_COMMITTER_NAME","t"),("GIT_COMMITTER_EMAIL","t@t")];
+        let git_env = |args: &[&str]| {
+            let mut c = Command::new("git"); c.args(args).current_dir(path);
+            for (k, v) in &env { c.env(k, v); } c.output().unwrap()
+        };
+
+        git(&["init", "-b", "main"]);
+        git(&["config", "user.email", "t@t.com"]);
+        git(&["config", "user.name", "T"]);
+        git(&["remote", "add", "origin", remote_dir.path().to_str().unwrap()]);
+
+        std::fs::write(path.join("base.txt"), "base\n").unwrap();
+        git(&["add", "."]);
+        git_env(&["commit", "-m", "M"]);
+        git(&["push", "-u", "origin", "main"]);
+
+        // feat/parent: P1 pushed
+        git(&["checkout", "-b", "feat/parent"]);
+        std::fs::write(path.join("p.txt"), "parent\n").unwrap();
+        git(&["add", "."]);
+        git_env(&["commit", "-m", "P1"]);
+        git(&["push", "-u", "origin", "feat/parent"]);
+
+        // feat/child stacked on feat/parent: C1 pushed
+        git(&["checkout", "-b", "feat/child"]);
+        std::fs::write(path.join("c.txt"), "child\n").unwrap();
+        git(&["add", "."]);
+        git_env(&["commit", "-m", "C1"]);
+        git(&["push", "-u", "origin", "feat/child"]);
+
+        // main advances, feat/parent is rebased onto new main and force-pushed
+        git(&["checkout", "main"]);
+        std::fs::write(path.join("m2.txt"), "m2\n").unwrap();
+        git(&["add", "."]);
+        git_env(&["commit", "-m", "M2"]);
+        git(&["push", "origin", "main"]);
+
+        git(&["checkout", "feat/parent"]);
+        git(&["fetch", "origin"]);
+        git_env(&["rebase", "origin/main"]);
+        git(&["push", "--force-with-lease", "origin", "feat/parent"]);
+        git(&["fetch", "origin"]);
+
+        git(&["checkout", "main"]);
+
+        // detect_parent_of: feat/parent has base "main" (not in branches), feat/child has base "feat/parent"
+        let branches = vec!["feat/parent".to_string(), "feat/child".to_string()];
+        let mut base_of = std::collections::HashMap::new();
+        base_of.insert("feat/parent".to_string(), "main".to_string());
+        base_of.insert("feat/child".to_string(), "feat/parent".to_string());
+
+        let parent_of = crate::stack::detect_parent_of(&branches, path, &base_of).unwrap();
+
+        // feat/parent must be a root (None), NOT assigned feat/child as parent (cycle)
+        assert_eq!(parent_of.get("feat/parent"), Some(&None),
+            "feat/parent must be root (base=main), got: {:?}", parent_of.get("feat/parent"));
+        assert_eq!(parent_of.get("feat/child"), Some(&Some("feat/parent".to_string())),
+            "feat/child must have feat/parent as parent, got: {:?}", parent_of.get("feat/child"));
+    }
+
 }

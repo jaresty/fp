@@ -421,9 +421,12 @@ pub fn detect_parent_of(branches: &[String], dir: &Path, base_of: &HashMap<Strin
     let mut parent_of: HashMap<String, Option<String>> = HashMap::new();
 
     for branch in branches {
-        if let Some(declared) = base_of.get(branch.as_str())
-            && !declared.is_empty() && branches.iter().any(|b| b == declared) {
-            parent_of.insert(branch.clone(), Some(declared.clone()));
+        if let Some(declared) = base_of.get(branch.as_str()) && !declared.is_empty() {
+            if branches.iter().any(|b| b == declared) {
+                parent_of.insert(branch.clone(), Some(declared.clone()));
+            } else {
+                parent_of.insert(branch.clone(), None);
+            }
             continue;
         }
 
