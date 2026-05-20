@@ -873,6 +873,83 @@ mod tests {
             "verbose output must contain push marker; got:\n{}", captured);
     }
 
+    // VB3: squash detection loop emits a progress marker before each GitHub API call
+    // so the user can see which untracked squash PR lookup is hanging.
+    #[test]
+    fn cmd_rebase_stack_verbose_emits_squash_pr_api_marker() {
+        use std::process::Command;
+
+        let tmp = tempfile::tempdir().unwrap();
+        let remote = tmp.path().join("remote");
+        let repo = tmp.path().join("repo");
+        std::fs::create_dir_all(&remote).unwrap();
+        std::fs::create_dir_all(&repo).unwrap();
+        let git_dir = repo.join(".git");
+
+        Command::new("git").args(["init", "--bare", "-b", "main"]).current_dir(&remote).output().unwrap();
+        Command::new("git").args(["init", "-b", "main"]).current_dir(&repo).output().unwrap();
+        Command::new("git").args(["config", "user.email", "t@t.com"]).current_dir(&repo).output().unwrap();
+        Command::new("git").args(["config", "user.name", "T"]).current_dir(&repo).output().unwrap();
+        Command::new("git").args(["remote", "add", "origin", remote.to_str().unwrap()]).current_dir(&repo).output().unwrap();
+
+        let git = |args: &[&str]| Command::new("git").args(args).current_dir(&repo).output().unwrap();
+
+        std::fs::write(repo.join("main.txt"), "main\n").unwrap();
+        git(&["add", "."]);
+        git(&["commit", "-m", "M"]);
+        git(&["push", "-u", "origin", "main"]);
+
+        // Untracked PR #42 squash-merged into main
+        git(&["checkout", "-b", "feat/parent"]);
+        std::fs::write(repo.join("p.txt"), "p\n").unwrap();
+        git(&["add", "."]);
+        git(&["commit", "-m", "P: add p.txt"]);
+        git(&["push", "-u", "origin", "feat/parent"]);
+        let parent_tip = String::from_utf8(
+            Command::new("git").args(["rev-parse", "feat/parent"]).current_dir(&repo).output().unwrap().stdout
+        ).unwrap().trim().to_string();
+
+        git(&["checkout", "main"]);
+        git(&["merge", "--squash", "feat/parent"]);
+        git(&["commit", "-m", "squash: feat/parent (#42)"]);
+        git(&["push", "origin", "main"]);
+
+        // feat/child tracks PR #99, NOT #42; forked from feat/parent so squash commit is its ancestor
+        git(&["checkout", "-b", "feat/child", "feat/parent"]);
+        std::fs::write(repo.join("c.txt"), "c\n").unwrap();
+        git(&["add", "."]);
+        git(&["commit", "-m", "C: add c.txt"]);
+        git(&["push", "-u", "origin", "feat/child"]);
+        git(&["checkout", "main"]);
+        git(&["fetch", "origin"]);
+
+        let store = crate::store::Store::open(&git_dir);
+        store.track(99).unwrap();
+        store.update_cache(crate::store::PrCache {
+            number: 99, title: "Child".into(), branch: "feat/child".into(), base: "main".into()
+        }).unwrap();
+
+        let mut fake = crate::github::FakeGithubClient::new_with_pr(99, "feat/child", "Child", "main");
+        fake.set_pr(42, crate::model::PrState {
+            number: 42, title: "Parent".into(), branch: "feat/parent".into(), base: "main".into(),
+            head_sha: parent_tip.clone(),
+            draft: false, approved: false, checks: vec![], threads: vec![],
+            needs_parent_rebase: false, has_merge_conflict: false,
+            codeowners_eligibility: Default::default(),
+        });
+
+        let log = std::cell::RefCell::new(Vec::<String>::new());
+        let result = crate::commands::cmd_rebase_stack(
+            Some(&fake), "o", "r", &store, &repo, &git_dir, None,
+            &|msg| log.borrow_mut().push(msg.to_string()),
+        );
+        assert!(result.is_ok(), "cmd_rebase_stack must succeed: {:?}", result);
+        let captured = log.borrow().join("\n");
+
+        assert!(captured.contains("[fp] fetch head SHA for squash PR #42"),
+            "verbose output must contain squash-PR API marker before fetch; got:\n{}", captured);
+    }
+
     // RS3: cmd_rebase_stack rebases a child branch correctly when its parent PR was
     // squash-merged into main but was NOT tracked by fp (untracked squash-merged parent).
     // The child should end up with only its own commits on top of main, not parent+child.

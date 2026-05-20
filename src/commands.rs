@@ -550,10 +550,25 @@ pub fn cmd_rebase_stack(
                 .unwrap_or_default()
         };
         if !oldest_mb.is_empty() {
-            let pr_numbers = crate::stack::squash_pr_numbers_since("origin/main", &oldest_mb, 200, dir);
-            on_progress(&format!("[fp] squash detection: {} untracked PR(s) to check", pr_numbers.iter().filter(|n| !state.tracked.contains(n)).count()));
-            for pr_num in pr_numbers {
-                if state.tracked.contains(&pr_num) { continue; }
+            let squash_commits = crate::stack::squash_pr_numbers_since("origin/main", &oldest_mb, 200, dir);
+            let relevant: Vec<(String, u64)> = squash_commits.into_iter()
+                .filter(|(squash_sha, pr_num)| {
+                    if state.tracked.contains(pr_num) { return false; }
+                    // Only make an API call if the squash commit's parent is an ancestor of at
+                    // least one tracked branch. The squash commit itself is on main (not in any
+                    // branch's history), but its parent is the main commit the branch forked from.
+                    // If that parent is an ancestor of the branch, the branch contains pre-squash
+                    // commits that need rebasing.
+                    let parent_ref = format!("{}^", squash_sha);
+                    current_branches.iter().any(|branch| {
+                        std::process::Command::new("git")
+                            .args(["merge-base", "--is-ancestor", &parent_ref, branch])
+                            .current_dir(dir).status().map(|s| s.success()).unwrap_or(false)
+                    })
+                })
+                .collect();
+            on_progress(&format!("[fp] squash detection: {} ancestor commit(s) to check via API", relevant.len()));
+            for (_, pr_num) in relevant {
                 on_progress(&format!("[fp] fetch head SHA for squash PR #{} (GitHub API)", pr_num));
                 let Ok((head_sha, base_ref)) = client.fetch_pr_head_sha_and_base(owner, repo, pr_num) else { continue; };
                 // Do not fetch head_sha from origin — git fetch of a bare SHA can hang on GitHub

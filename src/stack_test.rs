@@ -2415,6 +2415,38 @@ mod tests {
             commit_count, log_str);
     }
 
+    // SQ0: squash_pr_numbers_since returns (sha, pr_number) tuples
+    #[test]
+    fn squash_pr_numbers_since_returns_sha_with_pr_number() {
+        use std::process::Command;
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path();
+        Command::new("git").args(["init", "-b", "main"]).current_dir(dir).output().unwrap();
+        Command::new("git").args(["config", "user.email", "t@t.com"]).current_dir(dir).output().unwrap();
+        Command::new("git").args(["config", "user.name", "T"]).current_dir(dir).output().unwrap();
+        let git = |args: &[&str]| Command::new("git").args(args).current_dir(dir).output().unwrap();
+
+        std::fs::write(dir.join("base.txt"), "base\n").unwrap();
+        git(&["add", "."]);
+        git(&["commit", "-m", "initial"]);
+        let since_sha = String::from_utf8(
+            Command::new("git").args(["rev-parse", "HEAD"]).current_dir(dir).output().unwrap().stdout
+        ).unwrap().trim().to_string();
+
+        std::fs::write(dir.join("a.txt"), "a\n").unwrap();
+        git(&["add", "."]);
+        git(&["commit", "-m", "squash: feat/a (#10)"]);
+        let expected_sha = String::from_utf8(
+            Command::new("git").args(["rev-parse", "HEAD"]).current_dir(dir).output().unwrap().stdout
+        ).unwrap().trim().to_string();
+
+        let result = squash_pr_numbers_since("HEAD", &since_sha, 200, dir);
+        assert_eq!(result.len(), 1, "expected 1 result, got: {:?}", result);
+        let (sha, pr_num) = &result[0];
+        assert_eq!(*pr_num, 10u64, "expected PR #10, got {}", pr_num);
+        assert_eq!(sha, &expected_sha, "expected sha {}, got {}", expected_sha, sha);
+    }
+
     // SQ1: squash_pr_numbers_since respects max_count — with 2 squash commits in range,
     // calling with max_count=1 returns at most 1 result.
     #[test]
