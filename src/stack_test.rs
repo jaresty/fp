@@ -224,6 +224,82 @@ mod tests {
         assert!(dir.is_dir(), "main_root must be an existing directory, got: {:?}", dir);
     }
 
+    // MG0: rebase_onto_after_merge uses origin/<base_ref> not local <base_ref> as the --onto target.
+    // After a squash merge, local main can be stale (missing the squash commit). Passing "main"
+    // directly would land the child on the stale local tip. Must use "origin/main" which always
+    // reflects the actual merged state.
+    #[test]
+    fn rebase_onto_after_merge_uses_origin_base_not_local_stale_main() {
+        use std::process::Command;
+        use tempfile::TempDir;
+
+        let remote_dir = TempDir::new().unwrap();
+        Command::new("git").args(["init", "--bare", "-b", "main"])
+            .current_dir(remote_dir.path()).output().unwrap();
+
+        let dir = TempDir::new().unwrap();
+        let path = dir.path();
+        let git = |args: &[&str]| Command::new("git").args(args).current_dir(path).output().unwrap();
+
+        git(&["init", "-b", "main"]);
+        git(&["config", "user.email", "t@t.com"]);
+        git(&["config", "user.name", "T"]);
+        git(&["remote", "add", "origin", remote_dir.path().to_str().unwrap()]);
+
+        // M: initial main commit
+        std::fs::write(path.join("a.txt"), "a").unwrap();
+        git(&["add", "."]);
+        git(&["commit", "-m", "A"]);
+        git(&["push", "origin", "main"]);
+
+        // feat/parent: commit B (will be squash-merged into origin/main)
+        git(&["checkout", "-b", "feat/parent"]);
+        std::fs::write(path.join("b.txt"), "b").unwrap();
+        git(&["add", "."]);
+        git(&["commit", "-m", "B"]);
+        let parent_sha = String::from_utf8(
+            Command::new("git").args(["rev-parse", "feat/parent"]).current_dir(path).output().unwrap().stdout
+        ).unwrap().trim().to_string();
+
+        // feat/child stacked on feat/parent: commit C
+        git(&["checkout", "-b", "feat/child"]);
+        std::fs::write(path.join("c.txt"), "c").unwrap();
+        git(&["add", "."]);
+        git(&["commit", "-m", "C"]);
+        git(&["push", "--set-upstream", "origin", "feat/child"]);
+
+        // Squash-merge feat/parent into the REMOTE main (simulate via push to bare remote)
+        // then fetch — local main stays stale but origin/main has the squash commit.
+        git(&["checkout", "main"]);
+        git(&["merge", "--squash", "feat/parent"]);
+        git(&["commit", "-m", "squash B"]);
+        git(&["push", "origin", "main"]);
+        // Now reset local main back one commit — making it stale vs origin/main
+        git(&["reset", "--hard", "HEAD~1"]);
+
+        git(&["fetch", "origin"]);
+
+        // Sanity: local main is one commit behind origin/main
+        let local_main = String::from_utf8(
+            Command::new("git").args(["rev-parse", "main"]).current_dir(path).output().unwrap().stdout
+        ).unwrap().trim().to_string();
+        let origin_main = String::from_utf8(
+            Command::new("git").args(["rev-parse", "origin/main"]).current_dir(path).output().unwrap().stdout
+        ).unwrap().trim().to_string();
+        assert_ne!(local_main, origin_main, "local main must be stale for this test to be meaningful");
+
+        // rebase_onto_after_merge with new_base = "main" (as returned by GitHub API)
+        // must use origin/main internally, so feat/child lands on the squash commit tip
+        crate::stack::rebase_onto_after_merge("feat/child", &parent_sha, "main", path).unwrap();
+
+        // feat/child's parent must be origin/main (the squash commit), NOT stale local main
+        let child_parent = String::from_utf8(
+            Command::new("git").args(["rev-parse", "feat/child~1"]).current_dir(path).output().unwrap().stdout
+        ).unwrap().trim().to_string();
+        assert_eq!(child_parent, origin_main,
+            "feat/child must be rebased onto origin/main (squash commit tip), not stale local main");
+    }
+
     // MG1: rebase_onto_after_merge rebases child onto base using head_sha as cut point (squash-safe)
     #[test]
     fn rebase_onto_after_merge_rebases_child_onto_base() {
@@ -2450,6 +2526,113 @@ mod tests {
 
     // RS_STACKED_ONTO: when a stacked child's parent has multiple commits and was force-pushed
     // (local == origin/parent), is_ancestor(parent, origin/parent) fires trivially → false-positive
+    // CP1: When the parent branch was rebased (all SHAs rewritten) with no reflog entry for the
+    // old tip in the child's worktree, fork-point fails and the fallback picks a too-old upstream.
+    // The fix: use git log --cherry-pick --right-only to find commits unique to the child by
+    // patch content, so we replay only the child's own commits even when no reflog helps.
+    //
+    // Scenario: parent has 3 commits P1-P3 (same-content as P1'-P3' on new parent after rebase).
+    // Child has P1-P3 (old SHAs) + C1-C2 (unique). After parent is "remotely rebased" (branch
+    // deleted and recreated at P3' — no old reflog entry), fork-point finds nothing, fallback
+    // picks M as old_upstream → replays 5 commits (P1-P3-C1-C2). Fix replays only C1-C2.
+    #[test]
+    fn rebase_stack_replays_only_child_commits_when_parent_rebased_without_reflog() {
+        use std::process::Command;
+        use tempfile::TempDir;
+
+        let remote_dir = TempDir::new().unwrap();
+        Command::new("git").args(["init", "--bare", "-b", "main"])
+            .current_dir(remote_dir.path()).output().unwrap();
+
+        let dir = TempDir::new().unwrap();
+        let path = dir.path();
+        let git = |args: &[&str]| Command::new("git").args(args).current_dir(path).output().unwrap();
+        let env = [("GIT_AUTHOR_NAME","t"),("GIT_AUTHOR_EMAIL","t@t"),
+                   ("GIT_COMMITTER_NAME","t"),("GIT_COMMITTER_EMAIL","t@t")];
+        let git_env = |args: &[&str]| {
+            let mut c = Command::new("git"); c.args(args).current_dir(path);
+            for (k, v) in &env { c.env(k, v); }
+            c.output().unwrap()
+        };
+
+        git(&["init", "-b", "main"]);
+        git(&["config", "user.email", "t@t.com"]);
+        git(&["config", "user.name", "T"]);
+        git(&["remote", "add", "origin", remote_dir.path().to_str().unwrap()]);
+        // Disable git's built-in cherry-pick detection so only fp's old_upstream computation
+        // determines which commits are replayed. Without this, git would skip the 3 shared
+        // commits even with wrong old_upstream (M), masking the bug.
+        git(&["config", "rebase.reapplyCherryPicks", "true"]);
+
+        // M: main base — shared.txt starts as "v0"
+        std::fs::write(path.join("shared.txt"), "v0\n").unwrap();
+        git(&["add", "."]);
+        git_env(&["commit", "-m", "M"]);
+        git(&["push", "-u", "origin", "main"]);
+
+        // feat/parent: 3 commits each modifying shared.txt (chained, overlapping patches)
+        // P1: v0→v1, P2: v1→v2, P3: v2→v3
+        git(&["checkout", "-b", "feat/parent"]);
+        std::fs::write(path.join("shared.txt"), "v1\n").unwrap();
+        git(&["add", "."]);
+        git_env(&["commit", "-m", "P1"]);
+        std::fs::write(path.join("shared.txt"), "v2\n").unwrap();
+        git(&["add", "."]);
+        git_env(&["commit", "-m", "P2"]);
+        std::fs::write(path.join("shared.txt"), "v3\n").unwrap();
+        git(&["add", "."]);
+        git_env(&["commit", "-m", "P3"]);
+        git(&["push", "-u", "origin", "feat/parent"]);
+
+        // feat/child stacked on feat/parent: inherits P1-P3 + adds C1 C2 (unique files)
+        git(&["checkout", "-b", "feat/child"]);
+        std::fs::write(path.join("c1.txt"), "c1\n").unwrap();
+        git(&["add", "."]);
+        git_env(&["commit", "-m", "C1"]);
+        std::fs::write(path.join("c2.txt"), "c2\n").unwrap();
+        git(&["add", "."]);
+        git_env(&["commit", "-m", "C2"]);
+        git(&["push", "-u", "origin", "feat/child"]);
+
+        // Simulate "remote rebase" of feat/parent onto main (same base here, just re-applied
+        // so all SHAs differ). Cherry-pick P1-P3 onto main → P1' P2' P3'.
+        // Then DELETE and RECREATE the local branch at P3' so the reflog only has one entry.
+        git(&["checkout", "main"]);
+        let p1_sha = String::from_utf8(
+            Command::new("git").args(["rev-parse", "feat/parent~2"]).current_dir(path).output().unwrap().stdout
+        ).unwrap().trim().to_string();
+        let p2_sha = String::from_utf8(
+            Command::new("git").args(["rev-parse", "feat/parent~1"]).current_dir(path).output().unwrap().stdout
+        ).unwrap().trim().to_string();
+        let p3_sha = String::from_utf8(
+            Command::new("git").args(["rev-parse", "feat/parent"]).current_dir(path).output().unwrap().stdout
+        ).unwrap().trim().to_string();
+
+        git_env(&["cherry-pick", &p1_sha]);
+        git_env(&["cherry-pick", &p2_sha]);
+        git_env(&["cherry-pick", &p3_sha]);
+        let new_parent_tip = String::from_utf8(
+            Command::new("git").args(["rev-parse", "HEAD"]).current_dir(path).output().unwrap().stdout
+        ).unwrap().trim().to_string();
+
+        // Delete and recreate feat/parent at P3' — fresh reflog with no old entries
+        git(&["branch", "-D", "feat/parent"]);
+        git(&["branch", "feat/parent", &new_parent_tip]);
+        git(&["push", "--force", "origin", "feat/parent"]);
+        git(&["fetch", "origin"]);
+
+        // The expected old_upstream is P3 (last shared commit in child's ancestry, just before C1).
+        // With the cherry-pick detection approach this should be correct even when fork-point
+        // only finds the too-old common ancestor (M).
+        let p3_sha = String::from_utf8(
+            Command::new("git").args(["rev-parse", "feat/child~2"]).current_dir(path).output().unwrap().stdout
+        ).unwrap().trim().to_string();
+
+        let old_upstream = crate::stack::find_old_upstream("feat/parent", "feat/child", path);
+        assert_eq!(old_upstream, p3_sha,
+            "find_old_upstream must return P3 (last shared commit before C1/C2), got: {}", old_upstream);
+    }
+
     // parent_merged_into_base → rev-list | last() returns oldest parent commit as cut point →
     // rebase replays ALL parent commits plus child commits instead of child-only commits.
     // Fix: skip is_ancestor when origin_base == "origin/<parent>" (parent is still alive).

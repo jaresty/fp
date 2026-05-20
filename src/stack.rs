@@ -65,6 +65,73 @@ pub struct RebaseResult {
 /// Rebase each branch onto its parent's current tip, in stack_order.
 /// Root branches (no parent) rebase onto origin/<base_of[branch]>.
 /// Fetches origin before rebasing to ensure remote refs are current.
+/// Find the old upstream commit to use as the exclusion point for `git rebase --onto parent`.
+/// Returns the last commit in `branch`'s ancestry that is NOT unique to `branch` (i.e., it
+/// has a patch-equivalent in `parent`). This is patch-based rather than SHA-based, so it
+/// works even when parent was fully rebased and all SHAs changed.
+///
+/// Strategy:
+/// 1. Try `--fork-point` first (fast, uses reflog, handles force-pushed parents when reflog intact).
+/// 2. If fork-point fails or returns a commit that is a common ancestor of both (meaning it's
+///    on main, not on branch's own feature path), fall back to cherry-pick detection:
+///    find commits unique to branch by patch-id, then take the parent of the oldest unique commit.
+pub fn find_old_upstream(parent: &str, branch: &str, dir: &std::path::Path) -> String {
+    let git = |args: &[&str]| {
+        std::process::Command::new("git").args(args).current_dir(dir).output()
+    };
+
+    // Try fork-point first (reflog-based, fast)
+    let fork_point = git(&["merge-base", "--fork-point", parent, branch])
+        .ok()
+        .filter(|o| o.status.success())
+        .and_then(|o| String::from_utf8(o.stdout).ok())
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty());
+
+    // If fork-point returned a commit that is an ancestor of parent (i.e., on main/base),
+    // it's too old — the shared history only goes back to main. Use cherry-pick detection.
+    let fork_point_on_parent = fork_point.as_deref().map(|fp| {
+        git(&["merge-base", "--is-ancestor", fp, parent])
+            .map(|o| o.status.success())
+            .unwrap_or(false)
+    }).unwrap_or(false);
+
+    if let Some(fp) = fork_point.filter(|_| !fork_point_on_parent) {
+        return fp;
+    }
+
+    // Cherry-pick detection: find commits unique to branch (no patch-equivalent in parent).
+    // git log --cherry-pick --right-only suppresses commits from the right side (branch) that
+    // have matching patch-ids on the left side (parent). The remaining commits are unique.
+    let unique_out = git(&["log", "--cherry-pick", "--no-merges", "--format=%H",
+                           "--right-only", &format!("{}...{}", parent, branch)])
+        .ok()
+        .and_then(|o| String::from_utf8(o.stdout).ok())
+        .unwrap_or_default();
+
+    let oldest_unique = unique_out.trim().lines().last().map(str::trim).unwrap_or("").to_string();
+
+    if !oldest_unique.is_empty() {
+        // old_upstream = parent of the oldest unique commit = last shared commit
+        let parent_sha = git(&["rev-parse", &format!("{}~1", oldest_unique)])
+            .ok()
+            .and_then(|o| String::from_utf8(o.stdout).ok())
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty())
+            .unwrap_or_default();
+        if !parent_sha.is_empty() {
+            return parent_sha;
+        }
+    }
+
+    // Last resort: oldest commit in branch not reachable from parent
+    git(&["rev-list", &format!("{}..{}", parent, branch)])
+        .ok()
+        .and_then(|o| String::from_utf8(o.stdout).ok())
+        .map(|s| s.trim().lines().last().map(str::trim).unwrap_or("").to_string())
+        .unwrap_or_default()
+}
+
 pub fn rebase_stack(branches: &[String], parent_of: &HashMap<String, Option<String>>, base_of: &HashMap<String, String>, dir: &Path, progress: &dyn Fn(&str), debug: &dyn Fn(&str)) -> Result<RebaseResult> {
     // Bail if a rebase is already in progress — user must resolve first.
     // Check rebase-merge/rebase-apply directories rather than REBASE_HEAD: on Apple Git 2.50+,
@@ -227,40 +294,7 @@ pub fn rebase_stack(branches: &[String], parent_of: &HashMap<String, Option<Stri
                 .current_dir(&wt_path)
                 .output()?.status.success();
             if !parent_is_ancestor {
-                // Find where branch diverged from parent's old history.
-                // --fork-point uses the reflog to find the most recent parent tip that is
-                // an ancestor of branch — this is the correct old_upstream when parent was
-                // fully rebased (all SHAs changed). Falls back to rev-list | tail -1 which
-                // works for the single-rewrite case but returns the wrong (oldest) commit
-                // when parent had multiple commits all rewritten.
-                let fork_point_out = std::process::Command::new("git")
-                    .args(["merge-base", "--fork-point", parent, branch])
-                    .current_dir(&wt_path)
-                    .output();
-                let old_upstream = fork_point_out
-                    .ok()
-                    .filter(|o| o.status.success())
-                    .and_then(|o| String::from_utf8(o.stdout).ok())
-                    .map(|s| s.trim().to_string())
-                    .filter(|s| !s.is_empty())
-                    .unwrap_or_else(|| {
-                        // Fallback: oldest commit in branch not reachable from parent
-                        let rev_list_out = std::process::Command::new("git")
-                            .args(["rev-list", &format!("{}..{}", parent, branch)])
-                            .current_dir(&wt_path)
-                            .output()
-                            .unwrap_or_else(|_| std::process::Output {
-                                status: std::process::ExitStatus::default(),
-                                stdout: vec![],
-                                stderr: vec![],
-                            });
-                        String::from_utf8_lossy(&rev_list_out.stdout)
-                            .lines()
-                            .last()
-                            .map(str::trim)
-                            .unwrap_or("")
-                            .to_string()
-                    });
+                let old_upstream = find_old_upstream(parent, branch, &wt_path);
                 // Only use --onto if there are commits to replay after old_upstream.
                 // If replay_count == 0, old_upstream == branch tip (independent branch being
                 // newly stacked) — fall back to plain rebase which handles that correctly.
@@ -380,7 +414,14 @@ pub fn rebase_onto_after_merge(branch: &str, old_base_sha: &str, new_base: &str,
     let git = |args: &[&str]| {
         std::process::Command::new("git").args(args).current_dir(&rebase_dir).output()
     };
-    let rebase = git(&["rebase", "--onto", new_base, old_base_sha, branch])?;
+    // Prefer origin/<base> over the local branch — local main can be stale after a squash merge.
+    let origin_base = format!("origin/{}", new_base);
+    let effective_base = if !new_base.starts_with("origin/") && git(&["rev-parse", "--verify", &origin_base]).map(|o| o.status.success()).unwrap_or(false) {
+        origin_base
+    } else {
+        new_base.to_string()
+    };
+    let rebase = git(&["rebase", "--onto", &effective_base, old_base_sha, branch])?;
     if !rebase.status.success() {
         anyhow::bail!(
             "Conflict — resolve with:\n  git add <resolved files> && git rebase --continue\n  fp rebase-stack\n\n{}",
