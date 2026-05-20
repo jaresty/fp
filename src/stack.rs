@@ -65,7 +65,7 @@ pub struct RebaseResult {
 /// Rebase each branch onto its parent's current tip, in stack_order.
 /// Root branches (no parent) rebase onto origin/<base_of[branch]>.
 /// Fetches origin before rebasing to ensure remote refs are current.
-pub fn rebase_stack(branches: &[String], parent_of: &HashMap<String, Option<String>>, base_of: &HashMap<String, String>, dir: &Path, progress: &dyn Fn(&str)) -> Result<RebaseResult> {
+pub fn rebase_stack(branches: &[String], parent_of: &HashMap<String, Option<String>>, base_of: &HashMap<String, String>, dir: &Path, progress: &dyn Fn(&str), debug: &dyn Fn(&str)) -> Result<RebaseResult> {
     // Bail if a rebase is already in progress — user must resolve first.
     // Check rebase-merge/rebase-apply directories rather than REBASE_HEAD: on Apple Git 2.50+,
     // REBASE_HEAD persists after a completed rebase, causing false positives.
@@ -155,11 +155,13 @@ pub fn rebase_stack(branches: &[String], parent_of: &HashMap<String, Option<Stri
             }
         }
 
+        debug(&format!("rebase_stack: branch={} parent={}", branch, parent));
         // Detect whether the parent branch has been merged (and its remote branch deleted).
         // Two signals, either sufficient:
         // 1. git merge-base --is-ancestor <parent> origin/<base>: parent's tip is in base (regular merge)
         // 2. origin/<parent> remote tracking ref is gone after fetch (squash/rebase merge with auto-delete)
         let origin_base = resolve_root_parent(branch);
+        debug(&format!("rebase_stack: origin_base={}", origin_base));
         let parent_merged_into_base = !parent.starts_with("origin/") && {
             let parent_exists = std::process::Command::new("git")
                 .args(["rev-parse", "--verify", parent])
@@ -174,12 +176,14 @@ pub fn rebase_stack(branches: &[String], parent_of: &HashMap<String, Option<Stri
                     .args(["ls-remote", "--exit-code", "--heads", "origin", parent])
                     .current_dir(dir).output()?;
                 let remote_branch_gone = !ls_remote_out.status.success();
+                debug(&format!("rebase_stack: is_ancestor={} remote_branch_gone={}", is_ancestor, remote_branch_gone));
                 is_ancestor || remote_branch_gone
             } else {
                 // Local branch ref is gone — definitely merged
                 true
             }
         };
+        debug(&format!("rebase_stack: parent_merged_into_base={}", parent_merged_into_base));
 
         // Rebase onto parent — run from the branch's worktree so conflict state lands there.
         let rebase = if parent_merged_into_base {
@@ -195,6 +199,7 @@ pub fn rebase_stack(branches: &[String], parent_of: &HashMap<String, Option<Stri
                 .map(str::trim)
                 .unwrap_or("")
                 .to_string();
+            debug(&format!("rebase_stack: --onto {} old_parent_sha={}", origin_base, old_parent_sha));
             std::process::Command::new("git")
                 .args(["rebase", "--onto", &origin_base, &old_parent_sha])
                 .current_dir(&wt_path)
@@ -413,7 +418,7 @@ fn git_merge_base(a: &str, b: &str, dir: &Path) -> Result<String> {
 /// For each branch, find its parent among the other branches using git merge-base.
 /// A branch B has parent A if merge-base(A, B) == tip(A) and A != B.
 /// If no branch in the set is an ancestor, the branch is a root (None).
-pub fn detect_parent_of(branches: &[String], dir: &Path, base_of: &HashMap<String, String>) -> Result<HashMap<String, Option<String>>> {
+pub fn detect_parent_of(branches: &[String], dir: &Path, base_of: &HashMap<String, String>, debug: &dyn Fn(&str)) -> Result<HashMap<String, Option<String>>> {
     let tips: HashMap<String, String> = branches.iter()
         .map(|b| Ok((b.clone(), git_rev_parse(b, dir)?)))
         .collect::<Result<_>>()?;
@@ -423,8 +428,10 @@ pub fn detect_parent_of(branches: &[String], dir: &Path, base_of: &HashMap<Strin
     for branch in branches {
         if let Some(declared) = base_of.get(branch.as_str()) && !declared.is_empty() {
             if branches.iter().any(|b| b == declared) {
+                debug(&format!("detect_parent_of: {} → {} (declared base)", branch, declared));
                 parent_of.insert(branch.clone(), Some(declared.clone()));
             } else {
+                debug(&format!("detect_parent_of: {} → None (declared base '{}' not tracked)", branch, declared));
                 parent_of.insert(branch.clone(), None);
             }
             continue;
@@ -471,6 +478,8 @@ pub fn detect_parent_of(branches: &[String], dir: &Path, base_of: &HashMap<Strin
                 best_lead = lead;
             }
         }
+        debug(&format!("detect_parent_of: {} → {} (topology)", branch,
+            best_parent.as_deref().unwrap_or("None")));
         parent_of.insert(branch.clone(), best_parent);
     }
 

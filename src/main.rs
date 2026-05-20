@@ -224,6 +224,9 @@ enum Commands {
     RebaseStack {
         /// Optional PR number to start from — rebase only that PR and its descendants
         pr: Option<u64>,
+        /// Print debug information about parent detection and rebase decisions
+        #[arg(long)]
+        verbose: bool,
     },
     /// Create a new branch and worktree without creating a PR (use fp create afterwards)
     New {
@@ -702,7 +705,7 @@ fn main() -> Result<()> {
             println!("✓ untracked PR #{}", pr);
         }
 
-        Commands::RebaseStack { pr: rebase_from_pr } => {
+        Commands::RebaseStack { pr: rebase_from_pr, verbose } => {
             let mut state = store.load()?;
             if state.tracked.is_empty() {
                 println!("No tracked PRs.");
@@ -716,7 +719,7 @@ fn main() -> Result<()> {
                 let client = GithubClient::new(token);
                 let all_branches: Vec<String> = state.tracked_prs().iter().map(|p| p.branch.clone()).collect();
                 let cached_base_of: std::collections::HashMap<String, String> = state.tracked_prs().iter().map(|p| (p.branch.clone(), p.base.clone())).collect();
-                let parent_of = stack::detect_parent_of(&all_branches, &main_root, &cached_base_of)?;
+                let parent_of = stack::detect_parent_of(&all_branches, &main_root, &cached_base_of, &|_| {})?;
 
                 let mut merged_prs: Vec<(u64, String)> = Vec::new();
                 for pr in state.tracked_prs() {
@@ -755,7 +758,12 @@ fn main() -> Result<()> {
                 state.tracked_prs().iter().map(|p| (p.branch.clone(), p.base.clone())).collect(),
                 &tracked_set,
             );
-            let parent_of = stack::detect_parent_of(&all_branches, &main_root, &cached_base_of)?;
+            let debug_fn: Box<dyn Fn(&str)> = if verbose {
+                Box::new(|s: &str| eprintln!("[fp verbose] {}", s))
+            } else {
+                Box::new(|_: &str| {})
+            };
+            let parent_of = stack::detect_parent_of(&all_branches, &main_root, &cached_base_of, debug_fn.as_ref())?;
 
             // If a starting PR is given, restrict to that branch and its descendants
             let branches: Vec<String> = if let Some(from_pr) = rebase_from_pr {
@@ -797,7 +805,7 @@ fn main() -> Result<()> {
                     std::collections::HashMap::new()
                 };
 
-            let result = stack::rebase_stack(&branches, &parent_of, &base_of, &main_root, &|msg| eprintln!("{}", msg))?;
+            let result = stack::rebase_stack(&branches, &parent_of, &base_of, &main_root, &|msg| eprintln!("{}", msg), debug_fn.as_ref())?;
 
             for branch in &result.rebased {
                 println!("✓ rebased {}", branch);
