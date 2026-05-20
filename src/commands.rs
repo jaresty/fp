@@ -562,15 +562,6 @@ pub fn cmd_rebase_stack(
                 // when the remote branch has been deleted. The sha is available locally if the
                 // branch was fetched by the git fetch origin call at the top of rebase_stack.
                 for branch in &current_branches {
-                    // Only rebase if head_sha is literally an ancestor of this branch — meaning
-                    // the branch was built on top of the original feature branch. This is the
-                    // semantically correct check: it confirms the branch contains the pre-squash
-                    // commits that need replacing. Must run before any rebasing (head_sha gets
-                    // rewritten after rebase so this check would fail post-rebase).
-                    let head_is_ancestor = std::process::Command::new("git")
-                        .args(["merge-base", "--is-ancestor", &head_sha, branch])
-                        .current_dir(dir).status().map(|s| s.success()).unwrap_or(false);
-                    if !head_is_ancestor { continue; }
                     let cut_sha = std::process::Command::new("git")
                         .args(["merge-base", &head_sha, branch])
                         .current_dir(dir).output().ok()
@@ -578,6 +569,13 @@ pub fn cmd_rebase_stack(
                         .map(|s| s.trim().to_string())
                         .filter(|s| !s.is_empty());
                     if let Some(cut) = cut_sha {
+                        // If cut is on origin/main, head_sha and branch only share a main commit —
+                        // unrelated PR. Skip. If cut is NOT on main, it's on the branch's own
+                        // history — it's the correct exclusion point for the rebase.
+                        let cut_on_main = std::process::Command::new("git")
+                            .args(["merge-base", "--is-ancestor", &cut, "origin/main"])
+                            .current_dir(dir).status().map(|s| s.success()).unwrap_or(false);
+                        if cut_on_main { continue; }
                         if let Some(warn) = crate::worktree::check_branch_lock(git_dir, branch) {
                             out.push_str(&format!("{}\n", warn)); continue;
                         }

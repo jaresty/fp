@@ -1230,6 +1230,95 @@ mod tests {
             "must not rebase feat/child via unrelated squash PR #77; got:\n{}", output);
     }
 
+    // RS6: When the parent branch had additional commits after the child forked (so head_sha
+    // is NOT an ancestor of the child), we must still rebase the child. The cut point is
+    // merge-base(head_sha, child) which lands on feat/parent history (NOT on main), so the
+    // origin/main ancestry check correctly allows the rebase.
+    #[test]
+    fn cmd_rebase_stack_rebases_when_parent_had_extra_commits_after_fork() {
+        use std::process::Command;
+
+        let tmp = tempfile::tempdir().unwrap();
+        let remote = tmp.path().join("remote");
+        let repo = tmp.path().join("repo");
+        std::fs::create_dir_all(&remote).unwrap();
+        std::fs::create_dir_all(&repo).unwrap();
+        let git_dir = repo.join(".git");
+
+        Command::new("git").args(["init", "--bare", "-b", "main"]).current_dir(&remote).output().unwrap();
+        Command::new("git").args(["init", "-b", "main"]).current_dir(&repo).output().unwrap();
+        Command::new("git").args(["config", "user.email", "t@t.com"]).current_dir(&repo).output().unwrap();
+        Command::new("git").args(["config", "user.name", "T"]).current_dir(&repo).output().unwrap();
+        Command::new("git").args(["remote", "add", "origin", remote.to_str().unwrap()]).current_dir(&repo).output().unwrap();
+
+        let git = |args: &[&str]| Command::new("git").args(args).current_dir(&repo).output().unwrap();
+
+        // Main: commit M
+        std::fs::write(repo.join("main.txt"), "main\n").unwrap();
+        git(&["add", "."]);
+        git(&["commit", "-m", "M"]);
+        git(&["push", "-u", "origin", "main"]);
+
+        // feat/parent: commit P1
+        git(&["checkout", "-b", "feat/parent"]);
+        std::fs::write(repo.join("p1.txt"), "p1\n").unwrap();
+        git(&["add", "."]);
+        git(&["commit", "-m", "P1: parent work"]);
+        git(&["push", "-u", "origin", "feat/parent"]);
+
+        // feat/child forks from feat/parent at P1 and adds commit C
+        git(&["checkout", "-b", "feat/child", "feat/parent"]);
+        std::fs::write(repo.join("c.txt"), "child\n").unwrap();
+        git(&["add", "."]);
+        git(&["commit", "-m", "C: child work"]);
+        git(&["push", "-u", "origin", "feat/child"]);
+
+        // feat/parent gets ANOTHER commit P2 AFTER child forked — so head_sha (P2) is NOT
+        // an ancestor of feat/child
+        git(&["checkout", "feat/parent"]);
+        std::fs::write(repo.join("p2.txt"), "p2\n").unwrap();
+        git(&["add", "."]);
+        git(&["commit", "-m", "P2: extra parent work after child forked"]);
+        git(&["push", "origin", "feat/parent"]);
+        let parent_tip = String::from_utf8(
+            Command::new("git").args(["rev-parse", "feat/parent"]).current_dir(&repo).output().unwrap().stdout
+        ).unwrap().trim().to_string();
+
+        // Squash-merge feat/parent (tip = P2 = head_sha) into main
+        git(&["checkout", "main"]);
+        git(&["merge", "--squash", "feat/parent"]);
+        git(&["commit", "-m", "squash: feat/parent (#42)"]);
+        git(&["push", "origin", "main"]);
+        git(&["fetch", "origin"]);
+
+        let store = crate::store::Store::open(&git_dir);
+        store.track(99).unwrap();
+        store.update_cache(crate::store::PrCache {
+            number: 99, title: "Child".into(), branch: "feat/child".into(), base: "main".into()
+        }).unwrap();
+
+        let mut fake = crate::github::FakeGithubClient::new_with_pr(99, "feat/child", "Child", "main");
+        fake.set_pr(42, crate::model::PrState {
+            number: 42, title: "Parent".into(), branch: "feat/parent".into(), base: "main".into(),
+            head_sha: parent_tip.clone(),
+            draft: false, approved: false, checks: vec![], threads: vec![],
+            needs_parent_rebase: false, has_merge_conflict: false,
+            codeowners_eligibility: Default::default(), created_at: None,
+        });
+        fake.set_pr_created_at(99, "2020-01-01T00:00:00Z");
+
+        let result = crate::commands::cmd_rebase_stack(
+            Some(&fake), "o", "r", &store, &repo, &git_dir, None, &|_| {},
+        );
+        assert!(result.is_ok(), "cmd_rebase_stack must succeed: {:?}", result);
+        let output = result.unwrap();
+        // feat/child must be rebased onto main even though head_sha (P2) is not an ancestor
+        // of feat/child (child only has P1, not P2). The cut point is merge-base(P2, child) = P1,
+        // which is on feat/parent history (NOT on origin/main), so the rebase must proceed.
+        assert!(output.contains("untracked squash of PR #42"),
+            "must rebase feat/child after parent squash even when head_sha not ancestor of child; got:\n{}", output);
+    }
+
     // RS4: When two branches are tracked (a stacked pair), the squash detection must scan
     // from the EARLIEST divergence point (the root branch's fork from main), not only from
     // the child's fork. This ensures squash commits predating the child's fork are detected.
