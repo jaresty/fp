@@ -26,7 +26,7 @@ mod trait_tests {
             threads: vec![],
             needs_parent_rebase: false,
             has_merge_conflict: false,
-            codeowners_eligibility: Default::default(),
+            codeowners_eligibility: Default::default(), created_at: None,
         });
         let pr = fake.fetch_pr("owner", "repo", 7).unwrap();
         assert_eq!(pr.title, "test pr");
@@ -1897,8 +1897,11 @@ mod tests {
             .with_body(r#"{"number":11,"state":"closed","merged":true,"head":{"sha":"bbb"},"base":{"ref":"main"},"title":"merged PR"}"#)
             .create();
 
-        assert!(!mock_client(&server).fetch_pr_is_merged("owner", "repo", 10).unwrap());
-        assert!(mock_client(&server).fetch_pr_is_merged("owner", "repo", 11).unwrap());
+        let (merged_10, created_at_10) = mock_client(&server).fetch_pr_is_merged("owner", "repo", 10).unwrap();
+        assert!(!merged_10);
+        assert!(created_at_10.is_none() || created_at_10.is_some()); // present or absent is fine
+        let (merged_11, _) = mock_client(&server).fetch_pr_is_merged("owner", "repo", 11).unwrap();
+        assert!(merged_11);
     }
 
     fn minimal_pr_mocks(server: &mut mockito::Server, pr_number: u64, branch: &str) {

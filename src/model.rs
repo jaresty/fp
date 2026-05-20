@@ -66,6 +66,8 @@ pub struct PrState {
     pub has_merge_conflict: bool,
     #[serde(default)]
     pub codeowners_eligibility: CownershipEligibility,
+    #[serde(default)]
+    pub created_at: Option<String>,
 }
 
 #[derive(Debug, Clone)]

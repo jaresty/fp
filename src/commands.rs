@@ -46,7 +46,7 @@ pub fn cmd_status_one(
             number: cached.number, title: cached.title.clone(), branch: cached.branch.clone(),
             base: cached.base.clone(), head_sha: String::new(), draft: false, approved: false,
             checks: vec![], threads: vec![], needs_parent_rebase: false, has_merge_conflict: false,
-            codeowners_eligibility: Default::default(),
+            codeowners_eligibility: Default::default(), created_at: None,
         });
 
     if let Some(c) = client
@@ -100,7 +100,7 @@ pub fn cmd_status_all(
             number: cached.number, title: cached.title.clone(), branch: cached.branch.clone(),
             base: cached.base.clone(), head_sha: String::new(), draft: false, approved: false,
             checks: vec![], threads: vec![], needs_parent_rebase: false, has_merge_conflict: false,
-            codeowners_eligibility: Default::default(),
+            codeowners_eligibility: Default::default(), created_at: None,
         });
 
         if let Some(c) = client
@@ -301,7 +301,7 @@ pub fn cmd_threads(
             number: tracked.number, title: tracked.title.clone(), branch: tracked.branch.clone(),
             base: "".into(), head_sha: "".into(), draft: false, approved: false,
             checks: vec![], threads: vec![], needs_parent_rebase: false, has_merge_conflict: false,
-            codeowners_eligibility: Default::default(),
+            codeowners_eligibility: Default::default(), created_at: None,
         });
     let threads = crate::display::fetch_open_threads(&pr_state.threads);
     Ok(crate::display::format_open_threads(pr, &threads, json))
@@ -502,10 +502,18 @@ pub fn cmd_rebase_stack(
         let cached_base_of: std::collections::HashMap<String, String> = state.tracked_prs().iter().map(|p| (p.branch.clone(), p.base.clone())).collect();
         let parent_of = crate::stack::detect_parent_of(&all_branches, dir, &cached_base_of, &|_| {})?;
         let mut merged_prs: Vec<(u64, String)> = Vec::new();
+        let mut min_created_at: Option<String> = None;
         on_progress("[fp] checking merged PRs (GitHub API)");
         for pr in state.tracked_prs() {
             on_progress(&format!("[fp] fetch_pr_is_merged PR #{} (GitHub API)", pr.number));
-            if client.fetch_pr_is_merged(owner, repo, pr.number).unwrap_or(false) {
+            let (is_merged, created_at) = client.fetch_pr_is_merged(owner, repo, pr.number).unwrap_or((false, None));
+            if let Some(ref date) = created_at {
+                min_created_at = Some(match min_created_at {
+                    None => date.clone(),
+                    Some(ref prev) => if date < prev { date.clone() } else { prev.clone() },
+                });
+            }
+            if is_merged {
                 on_progress(&format!("[fp] fetch head SHA for merged PR #{} (GitHub API)", pr.number));
                 let (head_sha, base_ref) = client.fetch_pr_head_sha_and_base(owner, repo, pr.number)?;
                 for (branch, parent) in &parent_of {
@@ -534,23 +542,12 @@ pub fn cmd_rebase_stack(
         // squash commit on origin/main, look up the PR's head SHA via API, and use it as the
         // --onto cut point so only child-unique commits are replayed.
         let current_branches: Vec<String> = state.tracked_prs().iter().map(|p| p.branch.clone()).collect();
-        // Find the oldest common ancestor of all tracked branches and origin/main in one traversal.
-        // git merge-base --octopus avoids the O(N × history) cost of per-branch rev-list --count.
-        let oldest_mb = if current_branches.is_empty() { String::new() } else {
-            let mut args = vec!["merge-base", "--octopus"];
-            let branches: Vec<&str> = current_branches.iter().map(String::as_str).collect();
-            args.extend(branches.iter().copied());
-            args.push("origin/main");
-            std::process::Command::new("git")
-                .args(&args)
-                .current_dir(dir).output().ok()
-                .and_then(|o| String::from_utf8(o.stdout).ok())
-                .map(|s| s.trim().to_string())
-                .filter(|s| !s.is_empty())
-                .unwrap_or_default()
-        };
-        if !oldest_mb.is_empty() {
-            let squash_commits = crate::stack::squash_pr_numbers_since("origin/main", &oldest_mb, 200, dir);
+        // Use the earliest tracked PR creation date as the lower bound for squash detection.
+        // A parent PR cannot have been squash-merged before the child PR was created, so
+        // scanning further back is wasteful. This avoids the merge-base --octopus computation
+        // and gives a tight, semantically correct bound regardless of branch topology.
+        if let Some(ref since_date) = min_created_at {
+            let squash_commits = crate::stack::squash_pr_numbers_since_date("origin/main", since_date, 200, dir);
             let relevant: Vec<(String, u64)> = squash_commits.into_iter()
                 .filter(|(squash_sha, pr_num)| {
                     if state.tracked.contains(pr_num) { return false; }
@@ -701,7 +698,7 @@ pub fn cmd_watch(
                     branch: cached.branch.clone(),
                     base: cached.base.clone(), head_sha: "".into(), draft: false, approved: false,
                     checks: vec![], threads: vec![], needs_parent_rebase: false, has_merge_conflict: false,
-                    codeowners_eligibility: Default::default(),
+                    codeowners_eligibility: Default::default(), created_at: None,
                 });
             if let Some(c) = client
                 && let Some(parent) = prs.iter().find(|p| p.branch == pr_state.base).and_then(|p| fetched.get(&p.number))

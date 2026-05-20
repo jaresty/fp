@@ -183,7 +183,7 @@ impl GithubClient {
             approved: false,
             checks: vec![],
             threads: vec![],
-            needs_parent_rebase: false, has_merge_conflict: false, codeowners_eligibility: Default::default(),
+            needs_parent_rebase: false, has_merge_conflict: false, codeowners_eligibility: Default::default(), created_at: None,
         })
     }
 
@@ -258,9 +258,11 @@ impl GithubClient {
         Ok((sha, base))
     }
 
-    pub fn fetch_pr_is_merged(&self, owner: &str, repo: &str, pr_number: u64) -> Result<bool> {
+    pub fn fetch_pr_is_merged(&self, owner: &str, repo: &str, pr_number: u64) -> Result<(bool, Option<String>)> {
         let resp = self.get(&format!("/repos/{}/{}/pulls/{}", owner, repo, pr_number))?;
-        Ok(resp["merged"].as_bool().unwrap_or(false))
+        let merged = resp["merged"].as_bool().unwrap_or(false);
+        let created_at = resp["created_at"].as_str().map(|s| s.to_string());
+        Ok((merged, created_at))
     }
 
     pub fn fetch_repo_merge_method(&self, owner: &str, repo: &str) -> Result<String> {
@@ -581,7 +583,8 @@ impl GithubClient {
         let threads: Vec<Thread> = threads.into_iter().chain(review_body_threads).chain(issue_threads).collect();
 
         let has_merge_conflict = pr_json["mergeable"].as_bool() == Some(false);
-        Ok(PrState { number: pr_number, title, branch, base: base_branch, head_sha, needs_parent_rebase: false, draft, approved, checks, threads, has_merge_conflict, codeowners_eligibility: Default::default() })
+        let created_at = pr_json["created_at"].as_str().map(|s| s.to_string());
+        Ok(PrState { number: pr_number, title, branch, base: base_branch, head_sha, needs_parent_rebase: false, draft, approved, checks, threads, has_merge_conflict, codeowners_eligibility: Default::default(), created_at })
     }
 }
 
@@ -597,7 +600,7 @@ pub trait GithubClientTrait {
     fn fetch_pr_metadata(&self, owner: &str, repo: &str, pr_number: u64) -> Result<(String, String)>;
     fn fetch_pr_base(&self, owner: &str, repo: &str, pr_number: u64) -> Result<String>;
     fn fetch_pr_body(&self, owner: &str, repo: &str, pr_number: u64) -> Result<String>;
-    fn fetch_pr_is_merged(&self, owner: &str, repo: &str, pr_number: u64) -> Result<bool>;
+    fn fetch_pr_is_merged(&self, owner: &str, repo: &str, pr_number: u64) -> Result<(bool, Option<String>)>;
     fn fetch_pr_head_sha_and_base(&self, owner: &str, repo: &str, pr_number: u64) -> Result<(String, String)>;
     fn fetch_checks_for_sha(&self, owner: &str, repo: &str, sha: &str) -> Result<Vec<Check>>;
     fn fetch_resolved_threads_graphql(&self, owner: &str, repo: &str, pr_number: u64) -> Result<Vec<ResolvedThreadInfo>>;
@@ -621,7 +624,7 @@ impl GithubClientTrait for GithubClient {
     fn fetch_pr_metadata(&self, owner: &str, repo: &str, pr_number: u64) -> Result<(String, String)> { self.fetch_pr_metadata(owner, repo, pr_number) }
     fn fetch_pr_base(&self, owner: &str, repo: &str, pr_number: u64) -> Result<String> { self.fetch_pr_base(owner, repo, pr_number) }
     fn fetch_pr_body(&self, owner: &str, repo: &str, pr_number: u64) -> Result<String> { self.fetch_pr_body(owner, repo, pr_number) }
-    fn fetch_pr_is_merged(&self, owner: &str, repo: &str, pr_number: u64) -> Result<bool> { self.fetch_pr_is_merged(owner, repo, pr_number) }
+    fn fetch_pr_is_merged(&self, owner: &str, repo: &str, pr_number: u64) -> Result<(bool, Option<String>)> { self.fetch_pr_is_merged(owner, repo, pr_number) }
     fn fetch_pr_head_sha_and_base(&self, owner: &str, repo: &str, pr_number: u64) -> Result<(String, String)> { self.fetch_pr_head_sha_and_base(owner, repo, pr_number) }
     fn fetch_checks_for_sha(&self, owner: &str, repo: &str, sha: &str) -> Result<Vec<Check>> { self.fetch_checks_for_sha(owner, repo, sha) }
     fn fetch_resolved_threads_graphql(&self, owner: &str, repo: &str, pr_number: u64) -> Result<Vec<ResolvedThreadInfo>> { self.fetch_resolved_threads_graphql(owner, repo, pr_number) }
@@ -649,10 +652,13 @@ impl FakeGithubClient {
     pub fn new() -> Self { Self { prs: std::collections::HashMap::new(), checks: std::collections::HashMap::new(), head_behind: false } }
     pub fn new_with_pr(number: u64, branch: &str, title: &str, base: &str) -> Self {
         let mut client = Self::new();
-        client.set_pr(number, PrState { number, title: title.into(), branch: branch.into(), base: base.into(), head_sha: String::new(), draft: false, approved: false, checks: vec![], threads: vec![], needs_parent_rebase: false, has_merge_conflict: false, codeowners_eligibility: Default::default() });
+        client.set_pr(number, PrState { number, title: title.into(), branch: branch.into(), base: base.into(), head_sha: String::new(), draft: false, approved: false, checks: vec![], threads: vec![], needs_parent_rebase: false, has_merge_conflict: false, codeowners_eligibility: Default::default(), created_at: None });
         client
     }
     pub fn set_pr(&mut self, number: u64, pr: PrState) { self.prs.insert(number, pr); }
+    pub fn set_pr_created_at(&mut self, number: u64, date: &str) {
+        if let Some(pr) = self.prs.get_mut(&number) { pr.created_at = Some(date.to_string()); }
+    }
     pub fn set_checks(&mut self, sha: &str, checks: Vec<Check>) { self.checks.insert(sha.into(), checks); }
 }
 
@@ -674,7 +680,10 @@ impl GithubClientTrait for FakeGithubClient {
         let p = self.fetch_pr(o, r, n)?; Ok(p.base)
     }
     fn fetch_pr_body(&self, _o: &str, _r: &str, _n: u64) -> Result<String> { Ok(String::new()) }
-    fn fetch_pr_is_merged(&self, _o: &str, _r: &str, _n: u64) -> Result<bool> { Ok(false) }
+    fn fetch_pr_is_merged(&self, _o: &str, _r: &str, n: u64) -> Result<(bool, Option<String>)> {
+        let created_at = self.prs.get(&n).and_then(|p| p.created_at.clone());
+        Ok((false, created_at))
+    }
     fn fetch_pr_head_sha_and_base(&self, o: &str, r: &str, n: u64) -> Result<(String, String)> {
         let p = self.fetch_pr(o, r, n)?; Ok((p.head_sha, p.base))
     }
@@ -687,7 +696,7 @@ impl GithubClientTrait for FakeGithubClient {
     fn post_pr_comment(&self, _o: &str, _r: &str, _n: u64, _b: &str) -> Result<String> { Ok("https://github.com/fake/comment/1".into()) }
     #[allow(clippy::too_many_arguments)]
     fn create_pr_with_body(&self, _o: &str, _r: &str, title: &str, head: &str, base: &str, draft: bool, _body: Option<&str>) -> Result<PrState> {
-        Ok(PrState { number: 0, title: title.into(), branch: head.into(), base: base.into(), head_sha: String::new(), draft, approved: false, checks: vec![], threads: vec![], needs_parent_rebase: false, has_merge_conflict: false, codeowners_eligibility: Default::default() })
+        Ok(PrState { number: 0, title: title.into(), branch: head.into(), base: base.into(), head_sha: String::new(), draft, approved: false, checks: vec![], threads: vec![], needs_parent_rebase: false, has_merge_conflict: false, codeowners_eligibility: Default::default(), created_at: None })
     }
     fn mark_pr_ready(&self, _o: &str, _r: &str, _n: u64) -> Result<()> { Ok(()) }
     fn is_head_behind_base(&self, _o: &str, _r: &str, _base: &str, _head: &str) -> bool { self.head_behind }

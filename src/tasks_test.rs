@@ -21,7 +21,7 @@ mod tests {
             threads: vec![],
             head_sha: "".into(),
             needs_parent_rebase: false,
-            has_merge_conflict: false, codeowners_eligibility: Default::default(),
+            has_merge_conflict: false, codeowners_eligibility: Default::default(), created_at: None,
         }
     }
 
@@ -255,7 +255,7 @@ mod tests {
             approved: false,
             checks: vec![Check { name: "ci".into(), status: CheckStatus::Pass, required: true, details_url: None, log_snippet: None }],
             threads: vec![],
-            head_sha: "".into(), needs_parent_rebase: false, has_merge_conflict: false, codeowners_eligibility: Default::default(),
+            head_sha: "".into(), needs_parent_rebase: false, has_merge_conflict: false, codeowners_eligibility: Default::default(), created_at: None,
         };
         let tasks = generate_tasks(&pr);
         assert!(
@@ -278,7 +278,7 @@ mod tests {
             checks: vec![Check { name: "ci".into(), status: CheckStatus::Pass, required: true, details_url: None, log_snippet: None }],
             threads: vec![],
             head_sha: "".into(), needs_parent_rebase: false,
-            has_merge_conflict: false, codeowners_eligibility: Default::default(),
+            has_merge_conflict: false, codeowners_eligibility: Default::default(), created_at: None,
         };
         let tasks = generate_tasks(&pr);
         assert!(
