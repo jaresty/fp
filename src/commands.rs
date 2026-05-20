@@ -350,3 +350,59 @@ pub fn cmd_new(branch: &str, base: &str, dir: &std::path::Path) -> anyhow::Resul
     anyhow::ensure!(out.status.success(), "git worktree add failed: {}", String::from_utf8_lossy(&out.stderr));
     Ok(crate::display::format_new_worktree_output(&wt_path, branch))
 }
+
+pub struct CreateOpts {
+    pub title: String,
+    pub base: String,
+    pub body: Option<String>,
+    pub restack_before: Option<u64>,
+    pub insert_after: Option<u64>,
+}
+
+pub fn cmd_create(
+    client: &dyn crate::github::GithubClientTrait,
+    owner: &str,
+    repo: &str,
+    store: &crate::store::Store,
+    head_branch: &str,
+    dir: &std::path::Path,
+    opts: CreateOpts,
+) -> anyhow::Result<String> {
+    let CreateOpts { title, base, body, restack_before, insert_after } = opts;
+    let pr_state = client.create_pr_with_body(owner, repo, &title, head_branch, &base, true, body.as_deref())?;
+    store.track(pr_state.number)?;
+    store.update_cache(crate::store::PrCache {
+        number: pr_state.number,
+        title: pr_state.title.clone(),
+        branch: pr_state.branch.clone(),
+        base: pr_state.base.clone(),
+    })?;
+    let mut out = format!("Created PR #{}: {} ({})", pr_state.number, pr_state.title, pr_state.branch);
+
+    if let Some(target_pr) = restack_before {
+        let target_branch = client.fetch_pr_metadata(owner, repo, target_pr)?.1;
+        let old_base = client.fetch_pr_base(owner, repo, target_pr)?;
+        crate::stack::rebase_branch_onto(&target_branch, &old_base, head_branch, dir)?;
+        client.update_pr_base(owner, repo, target_pr, head_branch)?;
+        out.push_str(&format!("\nRestacked PR #{} onto {} (rebased {} --onto {})", target_pr, head_branch, target_branch, head_branch));
+    }
+
+    if let Some(anchor_pr) = insert_after {
+        let anchor_branch = client.fetch_pr_metadata(owner, repo, anchor_pr)?.1;
+        let state = store.load()?;
+        let next_pr = state.tracked_prs().into_iter()
+            .find(|p| client.fetch_pr_base(owner, repo, p.number).ok().as_deref() == Some(&anchor_branch))
+            .cloned();
+        if let Some(next) = next_pr {
+            let next_branch = next.branch.clone();
+            let next_pr_num = next.number;
+            crate::stack::rebase_branch_onto(&next_branch, &anchor_branch, head_branch, dir)?;
+            client.update_pr_base(owner, repo, next_pr_num, head_branch)?;
+            out.push_str(&format!("\nInserted {} between PR #{} and PR #{}", head_branch, anchor_pr, next_pr_num));
+        } else {
+            out.push_str(&format!("\nNo tracked PR found with base {}; nothing to restack", anchor_branch));
+        }
+    }
+
+    Ok(out)
+}

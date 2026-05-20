@@ -467,4 +467,35 @@ mod tests {
         let result = crate::commands::cmd_new("feat/x", "main", &not_a_repo);
         assert!(result.is_err(), "cmd_new must error in non-git directory");
     }
+
+    #[test]
+    fn cmd_create_returns_created_message() {
+        let tmp = tempfile::tempdir().unwrap();
+        let git_dir = tmp.path().join("git_dir");
+        std::fs::create_dir_all(&git_dir).unwrap();
+        let store = crate::store::Store::open(&git_dir);
+        let fake = crate::github::FakeGithubClient::new();
+        let result = crate::commands::cmd_create(
+            &fake, "owner", "repo", &store, "feat/my-branch", tmp.path(),
+            crate::commands::CreateOpts { title: "My PR Title".into(), base: "main".into(), body: None, restack_before: None, insert_after: None },
+        );
+        assert!(result.is_ok(), "cmd_create must succeed: {:?}", result);
+        let msg = result.unwrap();
+        assert!(msg.contains("Created PR"), "must confirm PR creation: {}", msg);
+    }
+
+    #[test]
+    fn cmd_create_tracks_pr_in_store() {
+        let tmp = tempfile::tempdir().unwrap();
+        let git_dir = tmp.path().join("git_dir");
+        std::fs::create_dir_all(&git_dir).unwrap();
+        let store = crate::store::Store::open(&git_dir);
+        let fake = crate::github::FakeGithubClient::new();
+        crate::commands::cmd_create(
+            &fake, "owner", "repo", &store, "feat/my-branch", tmp.path(),
+            crate::commands::CreateOpts { title: "My PR Title".into(), base: "main".into(), body: None, restack_before: None, insert_after: None },
+        ).unwrap();
+        let state = store.load().unwrap();
+        assert!(!state.tracked.is_empty(), "cmd_create must track the created PR in store");
+    }
 }

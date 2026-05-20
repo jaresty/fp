@@ -501,15 +501,11 @@ fn main() -> Result<()> {
             let token = resolve_github_token()?;
             let (owner, repo_name) = detect_repo()
                 .context("could not detect GitHub repo from git remote")?;
-
-            // Get current branch
             let out = std::process::Command::new("git")
                 .args(["rev-parse", "--abbrev-ref", "HEAD"])
                 .output()
                 .context("failed to run git")?;
             let head_branch = String::from_utf8(out.stdout)?.trim().to_string();
-            let main_root = repo_root()?;
-
             let client = GithubClient::new(token);
             let final_body = if demo.is_empty() {
                 body
@@ -517,46 +513,7 @@ fn main() -> Result<()> {
                 let demo_urls = resolve_demo_urls(&client, &owner, &repo_name, &demo)?;
                 Some(github::inject_demo_section(body.as_deref().unwrap_or(""), &demo_urls))
             };
-            let pr_state = client.create_pr_with_body(&owner, &repo_name, &title, &head_branch, &base, true, final_body.as_deref())?;
-            store.track(pr_state.number)?;
-            store.update_cache(PrCache {
-                number: pr_state.number,
-                title: pr_state.title.clone(),
-                branch: pr_state.branch.clone(),
-                base: pr_state.base.clone(),
-            })?;
-            println!("Created PR #{}: {} ({})", pr_state.number, pr_state.title, pr_state.branch);
-
-            // --restack-before <pr>: rebase that PR's branch onto current branch
-            if let Some(target_pr) = restack_before {
-                let target_branch = client.fetch_pr_metadata(&owner, &repo_name, target_pr)?.1;
-                let old_base = client.fetch_pr_base(&owner, &repo_name, target_pr)?;
-                stack::rebase_branch_onto(&target_branch, &old_base, &head_branch, &main_root)?;
-                client.update_pr_base(&owner, &repo_name, target_pr, &head_branch)?;
-                println!("Restacked PR #{} onto {} (rebased {} --onto {})", target_pr, head_branch, target_branch, head_branch);
-            }
-
-            // --insert-after <pr>: find the PR whose base is <pr>'s branch, rebase it onto current branch
-            if let Some(anchor_pr) = insert_after {
-                let anchor_branch = client.fetch_pr_metadata(&owner, &repo_name, anchor_pr)?.1;
-                let state = store.load()?;
-                // Find tracked PR whose base is anchor_branch
-                let next_pr = state.tracked_prs().into_iter()
-                    .find(|p| {
-                        client.fetch_pr_base(&owner, &repo_name, p.number)
-                            .ok().as_deref() == Some(&anchor_branch)
-                    })
-                    .cloned();
-                if let Some(next) = next_pr {
-                    let next_branch = next.branch.clone();
-                    let next_pr_num = next.number;
-                    stack::rebase_branch_onto(&next_branch, &anchor_branch, &head_branch, &main_root)?;
-                    client.update_pr_base(&owner, &repo_name, next_pr_num, &head_branch)?;
-                    println!("Inserted {} between PR #{} and PR #{}", head_branch, anchor_pr, next_pr_num);
-                } else {
-                    println!("No tracked PR found with base {}; nothing to restack", anchor_branch);
-                }
-            }
+            println!("{}", commands::cmd_create(&client, &owner, &repo_name, &store, &head_branch, &repo_root()?, commands::CreateOpts { title, base, body: final_body, restack_before, insert_after })?);
         }
 
         Commands::New { branch, base } => {
