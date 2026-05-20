@@ -406,3 +406,28 @@ pub fn cmd_create(
 
     Ok(out)
 }
+
+pub fn cmd_context(client: &dyn crate::github::GithubClientTrait, owner: &str, repo: &str, pr: u64, hint: &str, _full_log: bool) -> anyhow::Result<String> {
+    let pr_state = client.fetch_pr(owner, repo, pr)?;
+    if let Some(stripped) = hint.strip_prefix("thread:") {
+        let thread_id: u64 = stripped.parse().map_err(|_| anyhow::anyhow!("invalid thread id"))?;
+        if let Some(thread) = pr_state.threads.iter().find(|t| t.id == thread_id) {
+            let mut out = format!("Thread #{} ({:?})\n", thread.id, thread.state);
+            if let (Some(file), Some(line)) = (&thread.file, thread.line) {
+                out.push_str(&format!("  {}:{}\n", file, line));
+            }
+            out.push_str(&format!("  @{}: {}\n", thread.author, thread.body));
+            for (author, body) in &thread.replies {
+                out.push_str(&format!("  > @{}: {}\n", author, body));
+            }
+            Ok(out)
+        } else {
+            Ok(format!("Thread #{} not found in PR #{}\n", thread_id, pr))
+        }
+    } else if let Some(check) = pr_state.checks.iter().find(|c| c.name == hint) {
+        let status = format!("{:?}", check.status);
+        Ok(crate::ci::format_check_output(&check.name, &status, None, None, None))
+    } else {
+        Ok(format!("Check '{}' not found in PR #{}\n", hint, pr))
+    }
+}

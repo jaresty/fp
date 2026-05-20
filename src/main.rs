@@ -763,62 +763,39 @@ fn main() -> Result<()> {
 
         Commands::Context { pr, hint, full_log } => {
             let state = store.load()?;
-            let token = std::env::var("GITHUB_TOKEN").ok();
-            let repo = detect_repo();
-
-            let tracked = state.cache.get(&pr)
+            state.cache.get(&pr)
                 .with_context(|| format!("PR #{} is not tracked. Run `fp track {}`", pr, pr))?;
-
-            let pr_state = if let (Some(tok), Some((owner, repo_name))) = (token, repo) {
+            if let (Some(tok), Some((owner, repo_name))) = (std::env::var("GITHUB_TOKEN").ok(), detect_repo()) {
                 let client = GithubClient::new(tok);
-                client.fetch_pr(&owner, &repo_name, pr).ok()
-            } else {
-                None
-            }.unwrap_or_else(|| model::PrState {
-                number: tracked.number,
-                title: tracked.title.clone(),
-                branch: tracked.branch.clone(),
-                base: "".into(), head_sha: "".into(), draft: false, approved: false,
-                checks: vec![], threads: vec![], needs_parent_rebase: false, has_merge_conflict: false, codeowners_eligibility: Default::default(),
-            });
-
-            if let Some(stripped) = hint.strip_prefix("thread:") {
-                let thread_id: u64 = stripped.parse().context("invalid thread id")?;
-                if let Some(thread) = pr_state.threads.iter().find(|t| t.id == thread_id) {
-                    println!("Thread #{} ({:?})", thread.id, thread.state);
-                    if let (Some(file), Some(line)) = (&thread.file, thread.line) {
-                        println!("  {}:{}", file, line);
-                    }
-                    println!("  @{}: {}", thread.author, thread.body);
-                    for (author, body) in &thread.replies {
-                        println!("  > @{}: {}", author, body);
-                    }
-                } else {
-                    println!("Thread #{} not found in PR #{}", thread_id, pr);
-                }
-            } else {
-                if let Some(check) = pr_state.checks.iter().find(|c| c.name == hint) {
-                    let status = format!("{:?}", check.status);
-                    let output = if let Some(url) = &check.details_url {
-                        let provider = ci::parse_ci_provider(url);
-                        let token = resolve_github_token().unwrap_or_default();
-                        let log_client = ci::CiLogClient::new(token);
-                        match log_client.fetch_raw_log(&provider) {
-                            Ok(raw) if full_log => {
-                                let tmp = std::env::temp_dir().join(format!("fp-log-{}-{}.txt", pr, hint.replace('/', "-")));
-                                std::fs::write(&tmp, &raw)?;
-                                ci::format_check_output(&check.name, &status, None, Some(&tmp.to_string_lossy()), None)
+                // full_log CI path: fetch raw log and write to tmp file before displaying
+                if full_log && !hint.starts_with("thread:") {
+                    let pr_state = client.fetch_pr(&owner, &repo_name, pr)?;
+                    if let Some(check) = pr_state.checks.iter().find(|c| c.name == hint) {
+                        let status = format!("{:?}", check.status);
+                        let output = if let Some(url) = &check.details_url {
+                            let provider = ci::parse_ci_provider(url);
+                            let log_token = resolve_github_token().unwrap_or_default();
+                            let log_client = ci::CiLogClient::new(log_token);
+                            match log_client.fetch_raw_log(&provider) {
+                                Ok(raw) => {
+                                    let tmp = std::env::temp_dir().join(format!("fp-log-{}-{}.txt", pr, hint.replace('/', "-")));
+                                    std::fs::write(&tmp, &raw)?;
+                                    ci::format_check_output(&check.name, &status, None, Some(&tmp.to_string_lossy()), None)
+                                }
+                                Err(e) => ci::format_check_output(&check.name, &status, None, None, Some(&e.to_string())),
                             }
-                            Ok(raw) => ci::format_check_output(&check.name, &status, Some(&raw), None, None),
-                            Err(e) => ci::format_check_output(&check.name, &status, None, None, Some(&e.to_string())),
-                        }
+                        } else {
+                            format!("Check: {} ({})\n  No details URL available\n", check.name, status)
+                        };
+                        print!("{}", output);
                     } else {
-                        format!("Check: {} ({})\n  No details URL available\n", check.name, status)
-                    };
-                    print!("{}", output);
+                        println!("Check '{}' not found in PR #{}", hint, pr);
+                    }
                 } else {
-                    println!("Check '{}' not found in PR #{}", hint, pr);
+                    print!("{}", commands::cmd_context(&client, &owner, &repo_name, pr, &hint, false)?);
                 }
+            } else {
+                println!("No GITHUB_TOKEN — checks and threads unavailable for PR #{}", pr);
             }
         }
 

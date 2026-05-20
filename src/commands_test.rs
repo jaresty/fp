@@ -498,4 +498,56 @@ mod tests {
         let state = store.load().unwrap();
         assert!(!state.tracked.is_empty(), "cmd_create must track the created PR in store");
     }
+
+    #[test]
+    fn cmd_context_thread_returns_thread_details() {
+        use crate::model::{Thread, ThreadState};
+        use crate::github::GithubClientTrait as _;
+        let mut fake = crate::github::FakeGithubClient::new_with_pr(5, "feat/ctx", "My PR", "main");
+        let mut pr = fake.fetch_pr("o", "r", 5).unwrap();
+        pr.threads = vec![Thread {
+            id: 42,
+            state: ThreadState::Open,
+            author: "alice".into(),
+            body: "please fix this".into(),
+            file: Some("src/foo.rs".into()),
+            line: Some(10),
+            replies: vec![],
+        }];
+        fake.set_pr(5, pr);
+        let result = crate::commands::cmd_context(&fake, "o", "r", 5, "thread:42", false);
+        assert!(result.is_ok(), "cmd_context must succeed: {:?}", result);
+        let out = result.unwrap();
+        assert!(out.contains("please fix this"), "output must include thread body: {}", out);
+        assert!(out.contains("alice"), "output must include thread author: {}", out);
+    }
+
+    #[test]
+    fn cmd_context_check_returns_check_details() {
+        use crate::model::{Check, CheckStatus};
+        use crate::github::GithubClientTrait as _;
+        let mut fake = crate::github::FakeGithubClient::new_with_pr(5, "feat/ctx", "My PR", "main");
+        let mut pr = fake.fetch_pr("o", "r", 5).unwrap();
+        pr.checks = vec![Check {
+            name: "ci/build".into(),
+            status: CheckStatus::Fail,
+            required: true,
+            details_url: None,
+            log_snippet: None,
+        }];
+        fake.set_pr(5, pr);
+        let result = crate::commands::cmd_context(&fake, "o", "r", 5, "ci/build", false);
+        assert!(result.is_ok(), "cmd_context must succeed: {:?}", result);
+        let out = result.unwrap();
+        assert!(out.contains("ci/build"), "output must include check name: {}", out);
+    }
+
+    #[test]
+    fn cmd_context_missing_thread_returns_not_found() {
+        let fake = crate::github::FakeGithubClient::new_with_pr(5, "feat/ctx", "My PR", "main");
+        let result = crate::commands::cmd_context(&fake, "o", "r", 5, "thread:99", false);
+        assert!(result.is_ok(), "cmd_context must not error for missing thread");
+        let out = result.unwrap();
+        assert!(out.contains("not found"), "must say not found: {}", out);
+    }
 }
