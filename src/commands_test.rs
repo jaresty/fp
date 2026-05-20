@@ -842,4 +842,122 @@ mod tests {
         assert_eq!(commit_count, 1,
             "feat/child must have exactly 1 commit (C1) above main after rebase, got {}:\n{}", commit_count, log_str);
     }
+
+    // RS4: When two branches are tracked (a stacked pair), the squash detection must scan
+    // from the EARLIEST divergence point (the root branch's fork from main), not only from
+    // the child's fork. This ensures squash commits predating the child's fork are detected.
+    // Also verifies that the detection works without git fetch origin <sha> (sha is already local).
+    #[test]
+    fn cmd_rebase_stack_scans_from_earliest_merge_base_with_multiple_branches() {
+        use std::process::Command;
+
+        let tmp = tempfile::tempdir().unwrap();
+        let remote = tmp.path().join("remote");
+        let repo = tmp.path().join("repo");
+        std::fs::create_dir_all(&remote).unwrap();
+        std::fs::create_dir_all(&repo).unwrap();
+        let git_dir = repo.join(".git");
+
+        Command::new("git").args(["init", "--bare", "-b", "main"]).current_dir(&remote).output().unwrap();
+        Command::new("git").args(["init", "-b", "main"]).current_dir(&repo).output().unwrap();
+        Command::new("git").args(["config", "user.email", "t@t.com"]).current_dir(&repo).output().unwrap();
+        Command::new("git").args(["config", "user.name", "T"]).current_dir(&repo).output().unwrap();
+        Command::new("git").args(["remote", "add", "origin", remote.to_str().unwrap()]).current_dir(&repo).output().unwrap();
+
+        let git = |args: &[&str]| Command::new("git").args(args).current_dir(&repo).output().unwrap();
+
+        // M: initial commit on main
+        std::fs::write(repo.join("main.txt"), "main\n").unwrap();
+        git(&["add", "."]);
+        git(&["commit", "-m", "M"]);
+        git(&["push", "-u", "origin", "main"]);
+
+        // feat/root: branches from M, adds root.ts, then a parent-only extra commit.
+        // This PR will be squash-merged (untracked by fp).
+        git(&["checkout", "-b", "feat/root"]);
+        std::fs::write(repo.join("root.ts"), "root\n").unwrap();
+        git(&["add", "."]);
+        git(&["commit", "-m", "Root: add root.ts"]);
+
+        let root_extra_parent = String::from_utf8(
+            Command::new("git").args(["rev-parse", "HEAD"]).current_dir(&repo).output().unwrap().stdout
+        ).unwrap().trim().to_string();
+
+        std::fs::write(repo.join("root_extra.ts"), "extra\n").unwrap();
+        git(&["add", "."]);
+        git(&["commit", "-m", "Root extra: add root_extra.ts"]);
+        git(&["push", "-u", "origin", "feat/root"]);
+
+        let root_tip = String::from_utf8(
+            Command::new("git").args(["rev-parse", "feat/root"]).current_dir(&repo).output().unwrap().stdout
+        ).unwrap().trim().to_string();
+
+        // feat/mid branches from the FIRST root commit (root_extra_parent), adds mid.ts.
+        // It is tracked by fp and is the "bottom" of the tracked stack.
+        git(&["checkout", "-b", "feat/mid", &root_extra_parent]);
+        std::fs::write(repo.join("mid.ts"), "mid\n").unwrap();
+        git(&["add", "."]);
+        git(&["commit", "-m", "Mid: add mid.ts"]);
+        git(&["push", "-u", "origin", "feat/mid"]);
+
+        // feat/top stacks on feat/mid, adds top.ts. Also tracked.
+        git(&["checkout", "-b", "feat/top"]);
+        std::fs::write(repo.join("top.ts"), "top\n").unwrap();
+        git(&["add", "."]);
+        git(&["commit", "-m", "Top: add top.ts"]);
+        git(&["push", "-u", "origin", "feat/top"]);
+
+        // Squash-merge feat/root into main (untracked PR #55)
+        git(&["checkout", "main"]);
+        git(&["merge", "--squash", "feat/root"]);
+        git(&["commit", "-m", "squash: feat/root (#55)"]);
+        git(&["push", "origin", "main"]);
+        git(&["fetch", "origin"]);
+
+        // fp state: tracks feat/mid (#10) and feat/top (#11), NOT feat/root (#55)
+        let store = crate::store::Store::open(&git_dir);
+        store.track(10).unwrap();
+        store.update_cache(crate::store::PrCache {
+            number: 10, title: "Mid".into(), branch: "feat/mid".into(), base: "main".into()
+        }).unwrap();
+        store.track(11).unwrap();
+        store.update_cache(crate::store::PrCache {
+            number: 11, title: "Top".into(), branch: "feat/top".into(), base: "feat/mid".into()
+        }).unwrap();
+
+        let mut fake = crate::github::FakeGithubClient::new_with_pr(10, "feat/mid", "Mid", "main");
+        fake.set_pr(10, crate::model::PrState {
+            number: 10, title: "Mid".into(), branch: "feat/mid".into(), base: "main".into(),
+            head_sha: String::new(), draft: false, approved: false, checks: vec![], threads: vec![],
+            needs_parent_rebase: false, has_merge_conflict: false,
+            codeowners_eligibility: Default::default(),
+        });
+        fake.set_pr(11, crate::model::PrState {
+            number: 11, title: "Top".into(), branch: "feat/top".into(), base: "feat/mid".into(),
+            head_sha: String::new(), draft: false, approved: false, checks: vec![], threads: vec![],
+            needs_parent_rebase: false, has_merge_conflict: false,
+            codeowners_eligibility: Default::default(),
+        });
+        fake.set_pr(55, crate::model::PrState {
+            number: 55, title: "Root".into(), branch: "feat/root".into(), base: "main".into(),
+            head_sha: root_tip.clone(),
+            draft: false, approved: false, checks: vec![], threads: vec![],
+            needs_parent_rebase: false, has_merge_conflict: false,
+            codeowners_eligibility: Default::default(),
+        });
+
+        let result = crate::commands::cmd_rebase_stack(
+            Some(&fake), "o", "r", &store, &repo, &git_dir, None, false,
+        );
+        assert!(result.is_ok(), "cmd_rebase_stack must succeed: {:?}", result);
+
+        // feat/mid must have exactly 1 commit above origin/main (Mid only)
+        let mid_log = Command::new("git")
+            .args(["log", "--oneline", "origin/main..feat/mid"])
+            .current_dir(&repo).output().unwrap();
+        let mid_str = String::from_utf8_lossy(&mid_log.stdout);
+        let mid_count = mid_str.trim().lines().filter(|l| !l.is_empty()).count();
+        assert_eq!(mid_count, 1,
+            "feat/mid must have exactly 1 commit above main after rebase, got {}:\n{}", mid_count, mid_str);
+    }
 }

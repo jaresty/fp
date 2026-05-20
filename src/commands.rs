@@ -535,32 +535,29 @@ pub fn cmd_rebase_stack(
         // squash commit on origin/main, look up the PR's head SHA via API, and use it as the
         // --onto cut point so only child-unique commits are replayed.
         let current_branches: Vec<String> = state.tracked_prs().iter().map(|p| p.branch.clone()).collect();
-        let oldest_mb = current_branches.iter()
-            .filter_map(|b| {
-                std::process::Command::new("git")
-                    .args(["merge-base", b, "origin/main"])
-                    .current_dir(dir).output().ok()
-                    .and_then(|o| String::from_utf8(o.stdout).ok())
-                    .map(|s| s.trim().to_string())
-                    .filter(|s| !s.is_empty())
-            })
-            .min_by_key(|sha| {
-                std::process::Command::new("git")
-                    .args(["rev-list", "--count", sha])
-                    .current_dir(dir).output().ok()
-                    .and_then(|o| String::from_utf8(o.stdout).ok())
-                    .and_then(|s| s.trim().parse::<usize>().ok())
-                    .unwrap_or(usize::MAX)
-            })
-            .unwrap_or_default();
+        // Find the oldest common ancestor of all tracked branches and origin/main in one traversal.
+        // git merge-base --octopus avoids the O(N × history) cost of per-branch rev-list --count.
+        let oldest_mb = if current_branches.is_empty() { String::new() } else {
+            let mut args = vec!["merge-base", "--octopus"];
+            let branches: Vec<&str> = current_branches.iter().map(String::as_str).collect();
+            args.extend(branches.iter().copied());
+            args.push("origin/main");
+            std::process::Command::new("git")
+                .args(&args)
+                .current_dir(dir).output().ok()
+                .and_then(|o| String::from_utf8(o.stdout).ok())
+                .map(|s| s.trim().to_string())
+                .filter(|s| !s.is_empty())
+                .unwrap_or_default()
+        };
         if !oldest_mb.is_empty() {
             let pr_numbers = crate::stack::squash_pr_numbers_since("origin/main", &oldest_mb, dir);
             for pr_num in pr_numbers {
                 if state.tracked.contains(&pr_num) { continue; }
                 let Ok((head_sha, base_ref)) = client.fetch_pr_head_sha_and_base(owner, repo, pr_num) else { continue; };
-                let _ = std::process::Command::new("git")
-                    .args(["fetch", "origin", &head_sha])
-                    .current_dir(dir).output();
+                // Do not fetch head_sha from origin — git fetch of a bare SHA can hang on GitHub
+                // when the remote branch has been deleted. The sha is available locally if the
+                // branch was fetched by the git fetch origin call at the top of rebase_stack.
                 for branch in &current_branches {
                     // head_sha may be on a diverging branch (not a direct ancestor of branch).
                     // Use git merge-base to find the actual common ancestor on branch's history
