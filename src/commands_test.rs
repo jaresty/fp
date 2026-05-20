@@ -1143,6 +1143,93 @@ mod tests {
             "feat/child must have exactly 1 commit (C1) above main after rebase, got {}:\n{}", commit_count, log_str);
     }
 
+    // RS5: An unrelated squash-merged PR whose head_sha is NOT an ancestor of the tracked
+    // branch must be ignored — the rebase must not be attempted and the branch must be
+    // unchanged after cmd_rebase_stack completes.
+    #[test]
+    fn cmd_rebase_stack_ignores_unrelated_squash_pr() {
+        use std::process::Command;
+
+        let tmp = tempfile::tempdir().unwrap();
+        let remote = tmp.path().join("remote");
+        let repo = tmp.path().join("repo");
+        std::fs::create_dir_all(&remote).unwrap();
+        std::fs::create_dir_all(&repo).unwrap();
+        let git_dir = repo.join(".git");
+
+        Command::new("git").args(["init", "--bare", "-b", "main"]).current_dir(&remote).output().unwrap();
+        Command::new("git").args(["init", "-b", "main"]).current_dir(&repo).output().unwrap();
+        Command::new("git").args(["config", "user.email", "t@t.com"]).current_dir(&repo).output().unwrap();
+        Command::new("git").args(["config", "user.name", "T"]).current_dir(&repo).output().unwrap();
+        Command::new("git").args(["remote", "add", "origin", remote.to_str().unwrap()]).current_dir(&repo).output().unwrap();
+
+        let git = |args: &[&str]| Command::new("git").args(args).current_dir(&repo).output().unwrap();
+
+        std::fs::write(repo.join("main.txt"), "main\n").unwrap();
+        git(&["add", "."]);
+        git(&["commit", "-m", "M"]);
+        git(&["push", "-u", "origin", "main"]);
+
+        // Unrelated PR #77 — its branch and head_sha share NO history with feat/child
+        git(&["checkout", "-b", "feat/unrelated"]);
+        std::fs::write(repo.join("unrelated.txt"), "unrelated\n").unwrap();
+        git(&["add", "."]);
+        git(&["commit", "-m", "Unrelated work"]);
+        git(&["push", "-u", "origin", "feat/unrelated"]);
+        let unrelated_head_sha = String::from_utf8(
+            Command::new("git").args(["rev-parse", "feat/unrelated"]).current_dir(&repo).output().unwrap().stdout
+        ).unwrap().trim().to_string();
+
+        // Squash-merge unrelated PR into main
+        git(&["checkout", "main"]);
+        git(&["merge", "--squash", "feat/unrelated"]);
+        git(&["commit", "-m", "squash: feat/unrelated (#77)"]);
+        git(&["push", "origin", "main"]);
+
+        // feat/child is forked from main BEFORE the squash — has no connection to feat/unrelated
+        let fork_sha = String::from_utf8(
+            Command::new("git").args(["rev-parse", "HEAD~1"]).current_dir(&repo).output().unwrap().stdout
+        ).unwrap().trim().to_string();
+        git(&["checkout", "-b", "feat/child", &fork_sha]);
+        std::fs::write(repo.join("child.txt"), "child\n").unwrap();
+        git(&["add", "."]);
+        git(&["commit", "-m", "C: child work"]);
+        git(&["push", "-u", "origin", "feat/child"]);
+
+        let child_tip_before = String::from_utf8(
+            Command::new("git").args(["rev-parse", "feat/child"]).current_dir(&repo).output().unwrap().stdout
+        ).unwrap().trim().to_string();
+
+        git(&["checkout", "main"]);
+        git(&["fetch", "origin"]);
+
+        let store = crate::store::Store::open(&git_dir);
+        store.track(99).unwrap();
+        store.update_cache(crate::store::PrCache {
+            number: 99, title: "Child".into(), branch: "feat/child".into(), base: "main".into()
+        }).unwrap();
+
+        let mut fake = crate::github::FakeGithubClient::new_with_pr(99, "feat/child", "Child", "main");
+        fake.set_pr(77, crate::model::PrState {
+            number: 77, title: "Unrelated".into(), branch: "feat/unrelated".into(), base: "main".into(),
+            head_sha: unrelated_head_sha.clone(),
+            draft: false, approved: false, checks: vec![], threads: vec![],
+            needs_parent_rebase: false, has_merge_conflict: false,
+            codeowners_eligibility: Default::default(), created_at: None,
+        });
+        fake.set_pr_created_at(99, "2020-01-01T00:00:00Z");
+
+        let result = crate::commands::cmd_rebase_stack(
+            Some(&fake), "o", "r", &store, &repo, &git_dir, None, &|_| {},
+        );
+        assert!(result.is_ok(), "cmd_rebase_stack must succeed: {:?}", result);
+        let output = result.unwrap();
+        // The squash-detection path must not fire for the unrelated PR #77.
+        // (The normal rebase onto main may still run — that's expected.)
+        assert!(!output.contains("untracked squash of PR #77"),
+            "must not rebase feat/child via unrelated squash PR #77; got:\n{}", output);
+    }
+
     // RS4: When two branches are tracked (a stacked pair), the squash detection must scan
     // from the EARLIEST divergence point (the root branch's fork from main), not only from
     // the child's fork. This ensures squash commits predating the child's fork are detected.

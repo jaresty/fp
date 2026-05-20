@@ -550,33 +550,27 @@ pub fn cmd_rebase_stack(
         }).min();
         if let Some(ref since_date) = min_tip_date {
             let squash_commits = crate::stack::squash_pr_numbers_since_date("origin/main", since_date, 200, dir);
-            let relevant: Vec<(String, u64)> = squash_commits.into_iter()
-                .filter(|(squash_sha, pr_num)| {
-                    if state.tracked.contains(pr_num) { return false; }
-                    // Only make an API call if the squash commit's parent is an ancestor of at
-                    // least one tracked branch. The squash commit itself is on main (not in any
-                    // branch's history), but its parent is the main commit the branch forked from.
-                    // If that parent is an ancestor of the branch, the branch contains pre-squash
-                    // commits that need rebasing.
-                    let parent_ref = format!("{}^", squash_sha);
-                    current_branches.iter().any(|branch| {
-                        std::process::Command::new("git")
-                            .args(["merge-base", "--is-ancestor", &parent_ref, branch])
-                            .current_dir(dir).status().map(|s| s.success()).unwrap_or(false)
-                    })
-                })
+            let untracked: Vec<u64> = squash_commits.into_iter()
+                .filter(|(_, pr_num)| !state.tracked.contains(pr_num))
+                .map(|(_, pr_num)| pr_num)
                 .collect();
-            on_progress(&format!("[fp] squash detection: {} ancestor commit(s) to check via API", relevant.len()));
-            for (_, pr_num) in relevant {
+            on_progress(&format!("[fp] squash detection: {} untracked squash PR(s) to check via API", untracked.len()));
+            for pr_num in untracked {
                 on_progress(&format!("[fp] fetch head SHA for squash PR #{} (GitHub API)", pr_num));
                 let Ok((head_sha, base_ref)) = client.fetch_pr_head_sha_and_base(owner, repo, pr_num) else { continue; };
                 // Do not fetch head_sha from origin — git fetch of a bare SHA can hang on GitHub
                 // when the remote branch has been deleted. The sha is available locally if the
                 // branch was fetched by the git fetch origin call at the top of rebase_stack.
                 for branch in &current_branches {
-                    // head_sha may be on a diverging branch (not a direct ancestor of branch).
-                    // Use git merge-base to find the actual common ancestor on branch's history
-                    // — that commit IS an ancestor of branch and serves as the correct cut point.
+                    // Only rebase if head_sha is literally an ancestor of this branch — meaning
+                    // the branch was built on top of the original feature branch. This is the
+                    // semantically correct check: it confirms the branch contains the pre-squash
+                    // commits that need replacing. Must run before any rebasing (head_sha gets
+                    // rewritten after rebase so this check would fail post-rebase).
+                    let head_is_ancestor = std::process::Command::new("git")
+                        .args(["merge-base", "--is-ancestor", &head_sha, branch])
+                        .current_dir(dir).status().map(|s| s.success()).unwrap_or(false);
+                    if !head_is_ancestor { continue; }
                     let cut_sha = std::process::Command::new("git")
                         .args(["merge-base", &head_sha, branch])
                         .current_dir(dir).output().ok()
