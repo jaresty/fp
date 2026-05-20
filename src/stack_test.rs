@@ -355,6 +355,74 @@ mod tests {
         assert_eq!(child_parent, main_tip, "feat/child should be rebased onto main tip even when in a worktree");
     }
 
+    // MG3: rebase_onto_after_merge returns an error containing conflict resolution instructions
+    // when a conflict occurs, and leaves the rebase in progress (does NOT call git rebase --abort).
+    #[test]
+    fn rebase_onto_after_merge_leaves_rebase_in_progress_on_conflict() {
+        use std::process::Command;
+        use tempfile::TempDir;
+
+        let remote_dir = TempDir::new().unwrap();
+        Command::new("git").args(["init", "--bare", "-b", "main"])
+            .current_dir(remote_dir.path()).output().unwrap();
+
+        let dir = TempDir::new().unwrap();
+        let path = dir.path();
+
+        let git = |args: &[&str]| {
+            Command::new("git").args(args).current_dir(path).output().unwrap()
+        };
+
+        git(&["init", "-b", "main"]);
+        git(&["config", "user.email", "test@test.com"]);
+        git(&["config", "user.name", "Test"]);
+        git(&["remote", "add", "origin", remote_dir.path().to_str().unwrap()]);
+
+        // main: commit A with conflict.txt = "main"
+        std::fs::write(path.join("conflict.txt"), "main\n").unwrap();
+        git(&["add", "."]);
+        git(&["commit", "-m", "A"]);
+        git(&["push", "origin", "main"]);
+
+        // feat/parent: modifies conflict.txt = "parent"
+        git(&["checkout", "-b", "feat/parent"]);
+        std::fs::write(path.join("conflict.txt"), "parent\n").unwrap();
+        git(&["add", "."]);
+        git(&["commit", "-m", "B: parent changes conflict.txt"]);
+        git(&["push", "--set-upstream", "origin", "feat/parent"]);
+        let parent_sha = String::from_utf8(
+            Command::new("git").args(["rev-parse", "feat/parent"]).current_dir(path).output().unwrap().stdout
+        ).unwrap().trim().to_string();
+
+        // feat/child: also modifies conflict.txt = "child" — will conflict when rebased onto main
+        git(&["checkout", "-b", "feat/child"]);
+        std::fs::write(path.join("conflict.txt"), "child\n").unwrap();
+        git(&["add", "."]);
+        git(&["commit", "-m", "C: child changes conflict.txt"]);
+        git(&["push", "--set-upstream", "origin", "feat/child"]);
+
+        // Squash-merge feat/parent into main with conflict.txt = "squashed"
+        git(&["checkout", "main"]);
+        git(&["merge", "--squash", "feat/parent"]);
+        // Override conflict.txt in squash commit to be different from child's version
+        std::fs::write(path.join("conflict.txt"), "squashed\n").unwrap();
+        git(&["add", "."]);
+        git(&["commit", "-m", "squash merge B (#42)"]);
+        git(&["push", "origin", "main"]);
+
+        // rebase_onto_after_merge must error (conflict) but NOT abort the rebase
+        let result = crate::stack::rebase_onto_after_merge("feat/child", &parent_sha, "main", path);
+        assert!(result.is_err(), "must return Err when rebase conflicts");
+        let err_msg = format!("{:#}", result.unwrap_err());
+        assert!(err_msg.contains("Conflict — resolve with"), "error must contain 'Conflict — resolve with'; got: {}", err_msg);
+        assert!(err_msg.contains("fp rebase-stack"), "error must include 'fp rebase-stack' instruction; got: {}", err_msg);
+
+        // The rebase must be left in progress — rebase-merge directory should exist
+        let rebase_in_progress = path.join(".git").join("rebase-merge").exists()
+            || path.join(".git").join("rebase-apply").exists();
+        assert!(rebase_in_progress, "rebase must be left in progress (not aborted) after conflict");
+    }
+
     // RS3: rebase_stack force-pushes each rebased branch after successful rebase
     #[test]
     fn rebase_stack_pushes_after_rebase() {

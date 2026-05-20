@@ -377,8 +377,10 @@ pub fn rebase_onto_after_merge(branch: &str, old_base_sha: &str, new_base: &str,
     }
     let rebase = git(&["rebase", "--onto", new_base, old_base_sha, branch])?;
     if !rebase.status.success() {
-        git(&["rebase", "--abort"]).ok();
-        anyhow::bail!("rebase --onto {} {} {} failed: {}", new_base, old_base_sha, branch, String::from_utf8_lossy(&rebase.stderr));
+        anyhow::bail!(
+            "Conflict — resolve with:\n  git add <resolved files> && git rebase --continue\n  fp rebase-stack\n\n{}",
+            String::from_utf8_lossy(&rebase.stderr).trim()
+        );
     }
     let push = git(&["push", "--force-with-lease"])?;
     anyhow::ensure!(push.status.success(), "force-push of {} failed: {}", branch, String::from_utf8_lossy(&push.stderr));
