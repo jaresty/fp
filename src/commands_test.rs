@@ -761,16 +761,30 @@ mod tests {
         git(&["commit", "-m", "M"]);
         git(&["push", "-u", "origin", "main"]);
 
-        // feat/parent: P1 creates runner.ts="v1", P2 changes it to "v2" — untracked in fp.
-        // Squash will land "v2" on main. Replaying P1 (which "adds" runner.ts="v1") onto
-        // main (which has "v2") produces an add/add conflict — that's the bug.
+        // Build a scenario that matches the real-world bug:
+        // - feat/parent and feat/child share some history (up to a fork point)
+        // - feat/parent adds MORE commits after the fork point (not in feat/child)
+        // - feat/parent is squash-merged; feat/child must be rebased using the
+        //   merge-base of parent_tip and feat/child as the cut point (not parent_tip itself,
+        //   which may not be locally available or reachable).
+        //
+        // Shared: M → A (runner.ts="v1")
+        // feat/parent: M → A → P_extra (runner.ts="v2") — parent_tip = P_extra
+        // feat/child:  M → A → C1 (runner.ts="v3")      — NOT from P_extra
+        //
+        // git merge-base P_extra feat/child = A
+        // Correct rebase: --onto origin/main A feat/child → replay only C1
+
+        // A: shared commit — adds shared.ts (touched by both branches)
         git(&["checkout", "-b", "feat/parent"]);
-        std::fs::write(repo.join("runner.ts"), "v1\n").unwrap();
+        std::fs::write(repo.join("shared.ts"), "shared\n").unwrap();
         git(&["add", "."]);
-        git(&["commit", "-m", "P1: add runner.ts v1"]);
-        std::fs::write(repo.join("runner.ts"), "v2\n").unwrap();
+        git(&["commit", "-m", "A: add shared.ts"]);
+
+        // P_extra: parent-only commit — adds parent.ts (NOT touched by child)
+        std::fs::write(repo.join("parent.ts"), "parent\n").unwrap();
         git(&["add", "."]);
-        git(&["commit", "-m", "P2: update runner.ts to v2"]);
+        git(&["commit", "-m", "P_extra: add parent.ts"]);
         git(&["push", "-u", "origin", "feat/parent"]);
 
         // Record feat/parent tip before squash
@@ -778,11 +792,16 @@ mod tests {
             Command::new("git").args(["rev-parse", "feat/parent"]).current_dir(&repo).output().unwrap().stdout
         ).unwrap().trim().to_string();
 
-        // feat/child: stacked on feat/parent. Unique commit C1 modifies runner.ts v2→v3.
-        git(&["checkout", "-b", "feat/child"]);
-        std::fs::write(repo.join("runner.ts"), "v3\n").unwrap();
+        // feat/child branches from the shared commit A (HEAD~1 of feat/parent), NOT from P_extra.
+        // This means parent_tip (P_extra) is NOT an ancestor of feat/child.
+        // C1 adds child.ts — a different file from parent.ts, so no conflict after squash-merge.
+        let fork_sha = String::from_utf8(
+            Command::new("git").args(["rev-parse", "HEAD~1"]).current_dir(&repo).output().unwrap().stdout
+        ).unwrap().trim().to_string();
+        git(&["checkout", "-b", "feat/child", &fork_sha]);
+        std::fs::write(repo.join("child.ts"), "child\n").unwrap();
         git(&["add", "."]);
-        git(&["commit", "-m", "C1: update runner.ts to v3"]);
+        git(&["commit", "-m", "C1: add child.ts"]);
         git(&["push", "-u", "origin", "feat/child"]);
 
         // Squash-merge feat/parent into main with "(#42)" in message

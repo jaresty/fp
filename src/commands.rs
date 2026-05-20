@@ -562,16 +562,20 @@ pub fn cmd_rebase_stack(
                     .args(["fetch", "origin", &head_sha])
                     .current_dir(dir).output();
                 for branch in &current_branches {
-                    let is_ancestor = std::process::Command::new("git")
-                        .args(["merge-base", "--is-ancestor", &head_sha, branch])
-                        .current_dir(dir).output()
-                        .map(|o| o.status.success())
-                        .unwrap_or(false);
-                    if is_ancestor {
+                    // head_sha may be on a diverging branch (not a direct ancestor of branch).
+                    // Use git merge-base to find the actual common ancestor on branch's history
+                    // — that commit IS an ancestor of branch and serves as the correct cut point.
+                    let cut_sha = std::process::Command::new("git")
+                        .args(["merge-base", &head_sha, branch])
+                        .current_dir(dir).output().ok()
+                        .and_then(|o| String::from_utf8(o.stdout).ok())
+                        .map(|s| s.trim().to_string())
+                        .filter(|s| !s.is_empty());
+                    if let Some(cut) = cut_sha {
                         if let Some(warn) = crate::worktree::check_branch_lock(git_dir, branch) {
                             out.push_str(&format!("{}\n", warn)); continue;
                         }
-                        match crate::stack::rebase_onto_after_merge(branch, &head_sha, &base_ref, dir) {
+                        match crate::stack::rebase_onto_after_merge(branch, &cut, &base_ref, dir) {
                             Ok(()) => out.push_str(&format!("✓ rebased {} after untracked squash of PR #{}\n", branch, pr_num)),
                             Err(e) => out.push_str(&format!("✗ failed to rebase {} after squash of PR #{}: {}\n", branch, pr_num, e)),
                         }
