@@ -690,24 +690,35 @@ mod tests {
 
     #[test]
     fn cmd_rebase_stack_returns_up_to_date_when_all_rebased() {
-        // Set up a real git repo with a tracked branch that is already up to date
+        // Set up a real git repo with bare remote and a tracked branch already up to date
         let tmp = tempfile::tempdir().unwrap();
+        let remote = tmp.path().join("remote");
         let repo = tmp.path().join("repo");
+        std::fs::create_dir_all(&remote).unwrap();
         std::fs::create_dir_all(&repo).unwrap();
         let git_dir = repo.join(".git");
-        std::process::Command::new("git").args(["init"]).current_dir(&repo).output().unwrap();
+
+        // Bare remote
+        std::process::Command::new("git").args(["init", "--bare", "-b", "main"]).current_dir(&remote).output().unwrap();
+
+        // Working clone
+        std::process::Command::new("git").args(["init", "-b", "main"]).current_dir(&repo).output().unwrap();
         std::process::Command::new("git").args(["config", "user.email", "t@t.com"]).current_dir(&repo).output().unwrap();
         std::process::Command::new("git").args(["config", "user.name", "T"]).current_dir(&repo).output().unwrap();
+        std::process::Command::new("git").args(["remote", "add", "origin", remote.to_str().unwrap()]).current_dir(&repo).output().unwrap();
+
         std::fs::write(repo.join("a.txt"), "a").unwrap();
         std::process::Command::new("git").args(["add", "."]).current_dir(&repo).output().unwrap();
         std::process::Command::new("git").args(["commit", "-m", "init"]).current_dir(&repo).output().unwrap();
-        // Create feat/x branch
+        std::process::Command::new("git").args(["push", "-u", "origin", "main"]).current_dir(&repo).output().unwrap();
+
+        // Create feat/x already based on main
         std::process::Command::new("git").args(["checkout", "-b", "feat/x"]).current_dir(&repo).output().unwrap();
         std::fs::write(repo.join("b.txt"), "b").unwrap();
         std::process::Command::new("git").args(["add", "."]).current_dir(&repo).output().unwrap();
         std::process::Command::new("git").args(["commit", "-m", "feat"]).current_dir(&repo).output().unwrap();
-        std::process::Command::new("git").args(["checkout", "master"]).current_dir(&repo)
-            .output().unwrap_or_else(|_| std::process::Command::new("git").args(["checkout", "main"]).current_dir(&repo).output().unwrap());
+        std::process::Command::new("git").args(["push", "-u", "origin", "feat/x"]).current_dir(&repo).output().unwrap();
+        std::process::Command::new("git").args(["checkout", "main"]).current_dir(&repo).output().unwrap();
 
         let store = crate::store::Store::open(&git_dir);
         store.track(1).unwrap();

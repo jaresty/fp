@@ -130,6 +130,13 @@ pub fn rebase_stack(branches: &[String], parent_of: &HashMap<String, Option<Stri
 
         progress(&format!("rebasing {} onto {}", branch, parent));
 
+        let pre_rebase_sha = std::process::Command::new("git")
+            .args(["rev-parse", branch])
+            .current_dir(dir).output().ok()
+            .and_then(|o| String::from_utf8(o.stdout).ok())
+            .map(|s| s.trim().to_string())
+            .unwrap_or_default();
+
         // Capture pre-rebase diff using three-dot (symmetric diff from merge-base).
         // Use the snapshotted parent SHA (before any sibling rebase changed the ref).
         let pre_parent_sha = pre_rebase_parent_shas.get(branch.as_str()).cloned().unwrap_or_default();
@@ -284,6 +291,27 @@ pub fn rebase_stack(branches: &[String], parent_of: &HashMap<String, Option<Stri
         };
 
         if rebase.status.success() {
+            let post_rebase_sha = std::process::Command::new("git")
+                .args(["rev-parse", branch])
+                .current_dir(&wt_path).output().ok()
+                .and_then(|o| String::from_utf8(o.stdout).ok())
+                .map(|s| s.trim().to_string())
+                .unwrap_or_default();
+
+            if post_rebase_sha == pre_rebase_sha {
+                // No-op rebase — check if remote is already in sync before skipping push
+                let remote_sha = std::process::Command::new("git")
+                    .args(["rev-parse", &format!("origin/{}", branch)])
+                    .current_dir(&wt_path).output().ok()
+                    .and_then(|o| String::from_utf8(o.stdout).ok())
+                    .map(|s| s.trim().to_string())
+                    .unwrap_or_default();
+                if remote_sha == post_rebase_sha {
+                    // Remote already matches — skip push entirely
+                    continue;
+                }
+            }
+
             // Invariant check: semantic diff (three-dot) should match pre-rebase diff
             let new_parent = if parent_merged_into_base { &origin_base } else { parent };
             let post_rebase_diff = std::process::Command::new("git")
