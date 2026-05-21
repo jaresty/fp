@@ -391,7 +391,8 @@ to any of its member PRs.
 `fp switch` gains lifecycle awareness as a non-breaking layer. Interactive lifecycle
 *prompts* (startup offer, teardown offer) are suppressed when stdout is not a TTY and the
 safe default is applied silently. Informational *output* (post-switch feature summary,
-hints) is always emitted — LLM agents piping fp output must receive it.
+hints) is always emitted to **stderr** — keeping stdout clean for the worktree path
+consumed by `fps`, while remaining visible to human terminals and LLM agents.
 
 **Switching away from a PR that has a live instance (TTY):**
 ```
@@ -446,10 +447,14 @@ Rules for the hints block:
 - "To check health" always appears when the PR is in a feature envelope
 - "To tear down" always appears when the PR is in a feature envelope
 - The entire block is suppressed when the PR has no feature envelope membership
-- **The block is always emitted regardless of TTY state** — it is informational output,
-  not a prompt; LLM agents piping fp output must see it to know what operations are
-  available; only the interactive startup/teardown *prompts* are suppressed in
-  non-TTY mode, not this summary
+- **The block is written to stderr, not stdout** — stdout carries only the worktree path
+  (consumed by the `fps` shell function via command substitution); writing the summary to
+  stdout would break `fps` by corrupting the captured path; stderr is visible to both
+  human terminals and LLM agents reading process stderr; this is the correct Unix split:
+  machine-readable output on stdout, informational context on stderr
+- **The block is always emitted regardless of TTY state** — LLM agents must receive it
+  to know what operations are available after the switch; only interactive prompts
+  (startup/teardown offers) are TTY-gated, not this summary
 
 The status table reuses the same health-check results already computed during the
 switch (within the 2-second cap); no additional probes are issued.
