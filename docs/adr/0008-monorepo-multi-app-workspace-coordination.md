@@ -87,12 +87,25 @@ This writes a `[configs.<name>]` entry to `~/.fp/config.toml`. Re-running with t
 
 #### Assignment
 
-A named config is assigned to a repo, and inherited by all PRs on that repo:
+A named config is assigned to a repo (inherited by all PRs) via a global command, or
+bound to a specific PR at the moment it joins a feature envelope:
 
 ```
-fp app set-config <repo> <config-name>      # all PRs on this repo use this config
-fp pr set-config <pr#>   <config-name>      # override for one specific PR
+fp app set-config <repo> <config-name>                             # all PRs on this repo use this config
+fp feature add <name> <pr#> --config <config-name>                 # add PR and assign one app config
+fp feature add <name> <pr#> --config <c1> --config <c2>            # add PR with multiple app configs
 ```
+
+`fp app set-config` writes to `~/.fp/config.toml` (global, repo-slug keyed). This is the
+repo-level default, set once for a repo, not per-PR.
+
+`fp feature add --config` assigns the app config directly on the `ProcessRecord` in
+`.git/fp/process-state.json` (per-repo). PR-level assignments live in the process state
+store (not the global config) because PR numbers are only unique within a repo. Collapsing
+assignment into `fp feature add` means there is one command instead of two, the config is
+always set before `fp feature up` runs, and no separate `fp pr set-config` step is needed.
+
+`fp pr up <pr#> --config <config-name>` is the single-PR shorthand equivalent.
 
 ---
 
@@ -101,16 +114,17 @@ fp pr set-config <pr#>   <config-name>      # override for one specific PR
 A feature envelope is a named set of PRs that fp activates together for local testing.
 
 ```
-fp feature new <name>                       # create a feature envelope
-fp feature add <name> <pr#>                 # add a PR to the feature (auto-tracks if not tracked)
-fp feature add-dep <name> <app-config>      # add a baseline app config dependency (no PR)
-fp feature up   <name>                      # bootstrap all PRs and baseline deps
-fp feature down <name>                      # tear down all PRs and baseline deps
-fp feature list                             # list features and their member PRs
-fp feature list --running                   # list only features with live instances
-fp feature status <name>                    # health-check all members and baseline deps
-fp feature rebuild <name>                   # re-run bootstrap for ephemeral members (no teardown)
-fp feature rebuild <name> --pr <n>          # rebuild one specific PR in the feature
+fp feature new <name>                                  # create a feature envelope
+fp feature add <name> <pr#> [--config <c>]...           # add a PR; --config repeatable for multi-service PRs
+fp feature add-dep <name> <app-config>                 # add a baseline app config dependency (no PR)
+fp feature up   <name>                                 # bootstrap all PRs and baseline deps
+fp feature down <name>                                 # tear down all PRs and baseline deps
+fp feature list                                        # list features and their member PRs
+fp feature list --running                              # list only features with live instances
+fp feature status <name>                               # health-check all members and baseline deps
+fp feature rebuild <name>                              # re-run bootstrap for ephemeral members
+fp feature rebuild <name> --pr <n>                     # rebuild one specific PR in the feature
+fp pr up <pr#> [--config <c>]... --worktree <path>       # single-PR shorthand; --config repeatable
 ```
 
 `fp feature add` automatically tracks any untracked PR before adding it to the envelope.
@@ -196,6 +210,14 @@ This ADR requires a new **process state store** alongside the existing store, pe
 - The expected branch name at activation time (for branch-drift detection)
 - The PID of the bootstrap process group (for direct-process liveness)
 - The feature envelope each PR belongs to (if any)
+- **PR→config assignments** — which named app configs a PR should use; stored as
+  `app_config_names: Vec<String>` on the `ProcessRecord` for that PR; a PR may have
+  multiple configs when it touches multiple services (e.g. a shared library change that
+  also requires rebuilding a dependent service); written by `fp feature add --config`
+  (repeatable flag) and read by `fp pr up` and `fp feature up`, which bootstrap each
+  config in turn from the PR's worktree; kept in the per-repo process state (not in
+  `~/.fp/config.toml`) so that PR numbers are scoped to the repo and cannot collide
+  across repositories
 - **Per-envelope app config dependency list** — the set of app config names the envelope
   requires, independent of which PRs own them; used by `fp feature up` to start
   main-worktree instances for slots with no live PR member (baseline services and
@@ -203,10 +225,12 @@ This ADR requires a new **process state store** alongside the existing store, pe
   process state JSON, where the key is the envelope name and the value is the list of
   app config names declared via `fp feature add-dep`
 
-This is a lightweight append-only file (e.g. `~/.fp/process-state.json`) separate from
-the main store to isolate volatile runtime state from stable PR metadata. It is read by
-`fp status`, `fp feature status`, and `fp watch`; written by `fp feature up/down` and
-`fp pr up`.
+This is a lightweight file at `.git/fp/process-state.json` (alongside the existing
+`.git/fp/state.json`), scoped per-repo to mirror the existing Store pattern. PR
+numbers are unique within a repo so no cross-repo collision is possible. Feature envelopes
+are therefore repo-scoped — a single envelope cannot span multiple repositories (cross-repo
+envelope display is deferred; see Deferred section). It is read by `fp status`,
+`fp feature status`, and `fp watch`; written by `fp feature up/down` and `fp pr up`.
 
 On worktree deletion, process state entries referencing the deleted worktree path are
 flagged as stale on next access and reported as `(worktree missing)` in status output
@@ -600,7 +624,7 @@ every stage boundary.
 ### Hard Dependencies (must not be violated by any staging)
 
 1. **Process state store gates everything.** Every lifecycle feature reads or writes
-   `~/.fp/process-state.json`. Nothing that depends on it can ship before it exists.
+   `.git/fp/process-state.json`. Nothing that depends on it can ship before it exists.
    If `fp feature up` ships before the store, activations are unrecorded, conflict
    detection silently passes, and health checks query nothing.
 
@@ -632,14 +656,18 @@ every stage boundary.
 ### Staged Delivery Sequence
 
 **Stage 0 — Process state store** *(foundation; no user-visible surface)*
-Implement `~/.fp/process-state.json` read/write with schema for: activated PRs, expected
-branch at activation time, PID of bootstrap process group, feature envelope membership.
-No commands consume it yet. Zero user-visible change. This stage is permanent
+Implement `.git/fp/process-state.json` read/write with schema for: activated PRs,
+expected branch at activation time, PID of bootstrap process group, feature envelope
+membership. The store is per-repo (alongside `.git/fp/state.json`), scoped by
+git directory — PR numbers are unique within a repo and no cross-repo collision is
+possible. No commands consume it yet. Zero user-visible change. This stage is permanent
 infrastructure — it cannot be reverted once later stages depend on it.
 
-**Stage 1 — Named app configs and assignment** *(additive; no lifecycle execution)*
-Implement `~/.fp/config.toml`, `fp app define-config`, `fp app set-config`, `fp pr set-config`.
-Users can define and assign configs. Nothing executes them yet. Zero risk to existing commands.
+**Stage 1 — Named app configs and repo-level assignment** *(additive; no lifecycle execution)*
+Implement `~/.fp/config.toml`, `fp app define-config`, `fp app set-config`.
+Per-PR config assignment (`--config` flag) ships with `fp feature add` in Stage 2 since it
+writes to the process state store which does not exist until Stage 0.
+Users can define and assign repo-level configs. Nothing executes them yet. Zero risk to existing commands.
 
 **Stage 2 — `fp pr up`, `fp feature up/down`, health check, conflict detection** *(new commands only)*
 Implement bootstrap/teardown/health-check loop and the teardown gate as entirely new
@@ -716,9 +744,17 @@ The design is compatible with future migration.
 ## Consequences
 
 - `fp feature` and `fp pr up` introduce new top-level commands and persisted entity types.
-- A new **process state store** (`~/.fp/process-state.json`) is required alongside the
-  existing Store struct. This is a schema addition, not a migration of existing data.
-- `fp app set-config`, `fp pr set-config` require a config registry in fp's state store.
+- A new **process state store** (`.git/fp/process-state.json`) is required alongside
+  the existing Store struct, following the same per-repo scoping pattern. This is a schema
+  addition, not a migration of existing data.
+- Feature envelopes are **repo-scoped** — a single envelope cannot span multiple
+  repositories. Cross-repo envelope coordination is deferred (see Deferred section).
+- `fp app set-config` writes repo→config assignments to `~/.fp/config.toml` (global).
+  Per-PR config assignments are made via `fp feature add --config` (repeatable; a PR may
+  declare multiple configs for multi-service changes) and stored as `app_config_names:
+  Vec<String>` on the `ProcessRecord` in `.git/fp/process-state.json` (per-repo) — PR
+  numbers are only unique within a repo and must not be stored globally. There is no
+  separate `fp pr set-config` command; assignment is collapsed into envelope membership.
 - `FP_INSTANCE` uses the full `org/repo` slug to ensure uniqueness across same-named repos.
 - `COMPOSE_PROJECT_NAME` is injected automatically and silently into all lifecycle commands.
 - Bootstrap scripts that unset environment variables must set `COMPOSE_PROJECT_NAME`
