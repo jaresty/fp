@@ -388,8 +388,10 @@ to clean up before retrying. fp does not automatically roll back successful boot
 lifecycle** (what is running). A feature can be running without the user being switched
 to any of its member PRs.
 
-`fp switch` gains lifecycle awareness as a non-breaking layer. All lifecycle prompts are
-subject to non-interactive mode (suppressed when stdout is not a TTY; safe default applied).
+`fp switch` gains lifecycle awareness as a non-breaking layer. Interactive lifecycle
+*prompts* (startup offer, teardown offer) are suppressed when stdout is not a TTY and the
+safe default is applied silently. Informational *output* (post-switch feature summary,
+hints) is always emitted — LLM agents piping fp output must receive it.
 
 **Switching away from a PR that has a live instance (TTY):**
 ```
@@ -443,8 +445,11 @@ Rules for the hints block:
   config; the `--pr` flag scopes it to the PR just switched to
 - "To check health" always appears when the PR is in a feature envelope
 - "To tear down" always appears when the PR is in a feature envelope
-- The entire block is suppressed when stdout is not a TTY (non-interactive mode)
 - The entire block is suppressed when the PR has no feature envelope membership
+- **The block is always emitted regardless of TTY state** — it is informational output,
+  not a prompt; LLM agents piping fp output must see it to know what operations are
+  available; only the interactive startup/teardown *prompts* are suppressed in
+  non-TTY mode, not this summary
 
 The status table reuses the same health-check results already computed during the
 switch (within the 2-second cap); no additional probes are issued.
