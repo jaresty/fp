@@ -618,17 +618,20 @@ fn main() -> Result<()> {
                 }
                 FeatureCommands::Up { name, yes, no } => {
                     let app_store = app_config::AppConfigStore::open(app_config::AppConfigStore::default_path()?);
-                    let out = commands::cmd_feature_up_checked(&ps, &app_store, &name, yes, no)?;
+                    let repo_root = crate::worktree::main_repo_root(&std::env::current_dir()?)?;
+                    let out = commands::cmd_feature_up_checked(&ps, &app_store, &name, yes, no, &repo_root)?;
                     println!("{}", out);
                 }
                 FeatureCommands::Down { name } => {
                     let app_store = app_config::AppConfigStore::open(app_config::AppConfigStore::default_path()?);
-                    let out = commands::cmd_feature_down(&ps, &app_store, &name)?;
+                    let repo_root = crate::worktree::main_repo_root(&std::env::current_dir()?)?;
+                    let out = commands::cmd_feature_down(&ps, &app_store, &name, &repo_root)?;
                     println!("{}", out);
                 }
                 FeatureCommands::Rebuild { name, pr } => {
                     let app_store = app_config::AppConfigStore::open(app_config::AppConfigStore::default_path()?);
-                    let out = commands::cmd_feature_rebuild(&ps, &app_store, &name, pr)?;
+                    let repo_root = crate::worktree::main_repo_root(&std::env::current_dir()?)?;
+                    let out = commands::cmd_feature_rebuild(&ps, &app_store, &name, pr, &repo_root)?;
                     println!("{}", out);
                 }
                 FeatureCommands::AddDep { name, app_config } => {

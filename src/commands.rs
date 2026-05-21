@@ -854,8 +854,8 @@ pub fn cmd_feature_status_with_client(
     Ok(out)
 }
 
-pub fn cmd_feature_up(ps: &crate::process_store::ProcessStateStore, config: &crate::app_config::AppConfigStore, name: &str) -> anyhow::Result<String> {
-    let msgs = crate::feature::feature_up(ps, config, name)?;
+pub fn cmd_feature_up(ps: &crate::process_store::ProcessStateStore, config: &crate::app_config::AppConfigStore, name: &str, repo_root: &std::path::Path) -> anyhow::Result<String> {
+    let msgs = crate::feature::feature_up(ps, config, name, repo_root)?;
     if msgs.is_empty() {
         Ok(format!("Feature '{}' has no member PRs with app configs.", name))
     } else {
@@ -863,8 +863,8 @@ pub fn cmd_feature_up(ps: &crate::process_store::ProcessStateStore, config: &cra
     }
 }
 
-pub fn cmd_feature_down(ps: &crate::process_store::ProcessStateStore, config: &crate::app_config::AppConfigStore, name: &str) -> anyhow::Result<String> {
-    let msgs = crate::feature::feature_down(ps, config, name)?;
+pub fn cmd_feature_down(ps: &crate::process_store::ProcessStateStore, config: &crate::app_config::AppConfigStore, name: &str, repo_root: &std::path::Path) -> anyhow::Result<String> {
+    let msgs = crate::feature::feature_down(ps, config, name, repo_root)?;
     if msgs.is_empty() {
         Ok(format!("Feature '{}' has no member PRs with app configs.", name))
     } else {
@@ -872,8 +872,8 @@ pub fn cmd_feature_down(ps: &crate::process_store::ProcessStateStore, config: &c
     }
 }
 
-pub fn cmd_feature_rebuild(ps: &crate::process_store::ProcessStateStore, config: &crate::app_config::AppConfigStore, name: &str, pr: Option<u64>) -> anyhow::Result<String> {
-    let msgs = crate::feature::feature_rebuild(ps, config, name, pr)?;
+pub fn cmd_feature_rebuild(ps: &crate::process_store::ProcessStateStore, config: &crate::app_config::AppConfigStore, name: &str, pr: Option<u64>, repo_root: &std::path::Path) -> anyhow::Result<String> {
+    let msgs = crate::feature::feature_rebuild(ps, config, name, pr, repo_root)?;
     if msgs.is_empty() {
         Ok(format!("Feature '{}' has no matching ephemeral members.", name))
     } else {
@@ -976,7 +976,7 @@ pub fn cmd_pr_up_with_configs(ps: &crate::process_store::ProcessStateStore, conf
     Ok(messages.join("\n"))
 }
 
-pub fn cmd_feature_up_checked(ps: &crate::process_store::ProcessStateStore, config: &crate::app_config::AppConfigStore, name: &str, yes: bool, no: bool) -> anyhow::Result<String> {
+pub fn cmd_feature_up_checked(ps: &crate::process_store::ProcessStateStore, config: &crate::app_config::AppConfigStore, name: &str, yes: bool, no: bool, repo_root: &std::path::Path) -> anyhow::Result<String> {
     let state = ps.load()?;
     // Find any other running feature envelope (has a PR with a live pid)
     let conflicting: Vec<String> = state.feature_envelopes.iter()
@@ -995,15 +995,15 @@ pub fn cmd_feature_up_checked(ps: &crate::process_store::ProcessStateStore, conf
         if yes {
             let mut out = String::new();
             for c in &conflicting {
-                let msgs = crate::feature::feature_down(ps, config, c)?;
+                let msgs = crate::feature::feature_down(ps, config, c, repo_root)?;
                 out.push_str(&format!("torn down feature '{}': {}\n", c, msgs.join(", ")));
             }
-            out.push_str(&cmd_feature_up(ps, config, name)?);
+            out.push_str(&cmd_feature_up(ps, config, name, repo_root)?);
             return Ok(out);
         }
         anyhow::bail!("conflicting running feature(s): {} — use --yes to tear down or --no to abort", conflicting.join(", "));
     }
-    cmd_feature_up(ps, config, name)
+    cmd_feature_up(ps, config, name, repo_root)
 }
 
 pub fn cmd_feature_add_dep(ps: &crate::process_store::ProcessStateStore, name: &str, app_config: &str) -> anyhow::Result<String> {

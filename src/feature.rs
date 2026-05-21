@@ -43,7 +43,7 @@ pub fn feature_list_running(ps: &ProcessStateStore) -> Result<Vec<FeatureInfo>> 
     Ok(running)
 }
 
-pub fn feature_list_running_with_config(ps: &ProcessStateStore, config: &crate::app_config::AppConfigStore) -> Result<Vec<FeatureInfo>> {
+pub fn feature_list_running_with_config(ps: &ProcessStateStore, config: &crate::app_config::AppConfigStore, repo_root: &std::path::Path) -> Result<Vec<FeatureInfo>> {
     let state = ps.load()?;
     let running: Vec<FeatureInfo> = state.feature_envelopes.iter().filter(|name| {
         state.records.values().any(|r| {
@@ -52,8 +52,9 @@ pub fn feature_list_running_with_config(ps: &ProcessStateStore, config: &crate::
                 .and_then(|n| config.load_app_config(n).ok().flatten());
             let is_ephemeral = app_cfg.as_ref().map(|c| c.ephemeral).unwrap_or(false);
             if is_ephemeral {
+                let worktree = crate::worktree::worktree_path(repo_root, &r.expected_branch);
                 app_cfg.and_then(|c| c.health_check)
-                    .map(|cmd| health_check_service(&cmd, std::path::Path::new(&r.worktree), r.pr, std::path::Path::new(&r.worktree)))
+                    .map(|cmd| health_check_service(&cmd, &worktree, r.pr, &worktree))
                     .unwrap_or(false)
             } else {
                 r.pid.map(health_check_pid).unwrap_or(false)
@@ -74,8 +75,7 @@ pub fn feature_status(ps: &ProcessStateStore, config: &crate::app_config::AppCon
     let mut statuses: Vec<PrHealthStatus> = state.records.values()
         .filter(|r| r.feature_envelope.as_deref() == Some(name))
         .map(|r| {
-            let derived_wt = crate::worktree::worktree_path(repo_root, &r.expected_branch);
-            let worktree = if derived_wt.exists() { derived_wt.clone() } else { std::path::PathBuf::from(&r.worktree) };
+            let worktree = crate::worktree::worktree_path(repo_root, &r.expected_branch);
             let branch_ok = health_check_branch(&worktree, &r.expected_branch);
             let app_cfg = r.app_config_names.first().map(|n| n.as_str())
                 .and_then(|n| config.load_app_config(n).ok().flatten());
@@ -156,7 +156,7 @@ pub fn feature_add_dep(ps: &ProcessStateStore, envelope: &str, app_config_name: 
     ps.save_state(state)
 }
 
-pub fn feature_up(ps: &ProcessStateStore, config: &crate::app_config::AppConfigStore, name: &str) -> Result<Vec<String>> {
+pub fn feature_up(ps: &ProcessStateStore, config: &crate::app_config::AppConfigStore, name: &str, repo_root: &std::path::Path) -> Result<Vec<String>> {
     let state = ps.load()?;
     let records: Vec<_> = state.records.values()
         .filter(|r| r.feature_envelope.as_deref() == Some(name))
@@ -170,7 +170,8 @@ pub fn feature_up(ps: &ProcessStateStore, config: &crate::app_config::AppConfigS
             messages.push(format!("PR #{}: no app config assigned — skipped", rec.pr));
             continue;
         }
-        let worktree = std::path::Path::new(&rec.worktree);
+        let worktree_buf = crate::worktree::worktree_path(repo_root, &rec.expected_branch);
+        let worktree = worktree_buf.as_path();
         for cfg_name in &rec.app_config_names {
             let cfg = match config.load_app_config(cfg_name).ok().flatten() {
                 Some(c) => c,
@@ -217,7 +218,7 @@ pub fn feature_up(ps: &ProcessStateStore, config: &crate::app_config::AppConfigS
     Ok(messages)
 }
 
-pub fn feature_down(ps: &ProcessStateStore, config: &crate::app_config::AppConfigStore, name: &str) -> Result<Vec<String>> {
+pub fn feature_down(ps: &ProcessStateStore, config: &crate::app_config::AppConfigStore, name: &str, repo_root: &std::path::Path) -> Result<Vec<String>> {
     let state = ps.load()?;
     let records: Vec<_> = state.records.values()
         .filter(|r| r.feature_envelope.as_deref() == Some(name))
@@ -234,14 +235,15 @@ pub fn feature_down(ps: &ProcessStateStore, config: &crate::app_config::AppConfi
                 continue;
             }
         };
-        let worktree = std::path::Path::new(&rec.worktree);
+        let worktree_buf = crate::worktree::worktree_path(repo_root, &rec.expected_branch);
+        let worktree = worktree_buf.as_path();
         teardown_pr(ps, &cfg, rec.pr, worktree, "", "")?;
         messages.push(format!("PR #{}: stopped ({})", rec.pr, cfg.name));
     }
     Ok(messages)
 }
 
-pub fn feature_rebuild(ps: &ProcessStateStore, config: &crate::app_config::AppConfigStore, name: &str, pr_filter: Option<u64>) -> Result<Vec<String>> {
+pub fn feature_rebuild(ps: &ProcessStateStore, config: &crate::app_config::AppConfigStore, name: &str, pr_filter: Option<u64>, repo_root: &std::path::Path) -> Result<Vec<String>> {
     let state = ps.load()?;
     let records: Vec<_> = state.records.values()
         .filter(|r| r.feature_envelope.as_deref() == Some(name))
@@ -263,7 +265,8 @@ pub fn feature_rebuild(ps: &ProcessStateStore, config: &crate::app_config::AppCo
             messages.push(format!("PR #{}: uses a persistent app config '{}' — use `fp feature down` + `fp feature up` instead", rec.pr, cfg.name));
             continue;
         }
-        let worktree = std::path::Path::new(&rec.worktree);
+        let worktree_buf = crate::worktree::worktree_path(repo_root, &rec.expected_branch);
+        let worktree = worktree_buf.as_path();
         let instance = format!("fp---{}", rec.pr);
         std::process::Command::new("sh")
             .args(["-c", &cfg.bootstrap])

@@ -50,6 +50,25 @@ mod tests {
         }
     }
 
+    /// Creates a git repo at `repo_path` and an fp-standard worktree at
+    /// `worktree_path(repo_path, branch)`. Returns the derived worktree path.
+    fn setup_git_worktree(repo_path: &std::path::Path, branch: &str) -> std::path::PathBuf {
+        use std::process::Command;
+        Command::new("git").args(["init", repo_path.to_str().unwrap()]).output().unwrap();
+        for arg in &[["config","user.email","t@t.com"],["config","user.name","T"]] {
+            Command::new("git").args(["-C", repo_path.to_str().unwrap()]).args(arg).output().unwrap();
+        }
+        std::fs::write(repo_path.join("f"), "x").unwrap();
+        Command::new("git").args(["-C", repo_path.to_str().unwrap(), "add", "."]).output().unwrap();
+        Command::new("git").args(["-C", repo_path.to_str().unwrap(), "commit", "--allow-empty", "-m", "init"]).output().unwrap();
+        Command::new("git").args(["-C", repo_path.to_str().unwrap(), "checkout", "-b", branch]).output().unwrap();
+        Command::new("git").args(["-C", repo_path.to_str().unwrap(), "checkout", "main"]).output().unwrap();
+        let wt = crate::worktree::worktree_path(repo_path, branch);
+        std::fs::create_dir_all(wt.parent().unwrap()).unwrap();
+        Command::new("git").args(["-C", repo_path.to_str().unwrap(), "worktree", "add", wt.to_str().unwrap(), branch]).output().unwrap();
+        wt
+    }
+
     fn ephemeral_config(name: &str) -> crate::app_config::AppConfig {
         crate::app_config::AppConfig {
             name: name.into(),
@@ -296,20 +315,17 @@ mod tests {
         let (ps, _dir) = ps_store();
         let (app_store, _app_dir) = app_store();
         let tmp = tempdir().unwrap();
-        let env = [("GIT_AUTHOR_NAME","t"),("GIT_AUTHOR_EMAIL","t@t"),("GIT_COMMITTER_NAME","t"),("GIT_COMMITTER_EMAIL","t@t")];
-        std::process::Command::new("git").args(["init", "-b", "feat/pay"]).current_dir(tmp.path()).output().unwrap();
-        let mut cmd = std::process::Command::new("git");
-        cmd.args(["commit", "--allow-empty", "-m", "init"]).current_dir(tmp.path());
-        for (k,v) in &env { cmd.env(k,v); }
-        cmd.output().unwrap();
-        let mut rec = record(123, "feat/pay", &tmp.path().to_string_lossy());
+        let repo = tmp.path().join("repo");
+        std::fs::create_dir_all(&repo).unwrap();
+        setup_git_worktree(&repo, "feat/pay");
+        let mut rec = record(123, "feat/pay", "");
         rec.feature_envelope = Some("auth-refactor".into());
         rec.pid = None;
         ps.activate(rec).unwrap();
         let mut state = ps.load().unwrap();
         state.feature_envelopes.insert("auth-refactor".to_string());
         ps.save_state(state).unwrap();
-        let statuses = feature_status(&ps, &app_store, "auth-refactor", std::path::Path::new(".")).unwrap();
+        let statuses = feature_status(&ps, &app_store, "auth-refactor", &repo).unwrap();
         assert_eq!(statuses[0].branch_ok, Some(true),
             "feature_status must report branch_ok=Some(true) when HEAD is feat/pay");
     }
@@ -335,17 +351,19 @@ mod tests {
     fn feature_governs_status_ephemeral_installed_when_health_check_passes() {
         let (ps, _dir) = ps_store();
         let (app_store, _app_dir) = app_store();
-        let wt = tempdir().unwrap();
+        let tmp = tempdir().unwrap();
+        let repo = tmp.path().join("repo");
+        std::fs::create_dir_all(&repo).unwrap();
+        setup_git_worktree(&repo, "feat/ext");
         app_store.save_app_config(ephemeral_config("my-ext")).unwrap();
-        let mut rec = record(789, "feat/ext", &wt.path().to_string_lossy());
+        let mut rec = record(789, "feat/ext", "");
         rec.feature_envelope = Some("ext-feature".into());
         rec.app_config_names = vec!["my-ext".into()];
-        // no pid — ephemeral
         ps.activate(rec).unwrap();
         let mut state = ps.load().unwrap();
         state.feature_envelopes.insert("ext-feature".to_string());
         ps.save_state(state).unwrap();
-        let statuses = feature_status(&ps, &app_store, "ext-feature", std::path::Path::new(".")).unwrap();
+        let statuses = feature_status(&ps, &app_store, "ext-feature", &repo).unwrap();
         assert_eq!(statuses.len(), 1);
         assert!(!statuses[0].pid_alive, "ephemeral app must have pid_alive=false");
         assert_eq!(statuses[0].service_healthy, Some(true),
@@ -357,16 +375,19 @@ mod tests {
     fn feature_governs_list_running_includes_ephemeral_when_health_check_passes() {
         let (ps, _dir) = ps_store();
         let (app_store, _app_dir) = app_store();
-        let wt = tempdir().unwrap();
+        let tmp = tempdir().unwrap();
+        let repo = tmp.path().join("repo");
+        std::fs::create_dir_all(&repo).unwrap();
+        setup_git_worktree(&repo, "feat/ext");
         app_store.save_app_config(ephemeral_config("my-ext")).unwrap();
-        let mut rec = record(789, "feat/ext", &wt.path().to_string_lossy());
+        let mut rec = record(789, "feat/ext", "");
         rec.feature_envelope = Some("ext-feature".into());
         rec.app_config_names = vec!["my-ext".into()];
         ps.activate(rec).unwrap();
         let mut state = ps.load().unwrap();
         state.feature_envelopes.insert("ext-feature".to_string());
         ps.save_state(state).unwrap();
-        let running = feature_list_running_with_config(&ps, &app_store).unwrap();
+        let running = feature_list_running_with_config(&ps, &app_store, &repo).unwrap();
         assert!(running.iter().any(|f| f.name == "ext-feature"),
             "feature_list_running must include ephemeral envelope with passing health_check, got: {:?}",
             running.iter().map(|f| &f.name).collect::<Vec<_>>());
@@ -395,7 +416,7 @@ mod tests {
         app_store.save_app_config(cfg).unwrap();
         feature_new(&ps, "my-feature").unwrap();
         feature_add_dep(&ps, "my-feature", "notifications-svc").unwrap();
-        crate::feature::feature_up(&ps, &app_store, "my-feature").unwrap();
+        crate::feature::feature_up(&ps, &app_store, "my-feature", std::path::Path::new(".")).unwrap();
         let state = ps.load().unwrap();
         // sentinel PR 0 should be recorded for notifications-svc main-worktree instance
         assert!(state.records.contains_key(&0),
@@ -450,5 +471,196 @@ mod tests {
         assert_ne!(child_pgid, our_pgid,
             "bootstrap_pr child must be in its own process group (pgid {}) not fp's (pgid {})",
             child_pgid, our_pgid);
+    }
+
+    #[test]
+    fn feature_up_governs_derives_worktree_from_repo_root_not_rec_worktree() {
+        use std::process::Command;
+        let tmp = tempfile::tempdir().unwrap();
+        let repo = tmp.path().join("repo");
+        Command::new("git").args(["init", repo.to_str().unwrap()]).output().unwrap();
+        for arg in &[["config","user.email","t@t.com"],["config","user.name","T"]] {
+            Command::new("git").args(["-C", repo.to_str().unwrap()]).args(arg).output().unwrap();
+        }
+        std::fs::write(repo.join("f"), "x").unwrap();
+        Command::new("git").args(["-C", repo.to_str().unwrap(), "add", "."]).output().unwrap();
+        Command::new("git").args(["-C", repo.to_str().unwrap(), "commit", "--allow-empty", "-m", "init"]).output().unwrap();
+        Command::new("git").args(["-C", repo.to_str().unwrap(), "checkout", "-b", "feat/up"]).output().unwrap();
+        Command::new("git").args(["-C", repo.to_str().unwrap(), "checkout", "main"]).output().unwrap();
+        let wt_dir = tmp.path().join("repo-worktrees").join("feat").join("up");
+        std::fs::create_dir_all(wt_dir.parent().unwrap()).unwrap();
+        Command::new("git").args(["-C", repo.to_str().unwrap(), "worktree", "add", wt_dir.to_str().unwrap(), "feat/up"]).output().unwrap();
+        let git_dir = repo.join(".git");
+        let (ps, _ps_dir) = ps_store();
+        let (app_cfg_store, cfg_dir) = app_store();
+        let cfg = AppConfig {
+            name: "svc".into(),
+            bootstrap: "true".into(),
+            teardown: "true".into(),
+            startup_timeout: "1s".into(),
+            health_check: None,
+            ephemeral: false,
+            main_worktree: None,
+        };
+        app_cfg_store.save_app_config(cfg.clone()).unwrap();
+        feature_new(&ps, "feat").unwrap();
+        let mut state = ps.load().unwrap();
+        state.records.insert(42, crate::process_store::ProcessRecord {
+            pr: 42,
+            expected_branch: "feat/up".into(),
+            pid: None,
+            feature_envelope: Some("feat".into()),
+            worktree: String::new(), // empty — must NOT be used
+            app_config_names: vec!["svc".into()],
+        });
+        ps.save_state(state).unwrap();
+        let result = crate::feature::feature_up(&ps, &app_cfg_store, "feat", &repo);
+        assert!(result.is_ok(), "feature_up with repo_root must succeed when worktree derived from branch: {:?}", result);
+        let msgs = result.unwrap();
+        assert!(msgs.iter().any(|m| m.contains("started")),
+            "feature_up must report started when derived worktree exists: {:?}", msgs);
+        let _ = git_dir; let _ = cfg_dir;
+    }
+
+    #[test]
+    fn feature_down_governs_derives_worktree_from_repo_root_not_rec_worktree() {
+        use std::process::Command;
+        let tmp = tempfile::tempdir().unwrap();
+        let repo = tmp.path().join("repo");
+        Command::new("git").args(["init", repo.to_str().unwrap()]).output().unwrap();
+        for arg in &[["config","user.email","t@t.com"],["config","user.name","T"]] {
+            Command::new("git").args(["-C", repo.to_str().unwrap()]).args(arg).output().unwrap();
+        }
+        std::fs::write(repo.join("f"), "x").unwrap();
+        Command::new("git").args(["-C", repo.to_str().unwrap(), "add", "."]).output().unwrap();
+        Command::new("git").args(["-C", repo.to_str().unwrap(), "commit", "--allow-empty", "-m", "init"]).output().unwrap();
+        Command::new("git").args(["-C", repo.to_str().unwrap(), "checkout", "-b", "feat/down"]).output().unwrap();
+        Command::new("git").args(["-C", repo.to_str().unwrap(), "checkout", "main"]).output().unwrap();
+        let wt_dir = tmp.path().join("repo-worktrees").join("feat").join("down");
+        std::fs::create_dir_all(wt_dir.parent().unwrap()).unwrap();
+        Command::new("git").args(["-C", repo.to_str().unwrap(), "worktree", "add", wt_dir.to_str().unwrap(), "feat/down"]).output().unwrap();
+        let (ps, _) = ps_store();
+        let (app_cfg_store, _cfg_dir) = app_store();
+        let cfg = AppConfig {
+            name: "svc".into(),
+            bootstrap: "true".into(),
+            teardown: "touch .torn_down".into(), // writes marker to CWD — must be derived worktree
+            startup_timeout: "1s".into(),
+            health_check: None,
+            ephemeral: false,
+            main_worktree: None,
+        };
+        app_cfg_store.save_app_config(cfg.clone()).unwrap();
+        feature_new(&ps, "feat").unwrap();
+        let mut state = ps.load().unwrap();
+        state.records.insert(43, crate::process_store::ProcessRecord {
+            pr: 43,
+            expected_branch: "feat/down".into(),
+            pid: None,
+            feature_envelope: Some("feat".into()),
+            worktree: String::new(), // empty — must NOT be used
+            app_config_names: vec!["svc".into()],
+        });
+        ps.save_state(state).unwrap();
+        let result = crate::feature::feature_down(&ps, &app_cfg_store, "feat", &repo);
+        assert!(result.is_ok(), "feature_down with repo_root must succeed when worktree derived from branch: {:?}", result);
+        let msgs = result.unwrap();
+        assert!(msgs.iter().any(|m| m.contains("stopped")),
+            "feature_down must report stopped when derived worktree exists: {:?}", msgs);
+        assert!(wt_dir.join(".torn_down").exists(),
+            "teardown marker must exist in derived worktree, not in CWD: wt_dir={:?}", wt_dir);
+    }
+
+    #[test]
+    fn feature_status_governs_no_fallback_to_rec_worktree() {
+        use std::process::Command;
+        // Set up: repo with two branches; correct worktree at derived path, wrong worktree at rec.worktree
+        let tmp = tempfile::tempdir().unwrap();
+        let repo = tmp.path().join("repo");
+        Command::new("git").args(["init", repo.to_str().unwrap()]).output().unwrap();
+        for arg in &[["config","user.email","t@t.com"],["config","user.name","T"]] {
+            Command::new("git").args(["-C", repo.to_str().unwrap()]).args(arg).output().unwrap();
+        }
+        std::fs::write(repo.join("f"), "x").unwrap();
+        Command::new("git").args(["-C", repo.to_str().unwrap(), "add", "."]).output().unwrap();
+        Command::new("git").args(["-C", repo.to_str().unwrap(), "commit", "--allow-empty", "-m", "init"]).output().unwrap();
+        // Create feat/status and feat/wrong branches
+        for b in &["feat/status", "feat/wrong"] {
+            Command::new("git").args(["-C", repo.to_str().unwrap(), "checkout", "-b", b]).output().unwrap();
+            Command::new("git").args(["-C", repo.to_str().unwrap(), "checkout", "main"]).output().unwrap();
+        }
+        // Create correct worktree at derived path
+        let correct_wt = crate::worktree::worktree_path(&repo, "feat/status");
+        std::fs::create_dir_all(correct_wt.parent().unwrap()).unwrap();
+        Command::new("git").args(["-C", repo.to_str().unwrap(), "worktree", "add", correct_wt.to_str().unwrap(), "feat/status"]).output().unwrap();
+        // Create wrong-branch worktree at a separate path (simulates old rec.worktree)
+        let wrong_wt = crate::worktree::worktree_path(&repo, "feat/wrong");
+        std::fs::create_dir_all(wrong_wt.parent().unwrap()).unwrap();
+        Command::new("git").args(["-C", repo.to_str().unwrap(), "worktree", "add", wrong_wt.to_str().unwrap(), "feat/wrong"]).output().unwrap();
+        let (ps, _) = ps_store();
+        let (app_cfg_store, _) = app_store();
+        feature_new(&ps, "feat").unwrap();
+        let mut state = ps.load().unwrap();
+        state.records.insert(44, crate::process_store::ProcessRecord {
+            pr: 44,
+            expected_branch: "feat/status".into(),
+            pid: None,
+            feature_envelope: Some("feat".into()),
+            worktree: wrong_wt.to_str().unwrap().to_string(), // must NOT be used — wrong branch
+            app_config_names: vec![],
+        });
+        ps.save_state(state).unwrap();
+        // Case 1: derived path exists — must use it (Some(true))
+        let result = crate::feature::feature_status(&ps, &app_cfg_store, "feat", &repo);
+        assert!(result.is_ok(), "feature_status must succeed: {:?}", result);
+        let statuses = result.unwrap();
+        assert_eq!(statuses[0].branch_ok, Some(true),
+            "branch_ok must be Some(true) using derived path (feat/status worktree): {:?}", statuses[0].branch_ok);
+
+        // Case 2: derived path absent, rec.worktree has wrong-branch worktree — must NOT fall back
+        // Use a repo_root that produces a non-existent derived path
+        let other_root = tmp.path().join("other_repo");
+        let result2 = crate::feature::feature_status(&ps, &app_cfg_store, "feat", &other_root);
+        assert!(result2.is_ok(), "feature_status must not error when derived path absent: {:?}", result2);
+        let statuses2 = result2.unwrap();
+        assert_eq!(statuses2[0].branch_ok, None,
+            "branch_ok must be None (not Some(false) from rec.worktree) when derived path absent: {:?}", statuses2[0].branch_ok);
+    }
+
+    #[test]
+    fn feature_list_running_with_config_governs_derives_worktree_from_repo_root() {
+        let (ps, _) = ps_store();
+        let (app_cfg_store, _cfg_dir) = app_store();
+        let cfg = AppConfig {
+            name: "ephem".into(),
+            bootstrap: "true".into(),
+            teardown: "true".into(),
+            startup_timeout: "1s".into(),
+            health_check: Some("true".into()),
+            ephemeral: true,
+            main_worktree: None,
+        };
+        app_cfg_store.save_app_config(cfg.clone()).unwrap();
+        feature_new(&ps, "feat").unwrap();
+        let tmp = tempfile::tempdir().unwrap();
+        // rec.worktree points to a real existing dir so stub (ignoring repo_root) would see health check pass
+        let real_existing_dir = tmp.path().to_string_lossy().to_string();
+        let mut state = ps.load().unwrap();
+        state.records.insert(45, crate::process_store::ProcessRecord {
+            pr: 45,
+            expected_branch: "feat/ephem".into(),
+            pid: None,
+            feature_envelope: Some("feat".into()),
+            worktree: real_existing_dir, // real dir — must NOT be used; derived path must be used instead
+            app_config_names: vec!["ephem".into()],
+        });
+        ps.save_state(state).unwrap();
+        // With derived path absent, health_check_service must fail → feature must NOT appear running
+        // (stub uses rec.worktree="" → runs from CWD → health check passes → feature appears running)
+        let result = crate::feature::feature_list_running_with_config(&ps, &app_cfg_store, tmp.path());
+        assert!(result.is_ok(), "feature_list_running_with_config must not error: {:?}", result);
+        let running = result.unwrap();
+        assert!(running.is_empty(),
+            "feature must not appear running when derived worktree absent (must not fall back to rec.worktree): {:?}", running);
     }
 }

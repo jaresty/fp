@@ -1751,27 +1751,41 @@ mod tests {
     // Stage 2b: fp feature up bootstraps all members and records activation
     #[test]
     fn cmd_feature_up_governs_activates_all_members() {
+        use std::process::Command;
+        let tmp = tempfile::tempdir().unwrap();
+        let repo = tmp.path().join("repo");
+        Command::new("git").args(["init", repo.to_str().unwrap()]).output().unwrap();
+        for arg in &[["config","user.email","t@t.com"],["config","user.name","T"]] {
+            Command::new("git").args(["-C", repo.to_str().unwrap()]).args(arg).output().unwrap();
+        }
+        std::fs::write(repo.join("f"), "x").unwrap();
+        Command::new("git").args(["-C", repo.to_str().unwrap(), "add", "."]).output().unwrap();
+        Command::new("git").args(["-C", repo.to_str().unwrap(), "commit", "--allow-empty", "-m", "init"]).output().unwrap();
+        for branch in &["feat/a", "feat/b"] {
+            Command::new("git").args(["-C", repo.to_str().unwrap(), "checkout", "-b", branch]).output().unwrap();
+            Command::new("git").args(["-C", repo.to_str().unwrap(), "checkout", "main"]).output().unwrap();
+            let wt = crate::worktree::worktree_path(&repo, branch);
+            std::fs::create_dir_all(wt.parent().unwrap()).unwrap();
+            Command::new("git").args(["-C", repo.to_str().unwrap(), "worktree", "add", wt.to_str().unwrap(), branch]).output().unwrap();
+        }
         let dir = tempfile::tempdir().unwrap();
         let ps = crate::process_store::ProcessStateStore::open(dir.path());
         let app_store = crate::app_config::AppConfigStore::open(dir.path().join("config.toml"));
-        let wt1 = tempfile::tempdir().unwrap();
-        let wt2 = tempfile::tempdir().unwrap();
         app_store.save_app_config(crate::app_config::AppConfig {
             name: "svc".into(), bootstrap: "echo up".into(), teardown: "echo down".into(),
             startup_timeout: "5s".into(), health_check: None, ephemeral: false, main_worktree: None,
         }).unwrap();
-        // Activate two PRs in the envelope with known worktrees
         crate::feature::feature_new(&ps, "my-feature").unwrap();
-        let mut rec1 = crate::process_store::ProcessRecord {
+        let rec1 = crate::process_store::ProcessRecord {
             pr: 10, expected_branch: "feat/a".into(), pid: None,
             feature_envelope: Some("my-feature".into()),
-            worktree: wt1.path().to_string_lossy().to_string(),
+            worktree: String::new(),
             app_config_names: vec!["svc".into()],
         };
-        let mut rec2 = crate::process_store::ProcessRecord {
+        let rec2 = crate::process_store::ProcessRecord {
             pr: 20, expected_branch: "feat/b".into(), pid: None,
             feature_envelope: Some("my-feature".into()),
-            worktree: wt2.path().to_string_lossy().to_string(),
+            worktree: String::new(),
             app_config_names: vec!["svc".into()],
         };
         ps.activate(rec1).unwrap();
@@ -1779,7 +1793,7 @@ mod tests {
         let mut state = ps.load().unwrap();
         state.feature_envelopes.insert("my-feature".to_string());
         ps.save_state(state).unwrap();
-        let result = crate::commands::cmd_feature_up(&ps, &app_store, "my-feature");
+        let result = crate::commands::cmd_feature_up(&ps, &app_store, "my-feature", &repo);
         assert!(result.is_ok(), "cmd_feature_up must succeed: {:?}", result);
         let state = ps.load().unwrap();
         assert!(state.records[&10].pid.is_some(), "cmd_feature_up must record PID for PR 10");
@@ -1807,7 +1821,7 @@ mod tests {
         let mut state = ps.load().unwrap();
         state.feature_envelopes.insert("my-feature".to_string());
         ps.save_state(state).unwrap();
-        let result = crate::commands::cmd_feature_down(&ps, &app_store, "my-feature");
+        let result = crate::commands::cmd_feature_down(&ps, &app_store, "my-feature", std::path::Path::new("."));
         assert!(result.is_ok(), "cmd_feature_down must succeed: {:?}", result);
         let state = ps.load().unwrap();
         assert!(!state.records.contains_key(&10),
@@ -1817,10 +1831,24 @@ mod tests {
     // Stage 2b: fp feature rebuild re-runs bootstrap for ephemeral members without teardown
     #[test]
     fn cmd_feature_rebuild_governs_reruns_bootstrap_for_ephemeral() {
+        use std::process::Command;
+        let tmp = tempfile::tempdir().unwrap();
+        let repo = tmp.path().join("repo");
+        Command::new("git").args(["init", repo.to_str().unwrap()]).output().unwrap();
+        for arg in &[["config","user.email","t@t.com"],["config","user.name","T"]] {
+            Command::new("git").args(["-C", repo.to_str().unwrap()]).args(arg).output().unwrap();
+        }
+        std::fs::write(repo.join("f"), "x").unwrap();
+        Command::new("git").args(["-C", repo.to_str().unwrap(), "add", "."]).output().unwrap();
+        Command::new("git").args(["-C", repo.to_str().unwrap(), "commit", "--allow-empty", "-m", "init"]).output().unwrap();
+        Command::new("git").args(["-C", repo.to_str().unwrap(), "checkout", "-b", "feat/ext"]).output().unwrap();
+        Command::new("git").args(["-C", repo.to_str().unwrap(), "checkout", "main"]).output().unwrap();
+        let wt_dir = crate::worktree::worktree_path(&repo, "feat/ext");
+        std::fs::create_dir_all(wt_dir.parent().unwrap()).unwrap();
+        Command::new("git").args(["-C", repo.to_str().unwrap(), "worktree", "add", wt_dir.to_str().unwrap(), "feat/ext"]).output().unwrap();
         let dir = tempfile::tempdir().unwrap();
         let ps = crate::process_store::ProcessStateStore::open(dir.path());
         let app_store = crate::app_config::AppConfigStore::open(dir.path().join("config.toml"));
-        let wt = tempfile::tempdir().unwrap();
         app_store.save_app_config(crate::app_config::AppConfig {
             name: "ext".into(), bootstrap: "echo rebuild-ok".into(), teardown: "echo down".into(),
             startup_timeout: "5s".into(), health_check: Some("true".into()), ephemeral: true, main_worktree: None,
@@ -1829,13 +1857,13 @@ mod tests {
         ps.activate(crate::process_store::ProcessRecord {
             pr: 77, expected_branch: "feat/ext".into(), pid: None,
             feature_envelope: Some("ext-feature".into()),
-            worktree: wt.path().to_string_lossy().to_string(),
+            worktree: String::new(),
             app_config_names: vec!["ext".into()],
         }).unwrap();
         let mut state = ps.load().unwrap();
         state.feature_envelopes.insert("ext-feature".to_string());
         ps.save_state(state).unwrap();
-        let result = crate::commands::cmd_feature_rebuild(&ps, &app_store, "ext-feature", None);
+        let result = crate::commands::cmd_feature_rebuild(&ps, &app_store, "ext-feature", None, &repo);
         assert!(result.is_ok(), "cmd_feature_rebuild must succeed: {:?}", result);
         let output = result.unwrap();
         assert!(output.contains("77"),
@@ -1863,7 +1891,7 @@ mod tests {
         let mut state = ps.load().unwrap();
         state.feature_envelopes.insert("my-feature".to_string());
         ps.save_state(state).unwrap();
-        let result = crate::commands::cmd_feature_rebuild(&ps, &app_store, "my-feature", None);
+        let result = crate::commands::cmd_feature_rebuild(&ps, &app_store, "my-feature", None, std::path::Path::new("."));
         assert!(result.is_err() || result.as_ref().unwrap().contains("persistent"),
             "cmd_feature_rebuild must error or warn for persistent app, got: {:?}", result);
     }
@@ -2009,14 +2037,14 @@ mod tests {
             app_config_names: vec![],
         });
         ps.save_state(state).unwrap();
-        let result = crate::commands::cmd_feature_up_checked(&ps, &app_store, "feature-a", false, true);
+        let result = crate::commands::cmd_feature_up_checked(&ps, &app_store, "feature-a", false, true, std::path::Path::new("."));
         assert!(result.is_err() || result.as_ref().unwrap().contains("aborted"),
             "cmd_feature_up_checked with no=true must abort on conflict: {:?}", result);
         let msg = result.unwrap_or_default();
         assert!(msg.contains("aborted") || msg.is_empty(),
             "abort message expected, got: {}", msg);
         // Recheck via error path
-        let result2 = crate::commands::cmd_feature_up_checked(&ps, &app_store, "feature-a", false, true);
+        let result2 = crate::commands::cmd_feature_up_checked(&ps, &app_store, "feature-a", false, true, std::path::Path::new("."));
         assert!(result2.is_err() || result2.as_ref().map(|s| s.contains("aborted")).unwrap_or(false),
             "must abort on conflict with --no flag: {:?}", result2);
     }
@@ -2045,7 +2073,7 @@ mod tests {
             app_config_names: vec![],
         });
         ps.save_state(state).unwrap();
-        let result = crate::commands::cmd_feature_up_checked(&ps, &app_store, "feature-a", true, false);
+        let result = crate::commands::cmd_feature_up_checked(&ps, &app_store, "feature-a", true, false, std::path::Path::new("."));
         assert!(result.is_ok(), "cmd_feature_up_checked with yes=true must succeed: {:?}", result);
         let msg = result.unwrap();
         assert!(msg.contains("feature-b"), "must mention torn-down feature: {}", msg);
