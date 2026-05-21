@@ -558,8 +558,8 @@ No commands consume it yet. Zero user-visible change. This stage is permanent
 infrastructure — it cannot be reverted once later stages depend on it.
 
 **Stage 1 — Named app configs and assignment** *(additive; no lifecycle execution)*
-Implement `~/.fp/config.toml`, `fp app set-config`, `fp pr set-config`. Users can define
-and assign configs. Nothing executes them yet. Zero risk to existing commands.
+Implement `~/.fp/config.toml`, `fp app define-config`, `fp app set-config`, `fp pr set-config`.
+Users can define and assign configs. Nothing executes them yet. Zero risk to existing commands.
 
 **Stage 2 — `fp pr up`, `fp feature up/down`, health check, conflict detection** *(new commands only)*
 Implement bootstrap/teardown/health-check loop and the teardown gate as entirely new
@@ -567,6 +567,14 @@ commands. Existing commands are untouched. Health check (all three dimensions) a
 detection ship together in this stage — they are mutually dependent. The process state store
 is now populated on activation. Feature envelope create/add/list also ships here.
 `fp feature add` auto-tracking of untracked PRs ships here.
+
+Deliverables:
+- `fp feature new <name>` / `fp feature add <name> <pr#>` / `fp feature list`
+- `fp feature up <name>` / `fp feature down <name>` — bootstrap/teardown all members
+- `fp pr up <pr#>` — single-PR shorthand
+- `fp feature rebuild <name> [--pr <n>]` — re-run bootstrap for ephemeral members without teardown
+- Ephemeral app support (`ephemeral = true` in app config; health_check-based status)
+- CLI wiring for all of the above in `main.rs` with org/repo slug and worktree resolution
 
 **Stage 3 — `fp feature status` and `fp feature list --running`** *(new read surface)*
 Pure reads of the process state store. No writes to existing commands. Fully additive.
