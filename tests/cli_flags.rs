@@ -59,6 +59,38 @@ fn cli_pr_up_config_flag_is_recognized() {
         "--config must be a recognized flag, got: {}", stderr);
 }
 
+/// fp switch must update the process record worktree path so feature status can check the branch
+#[test]
+fn cli_switch_updates_process_record_worktree_path() {
+    let dir = setup_repo();
+    let p = dir.path();
+    let git = |args: &[&str]| std::process::Command::new("git").args(args).current_dir(p).output().unwrap();
+    git(&["checkout", "-b", "feat/x"]);
+    let fp_bin = env!("CARGO_BIN_EXE_fp");
+    let fp = |args: &[&str]| std::process::Command::new(fp_bin).args(args).current_dir(p).output().unwrap();
+    fp(&["track", "10", "--title", "X", "--branch", "feat/x"]);
+    fp(&["feature", "new", "my-feat"]);
+    fp(&["feature", "add", "my-feat", "10"]);
+    // Check process record worktree is empty before switch
+    let state_before: serde_json::Value = serde_json::from_slice(
+        &std::fs::read(p.join(".git/fp/process-state.json")).unwrap()
+    ).unwrap();
+    assert_eq!(state_before["records"]["10"]["worktree"].as_str().unwrap_or(""), "",
+        "worktree must be empty before fp switch");
+    // fp switch with --adopt (branch is current HEAD)
+    let switch_out = fp(&["switch", "10", "sess", "--adopt"]);
+    assert!(switch_out.status.success(), "fp switch must succeed: {}", String::from_utf8_lossy(&switch_out.stderr));
+    let stdout = String::from_utf8_lossy(&switch_out.stdout);
+    let wt_path = stdout.lines().last().unwrap_or("").trim().to_string();
+    // Check process record worktree is updated after switch
+    let state_after: serde_json::Value = serde_json::from_slice(
+        &std::fs::read(p.join(".git/fp/process-state.json")).unwrap()
+    ).unwrap();
+    let recorded_wt = state_after["records"]["10"]["worktree"].as_str().unwrap_or("");
+    assert_eq!(recorded_wt, wt_path,
+        "process record worktree must match fp switch output path after switch");
+}
+
 /// fp feature status --json must be a recognized flag
 #[test]
 fn cli_feature_status_json_flag_is_recognized() {

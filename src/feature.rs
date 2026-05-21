@@ -69,24 +69,25 @@ pub fn feature_list_running_with_config(ps: &ProcessStateStore, config: &crate::
     Ok(running)
 }
 
-pub fn feature_status(ps: &ProcessStateStore, config: &crate::app_config::AppConfigStore, name: &str) -> Result<Vec<PrHealthStatus>> {
+pub fn feature_status(ps: &ProcessStateStore, config: &crate::app_config::AppConfigStore, name: &str, repo_root: &std::path::Path) -> Result<Vec<PrHealthStatus>> {
     let state = ps.load()?;
     let mut statuses: Vec<PrHealthStatus> = state.records.values()
         .filter(|r| r.feature_envelope.as_deref() == Some(name))
         .map(|r| {
-            let worktree = std::path::Path::new(&r.worktree);
-            let branch_ok = health_check_branch(worktree, &r.expected_branch);
+            let derived_wt = crate::worktree::worktree_path(repo_root, &r.expected_branch);
+            let worktree = if derived_wt.exists() { derived_wt.clone() } else { std::path::PathBuf::from(&r.worktree) };
+            let branch_ok = health_check_branch(&worktree, &r.expected_branch);
             let app_cfg = r.app_config_names.first().map(|n| n.as_str())
                 .and_then(|n| config.load_app_config(n).ok().flatten());
             let is_ephemeral = app_cfg.as_ref().map(|c| c.ephemeral).unwrap_or(false);
             if is_ephemeral {
                 let service_healthy = app_cfg.and_then(|c| c.health_check)
-                    .map(|cmd| health_check_service(&cmd, worktree, r.pr, worktree));
+                    .map(|cmd| health_check_service(&cmd, &worktree, r.pr, &worktree));
                 PrHealthStatus { pr: r.pr, pid_alive: false, service_healthy, branch_ok }
             } else {
                 let pid_alive = r.pid.map(health_check_pid).unwrap_or(false);
                 let service_healthy = app_cfg.and_then(|c| c.health_check)
-                    .map(|cmd| health_check_service(&cmd, worktree, r.pr, worktree));
+                    .map(|cmd| health_check_service(&cmd, &worktree, r.pr, &worktree));
                 PrHealthStatus { pr: r.pr, pid_alive, service_healthy, branch_ok }
             }
         })

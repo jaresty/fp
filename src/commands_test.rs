@@ -310,7 +310,7 @@ mod tests {
         let store = crate::store::Store::open(&git_dir);
         let ps = crate::process_store::ProcessStateStore::open(&git_dir);
         let app_store = crate::app_config::AppConfigStore::open(tmp.path().join("config.toml"));
-        let result = crate::commands::cmd_switch(&store, &ps, &app_store, &git_dir, 99, "session-id", false, false, false);
+        let result = crate::commands::cmd_switch(&store, &ps, &app_store, &git_dir, 99, "session-id", false, false, false, std::path::Path::new("."));
         assert!(result.is_err(), "cmd_switch must error for untracked PR");
         assert!(result.unwrap_err().to_string().contains("not tracked"), "error must mention 'not tracked'");
     }
@@ -1724,7 +1724,7 @@ mod tests {
         let mut state = ps.load().unwrap();
         state.feature_envelopes.insert("auth-refactor".to_string());
         ps.save_state(state).unwrap();
-        let result = crate::commands::cmd_feature_status(&ps, &app_store, "auth-refactor", false);
+        let result = crate::commands::cmd_feature_status(&ps, &app_store, "auth-refactor", false, std::path::Path::new("."));
         assert!(result.is_ok(), "cmd_feature_status must succeed: {:?}", result);
         let output = result.unwrap();
         assert!(output.contains("123"),
@@ -2066,7 +2066,7 @@ mod tests {
         let app_store = crate::app_config::AppConfigStore::open(tmp.path().join("config.toml"));
         // With non_interactive=true and force=false, the dirty-check must be skipped.
         // The call may fail for other reasons (no real git repo), but NOT with the dirty-check message.
-        let result = crate::commands::cmd_switch(&store, &ps, &app_store, &git_dir, 10, "test-session", false, false, true);
+        let result = crate::commands::cmd_switch(&store, &ps, &app_store, &git_dir, 10, "test-session", false, false, true, std::path::Path::new("."));
         if let Err(ref e) = result {
             assert!(!e.to_string().contains("uncommitted changes"),
                 "non_interactive must skip dirty-check, got: {}", e);
@@ -2091,7 +2091,7 @@ mod tests {
             app_config_names: vec![],
         });
         ps.save_state(state).unwrap();
-        let result = crate::commands::cmd_feature_status(&ps, &app_store, "my-feat", true);
+        let result = crate::commands::cmd_feature_status(&ps, &app_store, "my-feat", true, std::path::Path::new("."));
         assert!(result.is_ok(), "cmd_feature_status with json=true must succeed: {:?}", result);
         let out = result.unwrap();
         assert!(serde_json::from_str::<serde_json::Value>(&out).is_ok(),
@@ -2115,7 +2115,7 @@ mod tests {
             app_config_names: vec![],
         });
         ps.save_state(state).unwrap();
-        let result = crate::commands::cmd_feature_status(&ps, &app_store, "my-feat", false);
+        let result = crate::commands::cmd_feature_status(&ps, &app_store, "my-feat", false, std::path::Path::new("."));
         assert!(result.is_ok(), "cmd_feature_status must succeed: {:?}", result);
         let out = result.unwrap();
         assert!(!out.contains("wrong branch"),
@@ -2140,6 +2140,76 @@ mod tests {
         let rec = state.records.get(&10).unwrap();
         assert_eq!(rec.expected_branch, "feat/x",
             "expected_branch must be populated from store cache, got: {:?}", rec.expected_branch);
+    }
+
+    // D1: cmd_switch with injected cwd creates worktree in correct location
+    #[test]
+    fn cmd_switch_governs_cwd_injection_creates_worktree() {
+        use std::process::Command;
+        let tmp = tempfile::tempdir().unwrap();
+        let remote = tmp.path().join("remote.git");
+        let repo = tmp.path().join("repo");
+        Command::new("git").args(["init", "--bare", remote.to_str().unwrap()]).output().unwrap();
+        Command::new("git").args(["clone", remote.to_str().unwrap(), repo.to_str().unwrap()]).output().unwrap();
+        for arg in &[["config","user.email","t@t.com"],["config","user.name","T"]] {
+            Command::new("git").args(["-C", repo.to_str().unwrap()]).args(arg).output().unwrap();
+        }
+        std::fs::write(repo.join("f"), "x").unwrap();
+        Command::new("git").args(["-C", repo.to_str().unwrap(), "add", "."]).output().unwrap();
+        Command::new("git").args(["-C", repo.to_str().unwrap(), "commit", "-m", "init"]).output().unwrap();
+        Command::new("git").args(["-C", repo.to_str().unwrap(), "push", "origin", "HEAD:main"]).output().unwrap();
+        Command::new("git").args(["-C", repo.to_str().unwrap(), "checkout", "-b", "feat/x"]).output().unwrap();
+        Command::new("git").args(["-C", repo.to_str().unwrap(), "checkout", "main"]).output().unwrap();
+        let git_dir = repo.join(".git");
+        let store = crate::store::Store::open(&git_dir);
+        store.track(10).unwrap();
+        store.update_cache(crate::store::PrCache { number: 10, title: "X".into(), branch: "feat/x".into(), base: "main".into() }).unwrap();
+        let ps = crate::process_store::ProcessStateStore::open(&git_dir);
+        let app_store = crate::app_config::AppConfigStore::open(tmp.path().join("config.toml"));
+        // inject the test repo as cwd — cmd_switch must use this, not current_dir()
+        let result = crate::commands::cmd_switch(&store, &ps, &app_store, &git_dir, 10, "sess", false, false, false, &repo);
+        assert!(result.is_ok(), "cmd_switch with injected cwd must succeed: {:?}", result);
+        let wt_path = result.unwrap();
+        assert!(wt_path.exists(), "created worktree path must exist: {}", wt_path.display());
+    }
+
+    // D2: feature_status with repo_root derives branch path from expected_branch, not rec.worktree
+    #[test]
+    fn feature_status_governs_branch_check_uses_derived_path_not_stored_worktree() {
+        use std::process::Command;
+        let tmp = tempfile::tempdir().unwrap();
+        let repo = tmp.path().join("repo");
+        Command::new("git").args(["init", repo.to_str().unwrap()]).output().unwrap();
+        for arg in &[["config","user.email","t@t.com"],["config","user.name","T"]] {
+            Command::new("git").args(["-C", repo.to_str().unwrap()]).args(arg).output().unwrap();
+        }
+        std::fs::write(repo.join("f"), "x").unwrap();
+        Command::new("git").args(["-C", repo.to_str().unwrap(), "add", "."]).output().unwrap();
+        Command::new("git").args(["-C", repo.to_str().unwrap(), "commit", "--allow-empty", "-m", "init"]).output().unwrap();
+        // Create a sibling worktree directory on feat/x
+        Command::new("git").args(["-C", repo.to_str().unwrap(), "checkout", "-b", "feat/x"]).output().unwrap();
+        Command::new("git").args(["-C", repo.to_str().unwrap(), "checkout", "main"]).output().unwrap();
+        let wt_dir = tmp.path().join("repo-worktrees").join("feat").join("x");
+        std::fs::create_dir_all(wt_dir.parent().unwrap()).unwrap();
+        Command::new("git").args(["-C", repo.to_str().unwrap(), "worktree", "add", wt_dir.to_str().unwrap(), "feat/x"]).output().unwrap();
+        let git_dir = repo.join(".git");
+        let ps = crate::process_store::ProcessStateStore::open(&git_dir);
+        let app_store = crate::app_config::AppConfigStore::open(tmp.path().join("config.toml"));
+        crate::feature::feature_new(&ps, "my-feat").unwrap();
+        let mut state = ps.load().unwrap();
+        state.records.insert(10, crate::process_store::ProcessRecord {
+            pr: 10, expected_branch: "feat/x".into(), pid: None,
+            feature_envelope: Some("my-feat".into()),
+            worktree: String::new(), // empty — must not be used for branch check
+            app_config_names: vec![],
+        });
+        ps.save_state(state).unwrap();
+        // pass repo root so feature_status can derive the worktree path
+        let result = crate::commands::cmd_feature_status(&ps, &app_store, "my-feat", false, &repo);
+        assert!(result.is_ok(), "cmd_feature_status with repo_root must succeed: {:?}", result);
+        let out = result.unwrap();
+        assert!(out.contains("branch ok"),
+            "branch check must pass when derived worktree exists on correct branch: {}", out);
     }
 
 }

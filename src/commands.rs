@@ -209,14 +209,15 @@ pub fn cmd_switch(
     force: bool,
     adopt: bool,
     non_interactive: bool,
+    cwd: &std::path::Path,
 ) -> anyhow::Result<std::path::PathBuf> {
     let state = store.load()?;
     let cached = state.cache.get(&pr)
         .with_context(|| format!("PR #{} is not tracked. Run `fp track {}`", pr, pr))?;
     let branch = cached.branch.clone();
-    let root = crate::worktree::main_repo_root(&std::env::current_dir()?)?;
+    let root = crate::worktree::main_repo_root(cwd)?;
 
-    if !force && !non_interactive && crate::worktree::repo_is_dirty(&std::env::current_dir()?)? {
+    if !force && !non_interactive && crate::worktree::repo_is_dirty(cwd)? {
         anyhow::bail!("current worktree has uncommitted changes — commit, stash, or use --force to override");
     }
 
@@ -244,6 +245,7 @@ pub fn cmd_switch(
     if !wt_path.exists() {
         let out = std::process::Command::new("git")
             .args(["worktree", "add", wt_path.to_str().unwrap_or(""), &branch])
+            .current_dir(&root)
             .output()?;
         anyhow::ensure!(out.status.success(), "{}",
             crate::display::format_worktree_add_error(&String::from_utf8_lossy(&out.stderr), &branch, pr));
@@ -254,6 +256,11 @@ pub fn cmd_switch(
 
     let lp = crate::worktree::lock_path(git_dir, &branch);
     crate::worktree::write_lock(&lp, crate::worktree::session_anchor_pid(), "agent", id)?;
+    if let Ok(mut ps_state) = ps.load()
+        && let Some(rec) = ps_state.records.get_mut(&pr) {
+            rec.worktree = wt_path.to_string_lossy().to_string();
+            let _ = ps.save_state(ps_state);
+        }
     let summary = cmd_switch_feature_summary(ps, config, pr);
     if !summary.is_empty() { eprintln!("{}", summary); }
     Ok(wt_path)
@@ -834,7 +841,7 @@ pub fn cmd_feature_status_with_client(
     owner: &str,
     repo: &str,
 ) -> anyhow::Result<String> {
-    let mut out = cmd_feature_status(ps, config, name, false)?;
+    let mut out = cmd_feature_status(ps, config, name, false, std::path::Path::new("."))?;
     if let Some(client) = client {
         let state = ps.load()?;
         for (&pr, rec) in &state.records {
@@ -892,8 +899,9 @@ pub fn cmd_feature_status(
     config: &crate::app_config::AppConfigStore,
     name: &str,
     json: bool,
+    repo_root: &std::path::Path,
 ) -> anyhow::Result<String> {
-    let statuses = crate::feature::feature_status(ps, config, name)?;
+    let statuses = crate::feature::feature_status(ps, config, name, repo_root)?;
     if statuses.is_empty() {
         return Ok(format!("Feature '{}' has no member PRs.", name));
     }
@@ -920,7 +928,7 @@ pub fn cmd_switch_feature_summary(ps: &crate::process_store::ProcessStateStore, 
         Some(e) => e.to_string(),
         None => return String::new(),
     };
-    let statuses = match crate::feature::feature_status(ps, config, &envelope) {
+    let statuses = match crate::feature::feature_status(ps, config, &envelope, std::path::Path::new(".")) {
         Ok(s) => s,
         Err(_) => return String::new(),
     };

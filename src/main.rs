@@ -496,7 +496,7 @@ fn main() -> Result<()> {
         Commands::Switch { pr, id, force, adopt, non_interactive } => {
             let ps = process_store::ProcessStateStore::open(&git_dir);
             let app_cfg_store = app_config::AppConfigStore::open(app_config::AppConfigStore::default_path()?);
-            let wt_path = commands::cmd_switch(&store, &ps, &app_cfg_store, &git_dir, pr, &id, force, adopt, non_interactive)?;
+            let wt_path = commands::cmd_switch(&store, &ps, &app_cfg_store, &git_dir, pr, &id, force, adopt, non_interactive, &std::env::current_dir()?)?;
             println!("{}", wt_path.display());
         }
 
@@ -605,7 +605,7 @@ fn main() -> Result<()> {
                 FeatureCommands::Status { name, json } => {
                     let app_store = app_config::AppConfigStore::open(app_config::AppConfigStore::default_path()?);
                     if json {
-                        let out = commands::cmd_feature_status(&ps, &app_store, &name, true)?;
+                        let out = commands::cmd_feature_status(&ps, &app_store, &name, true, &std::env::current_dir()?)?;
                         println!("{}", out);
                         return Ok(());
                     }

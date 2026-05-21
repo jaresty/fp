@@ -265,7 +265,7 @@ mod tests {
         let mut state = ps.load().unwrap();
         state.feature_envelopes.insert("auth-refactor".to_string());
         ps.save_state(state).unwrap();
-        let statuses = feature_status(&ps, &app_store, "auth-refactor").unwrap();
+        let statuses = feature_status(&ps, &app_store, "auth-refactor", std::path::Path::new(".")).unwrap();
         assert_eq!(statuses.len(), 1,
             "feature_status must return one entry for PR 123, got: {:?}", statuses.len());
         assert_eq!(statuses[0].pr, 123);
@@ -285,7 +285,7 @@ mod tests {
         let mut state = ps.load().unwrap();
         state.feature_envelopes.insert("auth-refactor".to_string());
         ps.save_state(state).unwrap();
-        let statuses = feature_status(&ps, &app_store, "auth-refactor").unwrap();
+        let statuses = feature_status(&ps, &app_store, "auth-refactor", std::path::Path::new(".")).unwrap();
         assert!(statuses[0].pid_alive,
             "feature_status must report pid_alive=true for live PID {}", live_pid);
     }
@@ -309,7 +309,7 @@ mod tests {
         let mut state = ps.load().unwrap();
         state.feature_envelopes.insert("auth-refactor".to_string());
         ps.save_state(state).unwrap();
-        let statuses = feature_status(&ps, &app_store, "auth-refactor").unwrap();
+        let statuses = feature_status(&ps, &app_store, "auth-refactor", std::path::Path::new(".")).unwrap();
         assert_eq!(statuses[0].branch_ok, Some(true),
             "feature_status must report branch_ok=Some(true) when HEAD is feat/pay");
     }
@@ -345,7 +345,7 @@ mod tests {
         let mut state = ps.load().unwrap();
         state.feature_envelopes.insert("ext-feature".to_string());
         ps.save_state(state).unwrap();
-        let statuses = feature_status(&ps, &app_store, "ext-feature").unwrap();
+        let statuses = feature_status(&ps, &app_store, "ext-feature", std::path::Path::new(".")).unwrap();
         assert_eq!(statuses.len(), 1);
         assert!(!statuses[0].pid_alive, "ephemeral app must have pid_alive=false");
         assert_eq!(statuses[0].service_healthy, Some(true),
