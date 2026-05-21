@@ -264,12 +264,53 @@ mod tests {
     }
 
     #[test]
+    // Stage 5: post-switch feature summary includes feature name and member health
+    #[test]
+    fn commands_governs_cmd_switch_feature_summary_includes_feature_and_health() {
+        let dir = tempfile::tempdir().unwrap();
+        let ps = crate::process_store::ProcessStateStore::open(dir.path().join("ps.json"));
+        let app_store = crate::app_config::AppConfigStore::open(dir.path().join("config.toml"));
+        let wt = tempfile::tempdir().unwrap();
+        app_store.save_app_config(crate::app_config::AppConfig {
+            name: "svc".into(), bootstrap: "echo up".into(), teardown: "echo down".into(),
+            startup_timeout: "5s".into(), health_check: None, ephemeral: false, main_worktree: None,
+        }).unwrap();
+        crate::feature::feature_new(&ps, "my-feature").unwrap();
+        ps.activate(crate::process_store::ProcessRecord {
+            pr: 42, expected_branch: "feat/x".into(), pid: Some(std::process::id()),
+            feature_envelope: Some("my-feature".into()),
+            worktree: wt.path().to_string_lossy().to_string(),
+            app_config_name: Some("svc".into()),
+        }).unwrap();
+        let mut state = ps.load().unwrap();
+        state.feature_envelopes.insert("my-feature".to_string());
+        ps.save_state(state).unwrap();
+        let summary = crate::commands::cmd_switch_feature_summary(&ps, &app_store, 42);
+        assert!(summary.contains("my-feature"),
+            "summary must include feature name, got: {}", summary);
+        assert!(summary.contains("42") || summary.contains("#42"),
+            "summary must include PR number, got: {}", summary);
+    }
+
+    // Stage 5: post-switch summary is empty when PR has no feature envelope
+    #[test]
+    fn commands_governs_cmd_switch_feature_summary_empty_when_no_feature() {
+        let dir = tempfile::tempdir().unwrap();
+        let ps = crate::process_store::ProcessStateStore::open(dir.path().join("ps.json"));
+        let app_store = crate::app_config::AppConfigStore::open(dir.path().join("config.toml"));
+        let summary = crate::commands::cmd_switch_feature_summary(&ps, &app_store, 99);
+        assert!(summary.is_empty(),
+            "summary must be empty when PR has no feature, got: {}", summary);
+    }
+
     fn commands_governs_cmd_switch_errors_on_untracked_pr() {
         let tmp = tempfile::tempdir().unwrap();
         let git_dir = tmp.path().join("git_dir");
         std::fs::create_dir_all(&git_dir).unwrap();
         let store = crate::store::Store::open(&git_dir);
-        let result = crate::commands::cmd_switch(&store, &git_dir, 99, "session-id", false, false);
+        let ps = crate::process_store::ProcessStateStore::open(tmp.path().join("ps.json"));
+        let app_store = crate::app_config::AppConfigStore::open(tmp.path().join("config.toml"));
+        let result = crate::commands::cmd_switch(&store, &ps, &app_store, &git_dir, 99, "session-id", false, false);
         assert!(result.is_err(), "cmd_switch must error for untracked PR");
         assert!(result.unwrap_err().to_string().contains("not tracked"), "error must mention 'not tracked'");
     }

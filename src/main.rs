@@ -484,7 +484,9 @@ fn main() -> Result<()> {
         }
 
         Commands::Switch { pr, id, force, adopt } => {
-            let wt_path = commands::cmd_switch(&store, &git_dir, pr, &id, force, adopt)?;
+            let ps = process_store::ProcessStateStore::open(process_store::ProcessStateStore::default_path()?);
+            let app_cfg_store = app_config::AppConfigStore::open(app_config::AppConfigStore::default_path()?);
+            let wt_path = commands::cmd_switch(&store, &ps, &app_cfg_store, &git_dir, pr, &id, force, adopt)?;
             println!("{}", wt_path.display());
         }
 

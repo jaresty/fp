@@ -200,8 +200,11 @@ pub fn cmd_profile(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 pub fn cmd_switch(
     store: &crate::store::Store,
+    ps: &crate::process_store::ProcessStateStore,
+    config: &crate::app_config::AppConfigStore,
     git_dir: &std::path::Path,
     pr: u64,
     id: &str,
@@ -252,6 +255,8 @@ pub fn cmd_switch(
 
     let lp = crate::worktree::lock_path(git_dir, &branch);
     crate::worktree::write_lock(&lp, crate::worktree::session_anchor_pid(), "agent", id)?;
+    let summary = cmd_switch_feature_summary(ps, config, pr);
+    if !summary.is_empty() { eprintln!("{}", summary); }
     Ok(wt_path)
 }
 
@@ -851,6 +856,28 @@ pub fn cmd_feature_status(
         out.push_str(&format!("  PR #{}  {}{}  {}\n", s.pr, pid, health, branch));
     }
     Ok(out.trim_end().to_string())
+}
+
+pub fn cmd_switch_feature_summary(ps: &crate::process_store::ProcessStateStore, config: &crate::app_config::AppConfigStore, pr: u64) -> String {
+    let state = match ps.load() { Ok(s) => s, Err(_) => return String::new() };
+    let envelope = match state.records.get(&pr).and_then(|r| r.feature_envelope.as_deref()) {
+        Some(e) => e.to_string(),
+        None => return String::new(),
+    };
+    let statuses = match crate::feature::feature_status(ps, config, &envelope) {
+        Ok(s) => s,
+        Err(_) => return String::new(),
+    };
+    let mut out = format!("Feature: {}\n", envelope);
+    for s in &statuses {
+        let health = if s.pid_alive { "up" } else { "down" };
+        let ephemeral_hint = if !s.pid_alive && s.service_healthy.is_some() {
+            let svc = if s.service_healthy.unwrap_or(false) { "installed" } else { "not installed — run: fp feature rebuild <name> --pr {}" };
+            format!(" ({})", svc.replace("{}", &s.pr.to_string()))
+        } else { String::new() };
+        out.push_str(&format!("  PR #{}: {}{}\n", s.pr, health, ephemeral_hint));
+    }
+    out
 }
 
 pub fn cmd_pr_up(ps: &crate::process_store::ProcessStateStore, config: &crate::app_config::AppConfigStore, pr: u64, worktree: &str) -> anyhow::Result<String> {
