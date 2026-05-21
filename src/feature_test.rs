@@ -864,6 +864,26 @@ mod tests {
     }
 
     #[test]
+    fn bootstrap_pr_governs_spawned_process_in_new_session() {
+        // Spawned process must be in a different session from the calling process
+        // so it survives terminal close (SIGHUP) and fp process exit
+        let (ps, _dir) = ps_store();
+        let wt = tempdir().unwrap();
+        let cfg = AppConfig {
+            name: "svc".into(), bootstrap: "sleep 30".into(), teardown: "true".into(),
+            startup_timeout: "1s".into(), health_check: None, ephemeral: false, main_worktree: None,
+        };
+        bootstrap_pr(&ps, &cfg, 55, wt.path(), "org", "repo").unwrap();
+        let state = ps.load().unwrap();
+        let pid = state.records[&55].pid.unwrap() as libc::pid_t;
+        let child_sid = unsafe { libc::getsid(pid) };
+        let our_sid = unsafe { libc::getsid(0) };
+        unsafe { libc::kill(pid, libc::SIGTERM); }
+        assert_ne!(child_sid, our_sid,
+            "bootstrap_pr must spawn in a new session (setsid) so child survives terminal close");
+    }
+
+    #[test]
     fn teardown_pr_governs_preserves_record_with_feature_envelope() {
         let (ps, _dir) = ps_store();
         let wt = tempdir().unwrap();

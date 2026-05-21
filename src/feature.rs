@@ -1,6 +1,27 @@
 use std::path::{Path, PathBuf};
 #[cfg(unix)]
 use std::os::unix::process::CommandExt;
+use std::process::Stdio;
+#[cfg(unix)]
+extern crate libc;
+
+fn spawn_daemon(cmd: &str, dir: &Path, envs: &[(&str, &str)], log_path: &Path) -> Result<std::process::Child> {
+    let log_file = std::fs::OpenOptions::new()
+        .create(true).append(true).open(log_path)?;
+    let log_err = log_file.try_clone()?;
+    let mut command = std::process::Command::new("sh");
+    command.args(["-c", cmd])
+        .current_dir(dir)
+        .stdin(Stdio::null())
+        .stdout(Stdio::from(log_file))
+        .stderr(Stdio::from(log_err));
+    for (k, v) in envs {
+        command.env(k, v);
+    }
+    #[cfg(unix)]
+    unsafe { command.pre_exec(|| { libc::setsid(); Ok(()) }); }
+    Ok(command.spawn()?)
+}
 
 pub fn resolve_worktree(repo_root: &Path, branch: &str) -> PathBuf {
     if branch.is_empty() { repo_root.to_path_buf() }
@@ -204,15 +225,16 @@ pub fn feature_up(ps: &ProcessStateStore, config: &crate::app_config::AppConfigS
         let worktree = repo_root;
         let worktree_str = repo_root.to_string_lossy().to_string();
         let instance = format!("fp-dep-{}-{}", name, dep_cfg_name).to_lowercase().replace('/', "-");
-        let child = std::process::Command::new("sh")
-            .args(["-c", &cfg.bootstrap])
-            .current_dir(worktree)
-            .env("FP_INSTANCE", &instance)
-            .env("FP_WORKTREE", &worktree_str)
-            .env("FP_PR", "0")
-            .env("COMPOSE_PROJECT_NAME", &instance)
-            .process_group(0)
-            .spawn()?;
+        let log_dir = ps.path.parent().unwrap_or(Path::new(".")).join("logs");
+        std::fs::create_dir_all(&log_dir)?;
+        let log_path = log_dir.join(format!("{}.log", instance));
+        let envs: &[(&str, &str)] = &[
+            ("FP_INSTANCE", &instance),
+            ("FP_WORKTREE", &worktree_str),
+            ("FP_PR", "0"),
+            ("COMPOSE_PROJECT_NAME", &instance),
+        ];
+        let child = spawn_daemon(&cfg.bootstrap, worktree, envs, &log_path)?;
         let pid = child.id();
         let key = format!("{}:{}", name, dep_cfg_name);
         let mut state = ps.load()?;
@@ -361,15 +383,18 @@ pub fn feature_rebuild(ps: &ProcessStateStore, config: &crate::app_config::AppCo
 
 pub fn bootstrap_pr(ps: &ProcessStateStore, config: &AppConfig, pr: u64, worktree: &Path, org: &str, repo: &str) -> Result<()> {
     let instance = format!("fp-{}-{}-{}", org, repo, pr).to_lowercase().replace('/', "-");
-    let child = std::process::Command::new("sh")
-        .args(["-c", &config.bootstrap])
-        .current_dir(worktree)
-        .env("FP_INSTANCE", &instance)
-        .env("FP_WORKTREE", worktree)
-        .env("FP_PR", pr.to_string())
-        .env("COMPOSE_PROJECT_NAME", &instance)
-        .process_group(0)
-        .spawn()?;
+    let log_dir = ps.path.parent().unwrap_or(Path::new(".")).join("logs");
+    std::fs::create_dir_all(&log_dir)?;
+    let log_path = log_dir.join(format!("{}.log", instance));
+    let pr_str = pr.to_string();
+    let worktree_str = worktree.to_string_lossy();
+    let envs: &[(&str, &str)] = &[
+        ("FP_INSTANCE", &instance),
+        ("FP_WORKTREE", &worktree_str),
+        ("FP_PR", &pr_str),
+        ("COMPOSE_PROJECT_NAME", &instance),
+    ];
+    let child = spawn_daemon(&config.bootstrap, worktree, envs, &log_path)?;
     let pid = child.id();
     let mut state = ps.load()?;
     let rec = state.records.entry(pr).or_insert_with(|| ProcessRecord {
