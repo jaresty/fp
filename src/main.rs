@@ -378,9 +378,6 @@ enum PrCommands {
     Up {
         /// PR number
         pr: u64,
-        /// Path to the worktree for this PR
-        #[arg(long)]
-        worktree: String,
     },
 }
 
@@ -629,9 +626,9 @@ fn main() -> Result<()> {
         Commands::Pr { subcommand } => {
             let store = app_config::AppConfigStore::open(app_config::AppConfigStore::default_path()?);
             match subcommand {
-                PrCommands::Up { pr, worktree } => {
+                PrCommands::Up { pr } => {
                     let ps = process_store::ProcessStateStore::open(&git_dir);
-                    let out = commands::cmd_pr_up(&ps, &store, pr, &worktree)?;
+                    let out = commands::cmd_pr_up(&ps, &store, pr)?;
                     println!("{}", out);
                 }
             }

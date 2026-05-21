@@ -874,7 +874,7 @@ pub fn cmd_switch_feature_summary(ps: &crate::process_store::ProcessStateStore, 
     out
 }
 
-pub fn cmd_pr_up(ps: &crate::process_store::ProcessStateStore, config: &crate::app_config::AppConfigStore, pr: u64, worktree: &str) -> anyhow::Result<String> {
+pub fn cmd_pr_up(ps: &crate::process_store::ProcessStateStore, config: &crate::app_config::AppConfigStore, pr: u64) -> anyhow::Result<String> {
     let state = ps.load()?;
     let rec = state.records.get(&pr)
         .ok_or_else(|| anyhow::anyhow!("PR #{} not found in process state — run `fp feature add` first", pr))?;
@@ -882,7 +882,7 @@ pub fn cmd_pr_up(ps: &crate::process_store::ProcessStateStore, config: &crate::a
     if cfg_names.is_empty() {
         return Err(anyhow::anyhow!("no app config assigned to PR #{} — use `fp feature add --config`", pr));
     }
-    let wt = std::path::Path::new(worktree);
+    let wt = std::path::Path::new(&rec.worktree);
     let mut messages = Vec::new();
     for cfg_name in &cfg_names {
         let cfg = config.load_app_config(cfg_name)?.ok_or_else(|| anyhow::anyhow!("app config '{}' not found", cfg_name))?;

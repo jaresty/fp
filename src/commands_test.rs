@@ -1550,7 +1550,7 @@ mod tests {
             app_config_names: vec!["svc".into()],
         });
         ps.save_state(state).unwrap();
-        let result = crate::commands::cmd_pr_up(&ps, &app_store, 42, wt.path().to_str().unwrap());
+        let result = crate::commands::cmd_pr_up(&ps, &app_store, 42);
         assert!(result.is_ok(), "cmd_pr_up must succeed reading config from ProcessRecord: {:?}", result);
         let state = ps.load().unwrap();
         assert!(state.records.contains_key(&42),
