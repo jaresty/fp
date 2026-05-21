@@ -54,6 +54,14 @@ bootstrap       = "npm start"
 teardown        = "pkill -f checkout-service"
 startup_timeout = "30s"
 # health_check omitted → fp uses PID liveness
+
+[app-configs.my-chrome-extension]
+bootstrap       = "npm run build && cp -r dist/ ~/.config/google-chrome/Default/Extensions/myext/"
+teardown        = "rm -rf ~/.config/google-chrome/Default/Extensions/myext/"
+startup_timeout = "30s"
+ephemeral       = true
+health_check    = "test -d ~/.config/google-chrome/Default/Extensions/myext/"
+# ephemeral = true → bootstrap exits immediately; fp records install success, not a PID
 ```
 
 Config is per-fp-operator, not per-team. Two developers can have different `payments-api`
@@ -69,9 +77,12 @@ fp app define-config <name> \
   --teardown   "docker-compose down" \
   --startup-timeout 60s \
   --health-check "curl -f http://localhost:8080/health"   # optional
+  --ephemeral                                             # optional; see below
 ```
 
 This writes a `[configs.<name>]` entry to `~/.fp/config.toml`. Re-running with the same name overwrites the previous definition. `--health-check` is optional; omit it to use automatic detection.
+
+`--ephemeral` marks an app whose bootstrap command exits immediately (e.g. a build-and-install step). For ephemeral apps, fp does not capture a PID; `fp feature status` reports `✓ installed` / `✗ not installed` based solely on the `health_check` command (required when `ephemeral = true`). `fp feature list --running` includes an ephemeral app's envelope if its `health_check` passes.
 
 #### Assignment
 
@@ -220,9 +231,12 @@ Status output reflects all three dimensions:
 
 ```
 $ fp feature status auth-refactor
-  payments-api  (PR #123)  ✓ running  ✓ healthy  ✗ wrong branch (main ≠ feat/payments)
-  checkout-svc  (PR #456)  ✓ running  ✓ healthy  ✓ branch ok
+  payments-api      (PR #123)  ✓ running  ✓ healthy  ✗ wrong branch (main ≠ feat/payments)
+  checkout-svc      (PR #456)  ✓ running  ✓ healthy  ✓ branch ok
+  my-chrome-ext     (PR #789)  ✓ installed             ✓ branch ok
 ```
+
+For ephemeral apps (`ephemeral = true`), the "running/stopped" column is replaced by "installed/not installed", derived from the `health_check` command. The service-health column is omitted for ephemeral apps.
 
 **Process liveness — precedence:**
 
@@ -264,7 +278,21 @@ still alive (`kill -0 $FP_BOOTSTRAP_PID`). fp stores `FP_BOOTSTRAP_PID` in the p
 state store at activation time.
 
 Caveat: bootstrap commands that spawn children and exit (launcher scripts) will appear dead
-immediately. For these, an explicit `health_check` is required.
+immediately. For these, either an explicit `health_check` is required, or the app should be
+declared `ephemeral = true`.
+
+**Ephemeral apps (`ephemeral = true`)**
+
+For apps whose bootstrap command completes and exits (build-and-install patterns, Chrome
+extensions, compiled artifacts, etc.), declare `ephemeral = true`. fp will:
+
+- Run bootstrap and wait for exit; treat non-zero exit as activation failure
+- Record no PID in the process state store
+- Skip PID liveness and docker-volume checks entirely
+- Use only the `health_check` command to determine "installed" state (`health_check` is
+  required when `ephemeral = true`; fp rejects the config without it)
+- Report `✓ installed` / `✗ not installed` in `fp feature status` instead of running/stopped
+- Include ephemeral members in `fp feature list --running` when their `health_check` passes
 
 ---
 
