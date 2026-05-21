@@ -613,7 +613,8 @@ fn main() -> Result<()> {
                         let c: Box<dyn github::GithubClientTrait> = Box::new(GithubClient::new(tok));
                         (Some(c), o, r)
                     } else { (None, String::new(), String::new()) };
-                    let out = commands::cmd_feature_status_with_client(&ps, &app_store, &name, client.as_deref(), &owner, &repo_name)?;
+                    let repo_root = crate::worktree::main_repo_root(&std::env::current_dir()?)?;
+                    let out = commands::cmd_feature_status_with_client(&ps, &app_store, &name, client.as_deref(), &owner, &repo_name, &repo_root)?;
                     println!("{}", out);
                 }
                 FeatureCommands::Up { name, yes, no } => {

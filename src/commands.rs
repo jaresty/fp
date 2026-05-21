@@ -840,8 +840,9 @@ pub fn cmd_feature_status_with_client(
     client: Option<&dyn crate::github::GithubClientTrait>,
     owner: &str,
     repo: &str,
+    repo_root: &std::path::Path,
 ) -> anyhow::Result<String> {
-    let mut out = cmd_feature_status(ps, config, name, false, std::path::Path::new("."))?;
+    let mut out = cmd_feature_status(ps, config, name, false, repo_root)?;
     if let Some(client) = client {
         let state = ps.load()?;
         for (&pr, rec) in &state.records {

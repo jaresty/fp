@@ -1978,7 +1978,7 @@ mod tests {
         ps.save_state(state).unwrap();
         let mut fake = crate::github::FakeGithubClient::new_with_pr(99, "feat/z", "Z", "main");
         fake.set_pr_merged(99, true);
-        let result = crate::commands::cmd_feature_status_with_client(&ps, &app_store, "auth-refactor", Some(&fake), "o", "r");
+        let result = crate::commands::cmd_feature_status_with_client(&ps, &app_store, "auth-refactor", Some(&fake), "o", "r", std::path::Path::new("."));
         assert!(result.is_ok(), "cmd_feature_status_with_client must succeed: {:?}", result);
         let output = result.unwrap();
         assert!(output.contains("merged"), "must flag PR #99 as merged: {}", output);
@@ -2238,6 +2238,56 @@ mod tests {
         let out = result.unwrap();
         assert!(out.contains("branch ok"),
             "branch check must pass when derived worktree exists on correct branch: {}", out);
+    }
+
+    // cmd_feature_status_with_client uses repo_root so ephemeral health-check runs from correct worktree
+    #[test]
+    fn cmd_feature_status_with_client_governs_ephemeral_health_check_uses_repo_root() {
+        use std::process::Command;
+        let tmp = tempfile::tempdir().unwrap();
+        let repo = tmp.path().join("repo");
+        Command::new("git").args(["init", "-b", "main", repo.to_str().unwrap()]).output().unwrap();
+        for arg in &[["config","user.email","t@t.com"],["config","user.name","T"]] {
+            Command::new("git").args(["-C", repo.to_str().unwrap()]).args(arg).output().unwrap();
+        }
+        std::fs::write(repo.join("f"), "x").unwrap();
+        Command::new("git").args(["-C", repo.to_str().unwrap(), "add", "."]).output().unwrap();
+        Command::new("git").args(["-C", repo.to_str().unwrap(), "commit", "--allow-empty", "-m", "init"]).output().unwrap();
+        Command::new("git").args(["-C", repo.to_str().unwrap(), "checkout", "-b", "feat/ext"]).output().unwrap();
+        Command::new("git").args(["-C", repo.to_str().unwrap(), "checkout", "main"]).output().unwrap();
+        let wt = crate::worktree::worktree_path(&repo, "feat/ext");
+        std::fs::create_dir_all(wt.parent().unwrap()).unwrap();
+        Command::new("git").args(["-C", repo.to_str().unwrap(), "worktree", "add", wt.to_str().unwrap(), "feat/ext"]).output().unwrap();
+        // Create the artifact the health-check tests for
+        std::fs::create_dir_all(wt.join("dist")).unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        let ps = crate::process_store::ProcessStateStore::open(dir.path());
+        let app_store = crate::app_config::AppConfigStore::open(dir.path().join("config.toml"));
+        app_store.save_app_config(crate::app_config::AppConfig {
+            name: "ext".into(),
+            bootstrap: "true".into(),
+            teardown: "true".into(),
+            startup_timeout: "1s".into(),
+            health_check: Some("test -d dist".into()),
+            ephemeral: true,
+            main_worktree: None,
+        }).unwrap();
+        crate::feature::feature_new(&ps, "my-feat").unwrap();
+        let mut state = ps.load().unwrap();
+        state.records.insert(42, crate::process_store::ProcessRecord {
+            pr: 42,
+            expected_branch: "feat/ext".into(),
+            pid: None,
+            feature_envelope: Some("my-feat".into()),
+            worktree: String::new(),
+            app_config_names: vec!["ext".into()],
+        });
+        ps.save_state(state).unwrap();
+        let result = crate::commands::cmd_feature_status_with_client(&ps, &app_store, "my-feat", None, "o", "r", &repo);
+        assert!(result.is_ok(), "cmd_feature_status_with_client must succeed: {:?}", result);
+        let out = result.unwrap();
+        assert!(out.contains("healthy") && !out.contains("unhealthy"),
+            "ephemeral with passing health-check must show healthy when repo_root is correct, got: {}", out);
     }
 
 }
