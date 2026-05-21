@@ -1570,4 +1570,124 @@ mod tests {
         assert_eq!(cfg.health_check, Some("curl -f http://localhost:3000/health".into()),
             "cmd_app_define_config must store health_check, got: {:?}", cfg.health_check);
     }
+
+    // Stage 2b: fp feature up bootstraps all members and records activation
+    #[test]
+    fn cmd_feature_up_governs_activates_all_members() {
+        let dir = tempfile::tempdir().unwrap();
+        let ps = crate::process_store::ProcessStateStore::open(dir.path().join("ps.json"));
+        let app_store = crate::app_config::AppConfigStore::open(dir.path().join("config.toml"));
+        let wt1 = tempfile::tempdir().unwrap();
+        let wt2 = tempfile::tempdir().unwrap();
+        app_store.save_app_config(crate::app_config::AppConfig {
+            name: "svc".into(), bootstrap: "echo up".into(), teardown: "echo down".into(),
+            startup_timeout: "5s".into(), health_check: None, ephemeral: false,
+        }).unwrap();
+        // Activate two PRs in the envelope with known worktrees
+        crate::feature::feature_new(&ps, "my-feature").unwrap();
+        let mut rec1 = crate::process_store::ProcessRecord {
+            pr: 10, expected_branch: "feat/a".into(), pid: None,
+            feature_envelope: Some("my-feature".into()),
+            worktree: wt1.path().to_string_lossy().to_string(),
+            app_config_name: Some("svc".into()),
+        };
+        let mut rec2 = crate::process_store::ProcessRecord {
+            pr: 20, expected_branch: "feat/b".into(), pid: None,
+            feature_envelope: Some("my-feature".into()),
+            worktree: wt2.path().to_string_lossy().to_string(),
+            app_config_name: Some("svc".into()),
+        };
+        ps.activate(rec1).unwrap();
+        ps.activate(rec2).unwrap();
+        let mut state = ps.load().unwrap();
+        state.feature_envelopes.insert("my-feature".to_string());
+        ps.save_state(state).unwrap();
+        let result = crate::commands::cmd_feature_up(&ps, &app_store, "my-feature");
+        assert!(result.is_ok(), "cmd_feature_up must succeed: {:?}", result);
+        let state = ps.load().unwrap();
+        assert!(state.records[&10].pid.is_some(), "cmd_feature_up must record PID for PR 10");
+        assert!(state.records[&20].pid.is_some(), "cmd_feature_up must record PID for PR 20");
+    }
+
+    // Stage 2b: fp feature down tears down all members
+    #[test]
+    fn cmd_feature_down_governs_deactivates_all_members() {
+        let dir = tempfile::tempdir().unwrap();
+        let ps = crate::process_store::ProcessStateStore::open(dir.path().join("ps.json"));
+        let app_store = crate::app_config::AppConfigStore::open(dir.path().join("config.toml"));
+        let wt = tempfile::tempdir().unwrap();
+        app_store.save_app_config(crate::app_config::AppConfig {
+            name: "svc".into(), bootstrap: "echo up".into(), teardown: "echo down".into(),
+            startup_timeout: "5s".into(), health_check: None, ephemeral: false,
+        }).unwrap();
+        crate::feature::feature_new(&ps, "my-feature").unwrap();
+        ps.activate(crate::process_store::ProcessRecord {
+            pr: 10, expected_branch: "feat/a".into(), pid: Some(std::process::id()),
+            feature_envelope: Some("my-feature".into()),
+            worktree: wt.path().to_string_lossy().to_string(),
+            app_config_name: Some("svc".into()),
+        }).unwrap();
+        let mut state = ps.load().unwrap();
+        state.feature_envelopes.insert("my-feature".to_string());
+        ps.save_state(state).unwrap();
+        let result = crate::commands::cmd_feature_down(&ps, &app_store, "my-feature");
+        assert!(result.is_ok(), "cmd_feature_down must succeed: {:?}", result);
+        let state = ps.load().unwrap();
+        assert!(!state.records.contains_key(&10),
+            "cmd_feature_down must remove PR 10 from process state");
+    }
+
+    // Stage 2b: fp feature rebuild re-runs bootstrap for ephemeral members without teardown
+    #[test]
+    fn cmd_feature_rebuild_governs_reruns_bootstrap_for_ephemeral() {
+        let dir = tempfile::tempdir().unwrap();
+        let ps = crate::process_store::ProcessStateStore::open(dir.path().join("ps.json"));
+        let app_store = crate::app_config::AppConfigStore::open(dir.path().join("config.toml"));
+        let wt = tempfile::tempdir().unwrap();
+        app_store.save_app_config(crate::app_config::AppConfig {
+            name: "ext".into(), bootstrap: "echo rebuild-ok".into(), teardown: "echo down".into(),
+            startup_timeout: "5s".into(), health_check: Some("true".into()), ephemeral: true,
+        }).unwrap();
+        crate::feature::feature_new(&ps, "ext-feature").unwrap();
+        ps.activate(crate::process_store::ProcessRecord {
+            pr: 77, expected_branch: "feat/ext".into(), pid: None,
+            feature_envelope: Some("ext-feature".into()),
+            worktree: wt.path().to_string_lossy().to_string(),
+            app_config_name: Some("ext".into()),
+        }).unwrap();
+        let mut state = ps.load().unwrap();
+        state.feature_envelopes.insert("ext-feature".to_string());
+        ps.save_state(state).unwrap();
+        let result = crate::commands::cmd_feature_rebuild(&ps, &app_store, "ext-feature", None);
+        assert!(result.is_ok(), "cmd_feature_rebuild must succeed: {:?}", result);
+        let output = result.unwrap();
+        assert!(output.contains("77"),
+            "cmd_feature_rebuild output must mention PR 77, got: {}", output);
+    }
+
+    // Stage 2b: fp feature rebuild rejects persistent members
+    #[test]
+    fn cmd_feature_rebuild_governs_rejects_persistent_members() {
+        let dir = tempfile::tempdir().unwrap();
+        let ps = crate::process_store::ProcessStateStore::open(dir.path().join("ps.json"));
+        let app_store = crate::app_config::AppConfigStore::open(dir.path().join("config.toml"));
+        let wt = tempfile::tempdir().unwrap();
+        app_store.save_app_config(crate::app_config::AppConfig {
+            name: "svc".into(), bootstrap: "echo up".into(), teardown: "echo down".into(),
+            startup_timeout: "5s".into(), health_check: None, ephemeral: false,
+        }).unwrap();
+        crate::feature::feature_new(&ps, "my-feature").unwrap();
+        ps.activate(crate::process_store::ProcessRecord {
+            pr: 10, expected_branch: "feat/a".into(), pid: None,
+            feature_envelope: Some("my-feature".into()),
+            worktree: wt.path().to_string_lossy().to_string(),
+            app_config_name: Some("svc".into()),
+        }).unwrap();
+        let mut state = ps.load().unwrap();
+        state.feature_envelopes.insert("my-feature".to_string());
+        ps.save_state(state).unwrap();
+        let result = crate::commands::cmd_feature_rebuild(&ps, &app_store, "my-feature", None);
+        assert!(result.is_err() || result.as_ref().unwrap().contains("persistent"),
+            "cmd_feature_rebuild must error or warn for persistent app, got: {:?}", result);
+    }
 }

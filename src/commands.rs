@@ -767,6 +767,33 @@ pub fn cmd_feature_list(ps: &crate::process_store::ProcessStateStore) -> anyhow:
     Ok(out.trim_end().to_string())
 }
 
+pub fn cmd_feature_up(ps: &crate::process_store::ProcessStateStore, config: &crate::app_config::AppConfigStore, name: &str) -> anyhow::Result<String> {
+    let msgs = crate::feature::feature_up(ps, config, name)?;
+    if msgs.is_empty() {
+        Ok(format!("Feature '{}' has no member PRs with app configs.", name))
+    } else {
+        Ok(msgs.join("\n"))
+    }
+}
+
+pub fn cmd_feature_down(ps: &crate::process_store::ProcessStateStore, config: &crate::app_config::AppConfigStore, name: &str) -> anyhow::Result<String> {
+    let msgs = crate::feature::feature_down(ps, config, name)?;
+    if msgs.is_empty() {
+        Ok(format!("Feature '{}' has no member PRs with app configs.", name))
+    } else {
+        Ok(msgs.join("\n"))
+    }
+}
+
+pub fn cmd_feature_rebuild(ps: &crate::process_store::ProcessStateStore, config: &crate::app_config::AppConfigStore, name: &str, pr: Option<u64>) -> anyhow::Result<String> {
+    let msgs = crate::feature::feature_rebuild(ps, config, name, pr)?;
+    if msgs.is_empty() {
+        Ok(format!("Feature '{}' has no matching ephemeral members.", name))
+    } else {
+        Ok(msgs.join("\n"))
+    }
+}
+
 pub fn cmd_feature_list_running(ps: &crate::process_store::ProcessStateStore) -> anyhow::Result<String> {
     let list = crate::feature::feature_list_running(ps)?;
     if list.is_empty() {

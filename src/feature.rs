@@ -131,6 +131,91 @@ pub fn feature_list(ps: &ProcessStateStore) -> Result<Vec<FeatureInfo>> {
     Ok(infos)
 }
 
+pub fn feature_up(ps: &ProcessStateStore, config: &crate::app_config::AppConfigStore, name: &str) -> Result<Vec<String>> {
+    let state = ps.load()?;
+    let records: Vec<_> = state.records.values()
+        .filter(|r| r.feature_envelope.as_deref() == Some(name))
+        .cloned()
+        .collect();
+    let mut messages = Vec::new();
+    for rec in records {
+        let app_cfg = rec.app_config_name.as_deref()
+            .and_then(|n| config.load_app_config(n).ok().flatten());
+        let cfg = match app_cfg {
+            Some(c) => c,
+            None => {
+                messages.push(format!("PR #{}: no app config assigned — skipped", rec.pr));
+                continue;
+            }
+        };
+        let worktree = std::path::Path::new(&rec.worktree);
+        bootstrap_pr(ps, &cfg, rec.pr, worktree, "", "")?;
+        messages.push(format!("PR #{}: started ({})", rec.pr, cfg.name));
+    }
+    Ok(messages)
+}
+
+pub fn feature_down(ps: &ProcessStateStore, config: &crate::app_config::AppConfigStore, name: &str) -> Result<Vec<String>> {
+    let state = ps.load()?;
+    let records: Vec<_> = state.records.values()
+        .filter(|r| r.feature_envelope.as_deref() == Some(name))
+        .cloned()
+        .collect();
+    let mut messages = Vec::new();
+    for rec in records {
+        let app_cfg = rec.app_config_name.as_deref()
+            .and_then(|n| config.load_app_config(n).ok().flatten());
+        let cfg = match app_cfg {
+            Some(c) => c,
+            None => {
+                messages.push(format!("PR #{}: no app config assigned — skipped", rec.pr));
+                continue;
+            }
+        };
+        let worktree = std::path::Path::new(&rec.worktree);
+        teardown_pr(ps, &cfg, rec.pr, worktree, "", "")?;
+        messages.push(format!("PR #{}: stopped ({})", rec.pr, cfg.name));
+    }
+    Ok(messages)
+}
+
+pub fn feature_rebuild(ps: &ProcessStateStore, config: &crate::app_config::AppConfigStore, name: &str, pr_filter: Option<u64>) -> Result<Vec<String>> {
+    let state = ps.load()?;
+    let records: Vec<_> = state.records.values()
+        .filter(|r| r.feature_envelope.as_deref() == Some(name))
+        .filter(|r| pr_filter.map(|p| r.pr == p).unwrap_or(true))
+        .cloned()
+        .collect();
+    let mut messages = Vec::new();
+    for rec in records {
+        let app_cfg = rec.app_config_name.as_deref()
+            .and_then(|n| config.load_app_config(n).ok().flatten());
+        let cfg = match app_cfg {
+            Some(c) => c,
+            None => {
+                messages.push(format!("PR #{}: no app config assigned — skipped", rec.pr));
+                continue;
+            }
+        };
+        if !cfg.ephemeral {
+            messages.push(format!("PR #{}: uses a persistent app config '{}' — use `fp feature down` + `fp feature up` instead", rec.pr, cfg.name));
+            continue;
+        }
+        let worktree = std::path::Path::new(&rec.worktree);
+        let instance = format!("fp---{}", rec.pr);
+        std::process::Command::new("sh")
+            .args(["-c", &cfg.bootstrap])
+            .current_dir(worktree)
+            .env("FP_INSTANCE", &instance)
+            .env("FP_WORKTREE", worktree)
+            .env("FP_PR", rec.pr.to_string())
+            .env("COMPOSE_PROJECT_NAME", &instance)
+            .status()?;
+        messages.push(format!("PR #{}: rebuilt ({})", rec.pr, cfg.name));
+    }
+    Ok(messages)
+}
+
 pub fn bootstrap_pr(ps: &ProcessStateStore, config: &AppConfig, pr: u64, worktree: &Path, org: &str, repo: &str) -> Result<()> {
     let instance = format!("fp-{}-{}-{}", org, repo, pr).to_lowercase().replace('/', "-");
     let child = std::process::Command::new("sh")

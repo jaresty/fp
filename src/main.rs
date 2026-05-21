@@ -313,6 +313,27 @@ enum FeatureCommands {
         /// Feature envelope name
         name: String,
     },
+    /// Bootstrap all PRs in a feature envelope
+    Up {
+        /// Feature envelope name
+        name: String,
+        /// Skip conflict detection prompt
+        #[arg(long)]
+        yes: bool,
+    },
+    /// Tear down all PRs in a feature envelope
+    Down {
+        /// Feature envelope name
+        name: String,
+    },
+    /// Re-run bootstrap for ephemeral members without teardown
+    Rebuild {
+        /// Feature envelope name
+        name: String,
+        /// Rebuild only this PR
+        #[arg(long)]
+        pr: Option<u64>,
+    },
 }
 
 #[derive(Subcommand)]
@@ -558,6 +579,21 @@ fn main() -> Result<()> {
                 FeatureCommands::Status { name } => {
                     let app_store = app_config::AppConfigStore::open(app_config::AppConfigStore::default_path()?);
                     let out = commands::cmd_feature_status(&ps, &app_store, &name)?;
+                    println!("{}", out);
+                }
+                FeatureCommands::Up { name, yes: _ } => {
+                    let app_store = app_config::AppConfigStore::open(app_config::AppConfigStore::default_path()?);
+                    let out = commands::cmd_feature_up(&ps, &app_store, &name)?;
+                    println!("{}", out);
+                }
+                FeatureCommands::Down { name } => {
+                    let app_store = app_config::AppConfigStore::open(app_config::AppConfigStore::default_path()?);
+                    let out = commands::cmd_feature_down(&ps, &app_store, &name)?;
+                    println!("{}", out);
+                }
+                FeatureCommands::Rebuild { name, pr } => {
+                    let app_store = app_config::AppConfigStore::open(app_config::AppConfigStore::default_path()?);
+                    let out = commands::cmd_feature_rebuild(&ps, &app_store, &name, pr)?;
                     println!("{}", out);
                 }
             }
