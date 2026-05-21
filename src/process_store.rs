@@ -5,6 +5,14 @@ use anyhow::Result;
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DepRecord {
+    pub app_config_name: String,
+    pub feature_envelope: String,
+    pub pid: Option<u32>,
+    pub worktree: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ProcessRecord {
     pub pr: u64,
     pub expected_branch: String,
@@ -22,6 +30,8 @@ pub struct ProcessState {
     pub feature_envelopes: HashSet<String>,
     #[serde(default)]
     pub envelope_deps: HashMap<String, Vec<String>>,
+    #[serde(default)]
+    pub dep_records: HashMap<String, DepRecord>,
 }
 
 pub struct ProcessStateStore {

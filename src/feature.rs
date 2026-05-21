@@ -201,23 +201,28 @@ pub fn feature_up(ps: &ProcessStateStore, config: &crate::app_config::AppConfigS
                 continue;
             }
         };
-        let main_wt = match &cfg.main_worktree {
-            Some(p) => p.clone(),
-            None => {
-                messages.push(format!("dep {}: no main_worktree configured — skipped", dep_cfg_name));
-                continue;
-            }
-        };
-        let worktree = std::path::Path::new(&main_wt);
-        ps.activate(ProcessRecord {
-            pr: 0,
-            expected_branch: String::new(),
-            pid: None,
-            feature_envelope: Some(name.to_string()),
-            worktree: main_wt.clone(),
-            app_config_names: vec![dep_cfg_name.clone()],
-        })?;
-        bootstrap_pr(ps, &cfg, 0, worktree, "", "")?;
+        let worktree = repo_root;
+        let worktree_str = repo_root.to_string_lossy().to_string();
+        let instance = format!("fp-dep-{}-{}", name, dep_cfg_name).to_lowercase().replace('/', "-");
+        let child = std::process::Command::new("sh")
+            .args(["-c", &cfg.bootstrap])
+            .current_dir(worktree)
+            .env("FP_INSTANCE", &instance)
+            .env("FP_WORKTREE", &worktree_str)
+            .env("FP_PR", "0")
+            .env("COMPOSE_PROJECT_NAME", &instance)
+            .process_group(0)
+            .spawn()?;
+        let pid = child.id();
+        let key = format!("{}:{}", name, dep_cfg_name);
+        let mut state = ps.load()?;
+        state.dep_records.insert(key, crate::process_store::DepRecord {
+            app_config_name: dep_cfg_name.clone(),
+            feature_envelope: name.to_string(),
+            pid: Some(pid),
+            worktree: worktree_str,
+        });
+        ps.save_state(state)?;
         messages.push(format!("dep {} (main): started", dep_cfg_name));
     }
     Ok(messages)
@@ -245,17 +250,85 @@ pub fn feature_down(ps: &ProcessStateStore, config: &crate::app_config::AppConfi
         teardown_pr(ps, &cfg, rec.pr, worktree, "", "")?;
         messages.push(format!("PR #{}: stopped ({})", rec.pr, cfg.name));
     }
+    // Tear down dep slots for this envelope
+    let dep_keys: Vec<String> = {
+        let state = ps.load()?;
+        state.dep_records.keys()
+            .filter(|k| k.starts_with(&format!("{}:", name)))
+            .cloned()
+            .collect()
+    };
+    for key in &dep_keys {
+        let dep_cfg_name = key.splitn(2, ':').nth(1).unwrap_or("").to_string();
+        let dep_state = ps.load()?;
+        if let Some(dep_rec) = dep_state.dep_records.get(key) {
+            let worktree = std::path::Path::new(&dep_rec.worktree);
+            if let Some(cfg) = config.load_app_config(&dep_cfg_name).ok().flatten() {
+                let instance = format!("fp-dep-{}-{}", name, dep_cfg_name).to_lowercase().replace('/', "-");
+                let _ = std::process::Command::new("sh")
+                    .args(["-c", &cfg.teardown])
+                    .current_dir(worktree)
+                    .env("FP_INSTANCE", &instance)
+                    .env("FP_WORKTREE", &dep_rec.worktree)
+                    .env("FP_PR", "0")
+                    .env("COMPOSE_PROJECT_NAME", &instance)
+                    .status();
+                messages.push(format!("dep {} (main): stopped", dep_cfg_name));
+            }
+        }
+        let mut s = ps.load()?;
+        s.dep_records.remove(key);
+        ps.save_state(s)?;
+    }
     Ok(messages)
 }
 
 pub fn feature_rebuild(ps: &ProcessStateStore, config: &crate::app_config::AppConfigStore, name: &str, pr_filter: Option<u64>, repo_root: &std::path::Path) -> Result<Vec<String>> {
+    let mut messages = Vec::new();
+    // Rebuild dep slots when pr_filter is Some(0) or None (all)
+    if pr_filter == Some(0) || pr_filter.is_none() {
+        let dep_keys: Vec<String> = {
+            let state = ps.load()?;
+            state.dep_records.keys()
+                .filter(|k| k.starts_with(&format!("{}:", name)))
+                .cloned()
+                .collect()
+        };
+        for key in &dep_keys {
+            let dep_cfg_name = key.splitn(2, ':').nth(1).unwrap_or("").to_string();
+            let cfg = match config.load_app_config(&dep_cfg_name).ok().flatten() {
+                Some(c) => c,
+                None => { messages.push(format!("dep {}: app config not found — skipped", dep_cfg_name)); continue; }
+            };
+            let worktree_str = repo_root.to_string_lossy().to_string();
+            let instance = format!("fp-dep-{}-{}", name, dep_cfg_name).to_lowercase().replace('/', "-");
+            let child = std::process::Command::new("sh")
+                .args(["-c", &cfg.bootstrap])
+                .current_dir(repo_root)
+                .env("FP_INSTANCE", &instance)
+                .env("FP_WORKTREE", &worktree_str)
+                .env("FP_PR", "0")
+                .env("COMPOSE_PROJECT_NAME", &instance)
+                .process_group(0)
+                .spawn()?;
+            let pid = child.id();
+            let mut state = ps.load()?;
+            if let Some(rec) = state.dep_records.get_mut(key) {
+                rec.pid = Some(pid);
+            }
+            ps.save_state(state)?;
+            messages.push(format!("dep {} (main): rebuilt", dep_cfg_name));
+        }
+        if pr_filter == Some(0) {
+            return Ok(messages);
+        }
+    }
     let state = ps.load()?;
     let records: Vec<_> = state.records.values()
         .filter(|r| r.feature_envelope.as_deref() == Some(name))
         .filter(|r| pr_filter.map(|p| r.pr == p).unwrap_or(true))
         .cloned()
         .collect();
-    let mut messages = Vec::new();
     for rec in records {
         let app_cfg = rec.app_config_names.first().map(|n| n.as_str())
             .and_then(|n| config.load_app_config(n).ok().flatten());

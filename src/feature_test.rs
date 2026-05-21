@@ -407,23 +407,62 @@ mod tests {
 
     // feature_up starts main-worktree instance for dep slot with no live PR
     #[test]
-    fn feature_governs_up_starts_main_worktree_for_dep_with_no_pr() {
+    fn feature_governs_up_stores_dep_in_dep_records_not_pr0() {
         let (ps, _dir) = ps_store();
         let (app_store, _app_dir) = app_store();
-        let main_wt = tempdir().unwrap();
+        let repo = tempdir().unwrap();
         let mut cfg = echo_config("notifications-svc");
-        cfg.main_worktree = Some(main_wt.path().to_string_lossy().to_string());
+        cfg.main_worktree = None;
         app_store.save_app_config(cfg).unwrap();
         feature_new(&ps, "my-feature").unwrap();
         feature_add_dep(&ps, "my-feature", "notifications-svc").unwrap();
-        crate::feature::feature_up(&ps, &app_store, "my-feature", std::path::Path::new(".")).unwrap();
+        crate::feature::feature_up(&ps, &app_store, "my-feature", repo.path()).unwrap();
         let state = ps.load().unwrap();
-        // sentinel PR 0 should be recorded for notifications-svc main-worktree instance
-        assert!(state.records.contains_key(&0),
-            "feature_up must record sentinel PR 0 for main-worktree dep instance, got keys: {:?}",
-            state.records.keys().collect::<Vec<_>>());
-        assert_eq!(state.records[&0].worktree, main_wt.path().to_string_lossy().as_ref(),
-            "sentinel record must use main_worktree path");
+        let key = "my-feature:notifications-svc";
+        assert!(state.dep_records.contains_key(key),
+            "feature_up must store dep in dep_records[\"my-feature:notifications-svc\"], got: {:?}",
+            state.dep_records.keys().collect::<Vec<_>>());
+        assert!(!state.records.contains_key(&0),
+            "feature_up must not use pr=0 sentinel for dep slots");
+    }
+
+    #[test]
+    fn feature_governs_dep_records_use_repo_root_as_worktree() {
+        let (ps, _dir) = ps_store();
+        let (app_store, _app_dir) = app_store();
+        let repo = tempdir().unwrap();
+        let mut cfg = echo_config("notifications-svc");
+        cfg.main_worktree = None;
+        app_store.save_app_config(cfg).unwrap();
+        feature_new(&ps, "my-feature").unwrap();
+        feature_add_dep(&ps, "my-feature", "notifications-svc").unwrap();
+        crate::feature::feature_up(&ps, &app_store, "my-feature", repo.path()).unwrap();
+        let state = ps.load().unwrap();
+        let rec = &state.dep_records["my-feature:notifications-svc"];
+        assert_eq!(rec.worktree, repo.path().to_string_lossy().as_ref(),
+            "dep_record worktree must equal repo_root, not cfg.main_worktree");
+    }
+
+    #[test]
+    fn feature_governs_multiple_deps_each_get_own_dep_record() {
+        let (ps, _dir) = ps_store();
+        let (app_store, _app_dir) = app_store();
+        let repo = tempdir().unwrap();
+        app_store.save_app_config(echo_config("backend")).unwrap();
+        app_store.save_app_config(echo_config("staff")).unwrap();
+        app_store.save_app_config(echo_config("mock-portal")).unwrap();
+        feature_new(&ps, "b-form").unwrap();
+        feature_add_dep(&ps, "b-form", "backend").unwrap();
+        feature_add_dep(&ps, "b-form", "staff").unwrap();
+        feature_add_dep(&ps, "b-form", "mock-portal").unwrap();
+        crate::feature::feature_up(&ps, &app_store, "b-form", repo.path()).unwrap();
+        let state = ps.load().unwrap();
+        for dep in &["backend", "staff", "mock-portal"] {
+            let key = format!("b-form:{}", dep);
+            assert!(state.dep_records.contains_key(&key),
+                "dep_records must contain key '{}', got: {:?}", key,
+                state.dep_records.keys().collect::<Vec<_>>());
+        }
     }
 
     // feature_add with --config appends to app_config_names on the ProcessRecord
@@ -715,6 +754,45 @@ mod tests {
         let expected = crate::worktree::worktree_path(root, "feat/x");
         assert_eq!(result, expected,
             "resolve_worktree with non-empty branch must return worktree_path, got: {:?}", result);
+    }
+
+    #[test]
+    fn feature_governs_down_tears_down_dep_records_for_envelope() {
+        let (ps, _dir) = ps_store();
+        let (app_store, _app_dir) = app_store();
+        let repo = tempdir().unwrap();
+        let mut cfg = echo_config("backend");
+        cfg.main_worktree = None;
+        app_store.save_app_config(cfg).unwrap();
+        feature_new(&ps, "my-feature").unwrap();
+        feature_add_dep(&ps, "my-feature", "backend").unwrap();
+        crate::feature::feature_up(&ps, &app_store, "my-feature", repo.path()).unwrap();
+        // confirm dep_record exists before down
+        let state = ps.load().unwrap();
+        assert!(state.dep_records.contains_key("my-feature:backend"),
+            "pre-condition: dep_records must have my-feature:backend before down");
+        crate::feature::feature_down(&ps, &app_store, "my-feature", repo.path()).unwrap();
+        let state_after = ps.load().unwrap();
+        assert!(!state_after.dep_records.contains_key("my-feature:backend"),
+            "feature_down must remove my-feature:backend from dep_records, got: {:?}",
+            state_after.dep_records.keys().collect::<Vec<_>>());
+    }
+
+    #[test]
+    fn feature_governs_rebuild_pr0_reruns_dep_bootstrap_and_updates_pid() {
+        let (ps, _dir) = ps_store();
+        let (app_store, _app_dir) = app_store();
+        let repo = tempdir().unwrap();
+        app_store.save_app_config(echo_config("backend")).unwrap();
+        feature_new(&ps, "my-feature").unwrap();
+        feature_add_dep(&ps, "my-feature", "backend").unwrap();
+        crate::feature::feature_up(&ps, &app_store, "my-feature", repo.path()).unwrap();
+        let pid_before = ps.load().unwrap().dep_records["my-feature:backend"].pid;
+        crate::feature::feature_rebuild(&ps, &app_store, "my-feature", Some(0), repo.path()).unwrap();
+        let pid_after = ps.load().unwrap().dep_records["my-feature:backend"].pid;
+        assert!(pid_after.is_some(), "rebuild must set a pid in dep_records");
+        assert_ne!(pid_before, pid_after,
+            "rebuild must update dep_records pid to new bootstrap process");
     }
 
     #[test]
