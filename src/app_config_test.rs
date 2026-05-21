@@ -114,24 +114,6 @@ mod tests {
             "get_repo_config must return None for unassigned repo, got: {:?}", result);
     }
 
-    // D3: set_pr_config saves pr→config-name mapping; get_pr_config retrieves it
-    #[test]
-    fn app_config_store_governs_pr_config_assignment() {
-        let (store, _dir) = make_store();
-        store.set_pr_config(123, "payments-api").unwrap();
-        let result = store.get_pr_config(123).unwrap();
-        assert_eq!(result, Some("payments-api".to_string()),
-            "get_pr_config must return assigned config name, got: {:?}", result);
-    }
-
-    // D3b: get_pr_config returns None for unassigned PR
-    #[test]
-    fn app_config_store_governs_unassigned_pr_returns_none() {
-        let (store, _dir) = make_store();
-        let result = store.get_pr_config(999).unwrap();
-        assert_eq!(result, None,
-            "get_pr_config must return None for unassigned PR, got: {:?}", result);
-    }
 
     // D4: default_path returns path ending in .fp/config.toml
     #[test]

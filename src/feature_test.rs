@@ -13,7 +13,7 @@ mod tests {
 
     fn ps_store() -> (ProcessStateStore, tempfile::TempDir) {
         let dir = tempdir().unwrap();
-        let store = ProcessStateStore::open(dir.path().join("process-state.json"));
+        let store = ProcessStateStore::open(dir.path());
         (store, dir)
     }
 
@@ -46,7 +46,7 @@ mod tests {
             pid: None,
             feature_envelope: None,
             worktree: worktree.into(),
-            app_config_name: None,
+            app_config_names: vec![],
         }
     }
 
@@ -81,7 +81,7 @@ mod tests {
         store.track(42).unwrap();
         store.update_cache(PrCache { number: 42, title: "T".into(), branch: "feat/x".into(), base: "main".into() }).unwrap();
         feature_new(&ps, "my-feature").unwrap();
-        feature_add(&ps, &store, "my-feature", 42).unwrap();
+        feature_add(&ps, &store, "my-feature", 42, &[]).unwrap();
         let list = feature_list(&ps).unwrap();
         let envelope = list.iter().find(|f| f.name == "my-feature").unwrap();
         assert!(envelope.prs.contains(&42),
@@ -96,7 +96,7 @@ mod tests {
         let store = git_store(git_dir.path());
         // PR 99 is not tracked initially
         feature_new(&ps, "my-feature").unwrap();
-        feature_add(&ps, &store, "my-feature", 99).unwrap();
+        feature_add(&ps, &store, "my-feature", 99, &[]).unwrap();
         let state = store.load().unwrap();
         assert!(state.tracked.contains(&99),
             "feature_add must auto-track PR 99, got tracked: {:?}", state.tracked);
@@ -339,7 +339,7 @@ mod tests {
         app_store.save_app_config(ephemeral_config("my-ext")).unwrap();
         let mut rec = record(789, "feat/ext", &wt.path().to_string_lossy());
         rec.feature_envelope = Some("ext-feature".into());
-        rec.app_config_name = Some("my-ext".into());
+        rec.app_config_names = vec!["my-ext".into()];
         // no pid — ephemeral
         ps.activate(rec).unwrap();
         let mut state = ps.load().unwrap();
@@ -361,7 +361,7 @@ mod tests {
         app_store.save_app_config(ephemeral_config("my-ext")).unwrap();
         let mut rec = record(789, "feat/ext", &wt.path().to_string_lossy());
         rec.feature_envelope = Some("ext-feature".into());
-        rec.app_config_name = Some("my-ext".into());
+        rec.app_config_names = vec!["my-ext".into()];
         ps.activate(rec).unwrap();
         let mut state = ps.load().unwrap();
         state.feature_envelopes.insert("ext-feature".to_string());
@@ -403,5 +403,52 @@ mod tests {
             state.records.keys().collect::<Vec<_>>());
         assert_eq!(state.records[&0].worktree, main_wt.path().to_string_lossy().as_ref(),
             "sentinel record must use main_worktree path");
+    }
+
+    // feature_add with --config appends to app_config_names on the ProcessRecord
+    #[test]
+    fn feature_governs_add_with_configs_stores_app_config_names() {
+        let (ps, _dir) = ps_store();
+        let store = {
+            let d = tempdir().unwrap();
+            Store::open(d.path())
+        };
+        // store is dropped immediately but track is called inside feature_add
+        let (ps2, _d2) = ps_store();
+        let store2 = {
+            let d = tempdir().unwrap();
+            crate::store::Store::open(d.path())
+        };
+        feature_add(&ps2, &store2, "my-feature", 7, &["api".to_string(), "worker".to_string()]).unwrap();
+        let state = ps2.load().unwrap();
+        let rec = &state.records[&7];
+        assert_eq!(rec.app_config_names, vec!["api", "worker"],
+            "feature_add must store --config values in app_config_names, got: {:?}", rec.app_config_names);
+    }
+
+    // bootstrap_pr governs child in new process group (survives terminal SIGHUP)
+    #[test]
+    #[cfg(unix)]
+    fn bootstrap_pr_governs_child_in_new_process_group() {
+        let (ps, _dir) = ps_store();
+        let wt = tempdir().unwrap();
+        let cfg = AppConfig {
+            name: "svc".into(),
+            bootstrap: "sleep 5".into(),
+            teardown: "true".into(),
+            startup_timeout: "5s".into(),
+            health_check: None,
+            ephemeral: false,
+            main_worktree: None,
+        };
+        bootstrap_pr(&ps, &cfg, 1, wt.path(), "org", "repo").unwrap();
+        let state = ps.load().unwrap();
+        let pid = state.records[&1].pid.unwrap();
+        let child_pgid = unsafe { libc::getpgid(pid as libc::pid_t) };
+        let our_pgid = unsafe { libc::getpgrp() };
+        unsafe { libc::kill(pid as libc::pid_t, libc::SIGTERM) };
+        assert_ne!(child_pgid, our_pgid,
+            "bootstrap_pr child must be in its own process group (pgid {}) not fp's (pgid {})",
+            child_pgid, our_pgid);
     }
 }

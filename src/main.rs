@@ -301,7 +301,7 @@ enum FeatureCommands {
     /// Create a new feature envelope
     New { name: String },
     /// Add a PR to a feature envelope (auto-tracks if untracked)
-    Add { name: String, pr: u64 },
+    Add { name: String, pr: u64, #[arg(long, action = clap::ArgAction::Append, value_name = "CONFIG")] config: Vec<String> },
     /// Declare a baseline app config dependency (no PR required)
     AddDep { name: String, app_config: String },
     /// List feature envelopes and their member PRs
@@ -382,13 +382,6 @@ enum PrCommands {
         #[arg(long)]
         worktree: String,
     },
-    /// Override the app config for a specific PR
-    SetConfig {
-        /// PR number
-        pr: u64,
-        /// Name of the app config to assign
-        config_name: String,
-    },
 }
 
 /// Resolves `--demo` arguments to CDN URLs. URL strings pass through; file paths are uploaded
@@ -458,7 +451,7 @@ fn main() -> Result<()> {
             let client = token.as_ref().map(|t| GithubClient::new(t.clone()));
             let client_ref: Option<&dyn github::GithubClientTrait> = client.as_ref().map(|c| c as &dyn github::GithubClientTrait);
             if all {
-                let ps = process_store::ProcessStateStore::open(process_store::ProcessStateStore::default_path()?);
+                let ps = process_store::ProcessStateStore::open(&git_dir);
                 print!("{}", commands::cmd_status_all(client_ref, &store, Some(&ps), &git_dir, &owner, &repo_name, json)?);
             } else {
                 let number = pr.context("specify a PR number or use --all")?;
@@ -484,7 +477,7 @@ fn main() -> Result<()> {
         }
 
         Commands::Switch { pr, id, force, adopt } => {
-            let ps = process_store::ProcessStateStore::open(process_store::ProcessStateStore::default_path()?);
+            let ps = process_store::ProcessStateStore::open(&git_dir);
             let app_cfg_store = app_config::AppConfigStore::open(app_config::AppConfigStore::default_path()?);
             let wt_path = commands::cmd_switch(&store, &ps, &app_cfg_store, &git_dir, pr, &id, force, adopt)?;
             println!("{}", wt_path.display());
@@ -573,15 +566,15 @@ fn main() -> Result<()> {
         }
 
         Commands::Feature { subcommand } => {
-            let ps = process_store::ProcessStateStore::open(process_store::ProcessStateStore::default_path()?);
+            let ps = process_store::ProcessStateStore::open(&git_dir);
             match subcommand {
                 FeatureCommands::New { name } => {
                     let out = commands::cmd_feature_new(&ps, &name)?;
                     println!("{}", out);
                 }
-                FeatureCommands::Add { name, pr } => {
+                FeatureCommands::Add { name, pr, config } => {
                     let store = Store::open(&git_dir);
-                    let out = commands::cmd_feature_add(&ps, &store, &name, pr)?;
+                    let out = commands::cmd_feature_add(&ps, &store, &name, pr, config)?;
                     println!("{}", out);
                 }
                 FeatureCommands::List { running } => {
@@ -637,12 +630,8 @@ fn main() -> Result<()> {
             let store = app_config::AppConfigStore::open(app_config::AppConfigStore::default_path()?);
             match subcommand {
                 PrCommands::Up { pr, worktree } => {
-                    let ps = process_store::ProcessStateStore::open(process_store::ProcessStateStore::default_path()?);
+                    let ps = process_store::ProcessStateStore::open(&git_dir);
                     let out = commands::cmd_pr_up(&ps, &store, pr, &worktree)?;
-                    println!("{}", out);
-                }
-                PrCommands::SetConfig { pr, config_name } => {
-                    let out = commands::cmd_pr_set_config(&store, pr, &config_name)?;
                     println!("{}", out);
                 }
             }

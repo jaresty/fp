@@ -1,4 +1,6 @@
 use std::path::Path;
+#[cfg(unix)]
+use std::os::unix::process::CommandExt;
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
 use crate::process_store::{ProcessRecord, ProcessStateStore};
@@ -46,7 +48,7 @@ pub fn feature_list_running_with_config(ps: &ProcessStateStore, config: &crate::
     let running: Vec<FeatureInfo> = state.feature_envelopes.iter().filter(|name| {
         state.records.values().any(|r| {
             if r.feature_envelope.as_deref() != Some(name) { return false; }
-            let app_cfg = r.app_config_name.as_deref()
+            let app_cfg = r.app_config_names.first().map(|n| n.as_str())
                 .and_then(|n| config.load_app_config(n).ok().flatten());
             let is_ephemeral = app_cfg.as_ref().map(|c| c.ephemeral).unwrap_or(false);
             if is_ephemeral {
@@ -74,7 +76,7 @@ pub fn feature_status(ps: &ProcessStateStore, config: &crate::app_config::AppCon
         .map(|r| {
             let worktree = std::path::Path::new(&r.worktree);
             let branch_ok = health_check_branch(worktree, &r.expected_branch);
-            let app_cfg = r.app_config_name.as_deref()
+            let app_cfg = r.app_config_names.first().map(|n| n.as_str())
                 .and_then(|n| config.load_app_config(n).ok().flatten());
             let is_ephemeral = app_cfg.as_ref().map(|c| c.ephemeral).unwrap_or(false);
             if is_ephemeral {
@@ -99,7 +101,7 @@ pub fn feature_new(ps: &ProcessStateStore, name: &str) -> Result<()> {
     ps.save_state(state)
 }
 
-pub fn feature_add(ps: &ProcessStateStore, store: &Store, name: &str, pr: u64) -> Result<()> {
+pub fn feature_add(ps: &ProcessStateStore, store: &Store, name: &str, pr: u64, configs: &[String]) -> Result<()> {
     let s = store.load()?;
     if !s.tracked.contains(&pr) {
         store.track(pr)?;
@@ -112,9 +114,14 @@ pub fn feature_add(ps: &ProcessStateStore, store: &Store, name: &str, pr: u64) -
         pid: None,
         feature_envelope: None,
         worktree: String::new(),
-        app_config_name: None,
+        app_config_names: vec![],
     });
     rec.feature_envelope = Some(name.to_string());
+    for cfg in configs {
+        if !rec.app_config_names.contains(cfg) {
+            rec.app_config_names.push(cfg.clone());
+        }
+    }
     ps.save_state(state)
 }
 
@@ -148,22 +155,23 @@ pub fn feature_up(ps: &ProcessStateStore, config: &crate::app_config::AppConfigS
     let mut messages = Vec::new();
     // Bootstrap PR members
     for rec in &records {
-        let app_cfg = rec.app_config_name.as_deref()
-            .and_then(|n| config.load_app_config(n).ok().flatten());
-        let cfg = match app_cfg {
-            Some(c) => c,
-            None => {
-                messages.push(format!("PR #{}: no app config assigned — skipped", rec.pr));
-                continue;
-            }
-        };
+        if rec.app_config_names.is_empty() {
+            messages.push(format!("PR #{}: no app config assigned — skipped", rec.pr));
+            continue;
+        }
         let worktree = std::path::Path::new(&rec.worktree);
-        bootstrap_pr(ps, &cfg, rec.pr, worktree, "", "")?;
-        messages.push(format!("PR #{}: started ({})", rec.pr, cfg.name));
+        for cfg_name in &rec.app_config_names {
+            let cfg = match config.load_app_config(cfg_name).ok().flatten() {
+                Some(c) => c,
+                None => { messages.push(format!("PR #{}: app config '{}' not found — skipped", rec.pr, cfg_name)); continue; }
+            };
+            bootstrap_pr(ps, &cfg, rec.pr, worktree, "", "")?;
+            messages.push(format!("PR #{}: started ({})", rec.pr, cfg.name));
+        }
     }
     // Bootstrap main-worktree instances for dep slots with no live PR member
     let live_configs: std::collections::HashSet<String> = records.iter()
-        .filter_map(|r| r.app_config_name.clone())
+        .flat_map(|r| r.app_config_names.iter().cloned())
         .collect();
     for dep_cfg_name in &deps {
         if live_configs.contains(dep_cfg_name) {
@@ -190,7 +198,7 @@ pub fn feature_up(ps: &ProcessStateStore, config: &crate::app_config::AppConfigS
             pid: None,
             feature_envelope: Some(name.to_string()),
             worktree: main_wt.clone(),
-            app_config_name: Some(dep_cfg_name.clone()),
+            app_config_names: vec![dep_cfg_name.clone()],
         })?;
         bootstrap_pr(ps, &cfg, 0, worktree, "", "")?;
         messages.push(format!("dep {} (main): started", dep_cfg_name));
@@ -206,7 +214,7 @@ pub fn feature_down(ps: &ProcessStateStore, config: &crate::app_config::AppConfi
         .collect();
     let mut messages = Vec::new();
     for rec in records {
-        let app_cfg = rec.app_config_name.as_deref()
+        let app_cfg = rec.app_config_names.first().map(|n| n.as_str())
             .and_then(|n| config.load_app_config(n).ok().flatten());
         let cfg = match app_cfg {
             Some(c) => c,
@@ -231,7 +239,7 @@ pub fn feature_rebuild(ps: &ProcessStateStore, config: &crate::app_config::AppCo
         .collect();
     let mut messages = Vec::new();
     for rec in records {
-        let app_cfg = rec.app_config_name.as_deref()
+        let app_cfg = rec.app_config_names.first().map(|n| n.as_str())
             .and_then(|n| config.load_app_config(n).ok().flatten());
         let cfg = match app_cfg {
             Some(c) => c,
@@ -268,6 +276,7 @@ pub fn bootstrap_pr(ps: &ProcessStateStore, config: &AppConfig, pr: u64, worktre
         .env("FP_WORKTREE", worktree)
         .env("FP_PR", pr.to_string())
         .env("COMPOSE_PROJECT_NAME", &instance)
+        .process_group(0)
         .spawn()?;
     let pid = child.id();
     ps.activate(ProcessRecord {
@@ -276,7 +285,7 @@ pub fn bootstrap_pr(ps: &ProcessStateStore, config: &AppConfig, pr: u64, worktre
         pid: Some(pid),
         feature_envelope: None,
         worktree: worktree.to_string_lossy().to_string(),
-        app_config_name: None,
+        app_config_names: vec![],
     })
 }
 

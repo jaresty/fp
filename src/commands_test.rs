@@ -171,12 +171,12 @@ mod tests {
         let git_dir = tmp.path().join("git_dir");
         std::fs::create_dir_all(&git_dir).unwrap();
         let store = make_store_with_pr(&git_dir, 5, "feat/all-test");
-        let ps = crate::process_store::ProcessStateStore::open(tmp.path().join("ps.json"));
+        let ps = crate::process_store::ProcessStateStore::open(&git_dir);
         let live_pid = std::process::id();
         ps.activate(crate::process_store::ProcessRecord {
             pr: 5, expected_branch: "feat/all-test".into(), pid: Some(live_pid),
             feature_envelope: None, worktree: tmp.path().to_string_lossy().to_string(),
-            app_config_name: None,
+            app_config_names: vec![],
         }).unwrap();
         let fake = make_fake_with_pr(5);
         let out = crate::commands::cmd_status_all(Some(&fake), &store, Some(&ps), &git_dir, "alice", "repo", false).unwrap();
@@ -268,7 +268,7 @@ mod tests {
     #[test]
     fn commands_governs_cmd_switch_feature_summary_includes_feature_and_health() {
         let dir = tempfile::tempdir().unwrap();
-        let ps = crate::process_store::ProcessStateStore::open(dir.path().join("ps.json"));
+        let ps = crate::process_store::ProcessStateStore::open(dir.path());
         let app_store = crate::app_config::AppConfigStore::open(dir.path().join("config.toml"));
         let wt = tempfile::tempdir().unwrap();
         app_store.save_app_config(crate::app_config::AppConfig {
@@ -280,7 +280,7 @@ mod tests {
             pr: 42, expected_branch: "feat/x".into(), pid: Some(std::process::id()),
             feature_envelope: Some("my-feature".into()),
             worktree: wt.path().to_string_lossy().to_string(),
-            app_config_name: Some("svc".into()),
+            app_config_names: vec!["svc".into()],
         }).unwrap();
         let mut state = ps.load().unwrap();
         state.feature_envelopes.insert("my-feature".to_string());
@@ -296,7 +296,7 @@ mod tests {
     #[test]
     fn commands_governs_cmd_switch_feature_summary_empty_when_no_feature() {
         let dir = tempfile::tempdir().unwrap();
-        let ps = crate::process_store::ProcessStateStore::open(dir.path().join("ps.json"));
+        let ps = crate::process_store::ProcessStateStore::open(dir.path());
         let app_store = crate::app_config::AppConfigStore::open(dir.path().join("config.toml"));
         let summary = crate::commands::cmd_switch_feature_summary(&ps, &app_store, 99);
         assert!(summary.is_empty(),
@@ -308,7 +308,7 @@ mod tests {
         let git_dir = tmp.path().join("git_dir");
         std::fs::create_dir_all(&git_dir).unwrap();
         let store = crate::store::Store::open(&git_dir);
-        let ps = crate::process_store::ProcessStateStore::open(tmp.path().join("ps.json"));
+        let ps = crate::process_store::ProcessStateStore::open(&git_dir);
         let app_store = crate::app_config::AppConfigStore::open(tmp.path().join("config.toml"));
         let result = crate::commands::cmd_switch(&store, &ps, &app_store, &git_dir, 99, "session-id", false, false);
         assert!(result.is_err(), "cmd_switch must error for untracked PR");
@@ -1529,32 +1529,29 @@ mod tests {
             "cmd_app_set_config must persist repo assignment, got: {:?}", assigned);
     }
 
-    // CLI: fp pr set-config saves pr→config-name and exits ok
-    #[test]
-    fn cmd_pr_set_config_governs_saves_pr_assignment() {
-        let dir = tempfile::tempdir().unwrap();
-        let store = crate::app_config::AppConfigStore::open(dir.path().join("config.toml"));
-        let result = crate::commands::cmd_pr_set_config(&store, 123, "payments-api");
-        assert!(result.is_ok(), "cmd_pr_set_config must succeed: {:?}", result);
-        let assigned = store.get_pr_config(123).unwrap();
-        assert_eq!(assigned, Some("payments-api".to_string()),
-            "cmd_pr_set_config must persist PR assignment, got: {:?}", assigned);
-    }
 
-    // fp pr up bootstraps a single PR
+    // fp pr up bootstraps a single PR using app_config_names from ProcessRecord
     #[test]
-    fn cmd_pr_up_governs_activates_pr_record() {
+    fn cmd_pr_up_governs_reads_config_from_process_record() {
         let dir = tempfile::tempdir().unwrap();
-        let ps = crate::process_store::ProcessStateStore::open(dir.path().join("ps.json"));
+        let ps = crate::process_store::ProcessStateStore::open(dir.path());
         let app_store = crate::app_config::AppConfigStore::open(dir.path().join("config.toml"));
         let wt = tempfile::tempdir().unwrap();
         app_store.save_app_config(crate::app_config::AppConfig {
             name: "svc".into(), bootstrap: "echo up".into(), teardown: "echo down".into(),
             startup_timeout: "5s".into(), health_check: None, ephemeral: false, main_worktree: None,
         }).unwrap();
-        app_store.set_pr_config(42, "svc").unwrap();
+        // assign config via ProcessRecord (not set_pr_config)
+        let mut state = ps.load().unwrap();
+        state.records.insert(42, crate::process_store::ProcessRecord {
+            pr: 42, expected_branch: String::new(), pid: None,
+            feature_envelope: None,
+            worktree: wt.path().to_string_lossy().to_string(),
+            app_config_names: vec!["svc".into()],
+        });
+        ps.save_state(state).unwrap();
         let result = crate::commands::cmd_pr_up(&ps, &app_store, 42, wt.path().to_str().unwrap());
-        assert!(result.is_ok(), "cmd_pr_up must succeed: {:?}", result);
+        assert!(result.is_ok(), "cmd_pr_up must succeed reading config from ProcessRecord: {:?}", result);
         let state = ps.load().unwrap();
         assert!(state.records.contains_key(&42),
             "cmd_pr_up must activate PR 42 in process state");
@@ -1564,7 +1561,7 @@ mod tests {
     #[test]
     fn cmd_feature_new_governs_creates_envelope() {
         let dir = tempfile::tempdir().unwrap();
-        let ps = crate::process_store::ProcessStateStore::open(dir.path().join("process-state.json"));
+        let ps = crate::process_store::ProcessStateStore::open(dir.path());
         let result = crate::commands::cmd_feature_new(&ps, "auth-refactor");
         assert!(result.is_ok(), "cmd_feature_new must succeed: {:?}", result);
         let list = crate::feature::feature_list(&ps).unwrap();
@@ -1576,7 +1573,7 @@ mod tests {
     #[test]
     fn cmd_feature_list_governs_returns_output() {
         let dir = tempfile::tempdir().unwrap();
-        let ps = crate::process_store::ProcessStateStore::open(dir.path().join("process-state.json"));
+        let ps = crate::process_store::ProcessStateStore::open(dir.path());
         crate::feature::feature_new(&ps, "my-feature").unwrap();
         let result = crate::commands::cmd_feature_list(&ps);
         assert!(result.is_ok(), "cmd_feature_list must succeed: {:?}", result);
@@ -1634,7 +1631,7 @@ mod tests {
     #[test]
     fn cmd_feature_list_running_governs_returns_only_live_envelopes() {
         let dir = tempfile::tempdir().unwrap();
-        let ps = crate::process_store::ProcessStateStore::open(dir.path().join("ps.json"));
+        let ps = crate::process_store::ProcessStateStore::open(dir.path());
         crate::feature::feature_new(&ps, "dead-feature").unwrap();
         let result = crate::commands::cmd_feature_list_running(&ps);
         assert!(result.is_ok(), "cmd_feature_list_running must succeed: {:?}", result);
@@ -1647,7 +1644,7 @@ mod tests {
     #[test]
     fn cmd_feature_status_governs_returns_health_per_pr() {
         let dir = tempfile::tempdir().unwrap();
-        let ps = crate::process_store::ProcessStateStore::open(dir.path().join("ps.json"));
+        let ps = crate::process_store::ProcessStateStore::open(dir.path());
         let app_store = crate::app_config::AppConfigStore::open(dir.path().join("config.toml"));
         let live_pid = std::process::id();
         let rec = crate::process_store::ProcessRecord {
@@ -1656,7 +1653,7 @@ mod tests {
             pid: Some(live_pid),
             feature_envelope: Some("auth-refactor".into()),
             worktree: dir.path().to_string_lossy().to_string(),
-            app_config_name: None,
+            app_config_names: vec![],
         };
         ps.activate(rec).unwrap();
         let mut state = ps.load().unwrap();
@@ -1690,7 +1687,7 @@ mod tests {
     #[test]
     fn cmd_feature_up_governs_activates_all_members() {
         let dir = tempfile::tempdir().unwrap();
-        let ps = crate::process_store::ProcessStateStore::open(dir.path().join("ps.json"));
+        let ps = crate::process_store::ProcessStateStore::open(dir.path());
         let app_store = crate::app_config::AppConfigStore::open(dir.path().join("config.toml"));
         let wt1 = tempfile::tempdir().unwrap();
         let wt2 = tempfile::tempdir().unwrap();
@@ -1704,13 +1701,13 @@ mod tests {
             pr: 10, expected_branch: "feat/a".into(), pid: None,
             feature_envelope: Some("my-feature".into()),
             worktree: wt1.path().to_string_lossy().to_string(),
-            app_config_name: Some("svc".into()),
+            app_config_names: vec!["svc".into()],
         };
         let mut rec2 = crate::process_store::ProcessRecord {
             pr: 20, expected_branch: "feat/b".into(), pid: None,
             feature_envelope: Some("my-feature".into()),
             worktree: wt2.path().to_string_lossy().to_string(),
-            app_config_name: Some("svc".into()),
+            app_config_names: vec!["svc".into()],
         };
         ps.activate(rec1).unwrap();
         ps.activate(rec2).unwrap();
@@ -1728,7 +1725,7 @@ mod tests {
     #[test]
     fn cmd_feature_down_governs_deactivates_all_members() {
         let dir = tempfile::tempdir().unwrap();
-        let ps = crate::process_store::ProcessStateStore::open(dir.path().join("ps.json"));
+        let ps = crate::process_store::ProcessStateStore::open(dir.path());
         let app_store = crate::app_config::AppConfigStore::open(dir.path().join("config.toml"));
         let wt = tempfile::tempdir().unwrap();
         app_store.save_app_config(crate::app_config::AppConfig {
@@ -1740,7 +1737,7 @@ mod tests {
             pr: 10, expected_branch: "feat/a".into(), pid: Some(std::process::id()),
             feature_envelope: Some("my-feature".into()),
             worktree: wt.path().to_string_lossy().to_string(),
-            app_config_name: Some("svc".into()),
+            app_config_names: vec!["svc".into()],
         }).unwrap();
         let mut state = ps.load().unwrap();
         state.feature_envelopes.insert("my-feature".to_string());
@@ -1756,7 +1753,7 @@ mod tests {
     #[test]
     fn cmd_feature_rebuild_governs_reruns_bootstrap_for_ephemeral() {
         let dir = tempfile::tempdir().unwrap();
-        let ps = crate::process_store::ProcessStateStore::open(dir.path().join("ps.json"));
+        let ps = crate::process_store::ProcessStateStore::open(dir.path());
         let app_store = crate::app_config::AppConfigStore::open(dir.path().join("config.toml"));
         let wt = tempfile::tempdir().unwrap();
         app_store.save_app_config(crate::app_config::AppConfig {
@@ -1768,7 +1765,7 @@ mod tests {
             pr: 77, expected_branch: "feat/ext".into(), pid: None,
             feature_envelope: Some("ext-feature".into()),
             worktree: wt.path().to_string_lossy().to_string(),
-            app_config_name: Some("ext".into()),
+            app_config_names: vec!["ext".into()],
         }).unwrap();
         let mut state = ps.load().unwrap();
         state.feature_envelopes.insert("ext-feature".to_string());
@@ -1784,7 +1781,7 @@ mod tests {
     #[test]
     fn cmd_feature_rebuild_governs_rejects_persistent_members() {
         let dir = tempfile::tempdir().unwrap();
-        let ps = crate::process_store::ProcessStateStore::open(dir.path().join("ps.json"));
+        let ps = crate::process_store::ProcessStateStore::open(dir.path());
         let app_store = crate::app_config::AppConfigStore::open(dir.path().join("config.toml"));
         let wt = tempfile::tempdir().unwrap();
         app_store.save_app_config(crate::app_config::AppConfig {
@@ -1796,7 +1793,7 @@ mod tests {
             pr: 10, expected_branch: "feat/a".into(), pid: None,
             feature_envelope: Some("my-feature".into()),
             worktree: wt.path().to_string_lossy().to_string(),
-            app_config_name: Some("svc".into()),
+            app_config_names: vec!["svc".into()],
         }).unwrap();
         let mut state = ps.load().unwrap();
         state.feature_envelopes.insert("my-feature".to_string());
@@ -1810,7 +1807,7 @@ mod tests {
     #[test]
     fn cmd_feature_add_dep_governs_stores_dep_in_envelope_deps() {
         let dir = tempfile::tempdir().unwrap();
-        let ps = crate::process_store::ProcessStateStore::open(dir.path().join("ps.json"));
+        let ps = crate::process_store::ProcessStateStore::open(dir.path());
         let result = crate::commands::cmd_feature_add_dep(&ps, "my-feature", "notifications-svc");
         assert!(result.is_ok(), "cmd_feature_add_dep must succeed: {:?}", result);
         let msg = result.unwrap();

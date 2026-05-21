@@ -761,6 +761,12 @@ The design is compatible with future migration.
   explicitly using `$FP_INSTANCE`.
 - Bootstrap commands using launcher scripts (spawn-and-exit) must provide an explicit
   `health_check` command.
+- Bootstrap processes are spawned with `.process_group(0)` (Unix `setpgrp`), placing the
+  child in its own process group. This insulates it from SIGHUP when the terminal session
+  that launched `fp feature up` closes — the child is already an orphan reparented to init
+  after fp exits, but without its own process group it would still receive the terminal's
+  SIGHUP on session close. Persistent foreground bootstrap scripts (e.g. `npm start`) rely
+  on this to survive terminal disconnects.
 - All interactive prompts are suppressed when stdout is not a TTY; safe defaults apply.
   All decisions and warnings are included in `--json` output for LLM agent consumption.
 - `fp feature add` auto-tracks untracked PRs; `fp track` is no longer a prerequisite

@@ -23,8 +23,6 @@ struct AppConfigState {
     configs: HashMap<String, AppConfig>,
     #[serde(default)]
     repo_assignments: HashMap<String, String>,
-    #[serde(default)]
-    pr_assignments: HashMap<String, String>,
 }
 
 pub struct AppConfigStore {
@@ -81,14 +79,4 @@ impl AppConfigStore {
         Ok(state.repo_assignments.get(repo).cloned())
     }
 
-    pub fn set_pr_config(&self, pr: u64, config_name: &str) -> Result<()> {
-        let mut state = self.load_state()?;
-        state.pr_assignments.insert(pr.to_string(), config_name.to_string());
-        self.save_state(&state)
-    }
-
-    pub fn get_pr_config(&self, pr: u64) -> Result<Option<String>> {
-        let state = self.load_state()?;
-        Ok(state.pr_assignments.get(&pr.to_string()).cloned())
-    }
 }

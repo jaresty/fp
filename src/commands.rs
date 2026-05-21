@@ -96,9 +96,7 @@ pub fn cmd_status_all(
     let ps_ref: Option<&crate::process_store::ProcessStateStore> = if ps.is_some() {
         ps
     } else {
-        _default_ps = crate::process_store::ProcessStateStore::default_path()
-            .ok()
-            .map(crate::process_store::ProcessStateStore::open);
+        _default_ps = Some(crate::process_store::ProcessStateStore::open(git_dir));
         _default_ps.as_ref()
     };
     let health_map: std::collections::HashMap<u64, String> = ps_ref
@@ -772,10 +770,6 @@ pub fn cmd_app_set_config(store: &crate::app_config::AppConfigStore, repo: &str,
     Ok(format!("Assigned config '{}' to repo '{}'", config_name, repo))
 }
 
-pub fn cmd_pr_set_config(store: &crate::app_config::AppConfigStore, pr: u64, config_name: &str) -> anyhow::Result<String> {
-    store.set_pr_config(pr, config_name)?;
-    Ok(format!("Assigned config '{}' to PR #{}", config_name, pr))
-}
 
 pub fn cmd_feature_new(ps: &crate::process_store::ProcessStateStore, name: &str) -> anyhow::Result<String> {
     crate::feature::feature_new(ps, name)?;
@@ -881,13 +875,21 @@ pub fn cmd_switch_feature_summary(ps: &crate::process_store::ProcessStateStore, 
 }
 
 pub fn cmd_pr_up(ps: &crate::process_store::ProcessStateStore, config: &crate::app_config::AppConfigStore, pr: u64, worktree: &str) -> anyhow::Result<String> {
-    let app_cfg_name = config.get_pr_config(pr)?;
-    let cfg = app_cfg_name.as_deref()
-        .and_then(|n| config.load_app_config(n).ok().flatten())
-        .ok_or_else(|| anyhow::anyhow!("no app config assigned to PR #{}", pr))?;
+    let state = ps.load()?;
+    let rec = state.records.get(&pr)
+        .ok_or_else(|| anyhow::anyhow!("PR #{} not found in process state — run `fp feature add` first", pr))?;
+    let cfg_names = rec.app_config_names.clone();
+    if cfg_names.is_empty() {
+        return Err(anyhow::anyhow!("no app config assigned to PR #{} — use `fp feature add --config`", pr));
+    }
     let wt = std::path::Path::new(worktree);
-    crate::feature::bootstrap_pr(ps, &cfg, pr, wt, "", "")?;
-    Ok(format!("PR #{}: started ({})", pr, cfg.name))
+    let mut messages = Vec::new();
+    for cfg_name in &cfg_names {
+        let cfg = config.load_app_config(cfg_name)?.ok_or_else(|| anyhow::anyhow!("app config '{}' not found", cfg_name))?;
+        crate::feature::bootstrap_pr(ps, &cfg, pr, wt, "", "")?;
+        messages.push(format!("PR #{}: started ({})", pr, cfg.name));
+    }
+    Ok(messages.join("\n"))
 }
 
 pub fn cmd_feature_add_dep(ps: &crate::process_store::ProcessStateStore, name: &str, app_config: &str) -> anyhow::Result<String> {
@@ -895,8 +897,8 @@ pub fn cmd_feature_add_dep(ps: &crate::process_store::ProcessStateStore, name: &
     Ok(format!("Added dep '{}' to feature '{}'", app_config, name))
 }
 
-pub fn cmd_feature_add(ps: &crate::process_store::ProcessStateStore, store: &crate::store::Store, name: &str, pr: u64) -> anyhow::Result<String> {
-    crate::feature::feature_add(ps, store, name, pr)?;
+pub fn cmd_feature_add(ps: &crate::process_store::ProcessStateStore, store: &crate::store::Store, name: &str, pr: u64, configs: Vec<String>) -> anyhow::Result<String> {
+    crate::feature::feature_add(ps, store, name, pr, &configs)?;
     Ok(format!("Added PR #{} to feature '{}'", pr, name))
 }
 

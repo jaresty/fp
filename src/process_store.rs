@@ -12,7 +12,7 @@ pub struct ProcessRecord {
     pub feature_envelope: Option<String>,
     pub worktree: String,
     #[serde(default)]
-    pub app_config_name: Option<String>,
+    pub app_config_names: Vec<String>,
 }
 
 #[derive(Debug, Default, Serialize, Deserialize)]
@@ -25,17 +25,12 @@ pub struct ProcessState {
 }
 
 pub struct ProcessStateStore {
-    path: PathBuf,
+    pub(crate) path: PathBuf,
 }
 
 impl ProcessStateStore {
-    pub fn open(path: PathBuf) -> Self {
-        ProcessStateStore { path }
-    }
-
-    pub fn default_path() -> Result<PathBuf> {
-        let home = dirs::home_dir().ok_or_else(|| anyhow::anyhow!("could not determine home directory"))?;
-        Ok(home.join(".fp").join("process-state.json"))
+    pub fn open(git_dir: &std::path::Path) -> Self {
+        ProcessStateStore { path: git_dir.join("fp").join("process-state.json") }
     }
 
     pub fn load(&self) -> Result<ProcessState> {

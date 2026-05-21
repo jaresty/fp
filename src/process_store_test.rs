@@ -5,7 +5,7 @@ mod tests {
 
     fn make_store() -> (ProcessStateStore, tempfile::TempDir) {
         let dir = tempdir().unwrap();
-        let store = ProcessStateStore::open(dir.path().join("process-state.json"));
+        let store = ProcessStateStore::open(dir.path());
         (store, dir)
     }
 
@@ -16,7 +16,7 @@ mod tests {
             pid: Some(12345),
             feature_envelope: None,
             worktree: "/tmp/worktree".into(),
-            app_config_name: None,
+            app_config_names: vec![],
         }
     }
 
@@ -82,13 +82,14 @@ mod tests {
             "process_store::deactivate must remove PR 42, got keys: {:?}", state.records.keys().collect::<Vec<_>>());
     }
 
-    // D8: default_path returns path ending in .fp/process-state.json
+    // D8: open derives path as <git_dir>/fp/process-state.json
     #[test]
-    fn process_store_governs_default_path_ends_with_fp_process_state_json() {
-        let path = ProcessStateStore::default_path().unwrap();
-        let path_str = path.to_string_lossy();
-        assert!(path_str.ends_with(".fp/process-state.json"),
-            "ProcessStateStore::default_path must end with .fp/process-state.json, got: {}", path_str);
+    fn process_store_governs_open_path_is_under_git_dir() {
+        let dir = tempdir().unwrap();
+        let store = ProcessStateStore::open(dir.path());
+        let expected = dir.path().join("fp").join("process-state.json");
+        assert_eq!(store.path, expected,
+            "ProcessStateStore::open must place state at <git_dir>/fp/process-state.json");
     }
 
     // multiple activations — second overwrites first for same PR
