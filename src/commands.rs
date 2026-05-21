@@ -624,13 +624,13 @@ pub fn cmd_rebase_stack(
     );
     let parent_of = crate::stack::detect_parent_of(&all_branches, dir, &cached_base_of, debug_fn.as_ref())?;
 
-    let branches: Vec<String> = if let Some(fp) = from_pr {
+    let scoped_branches: Vec<String> = if let Some(fp) = from_pr {
         let start_branch = state.cache.get(&fp)
             .with_context(|| format!("PR #{} is not tracked", fp))?.branch.clone();
         crate::worktree::subtree_branches(&start_branch, &parent_of, &all_branches)
     } else { all_branches };
 
-    let directly_locked: std::collections::HashSet<String> = branches.iter()
+    let directly_locked: std::collections::HashSet<String> = scoped_branches.iter()
         .filter_map(|b| {
             crate::worktree::branch_in_main_worktree_warning(b, dir)
                 .or_else(|| crate::worktree::check_branch_lock(git_dir, b))
@@ -638,8 +638,9 @@ pub fn cmd_rebase_stack(
         }).collect();
     let also_blocked = crate::worktree::locked_subtree(&directly_locked, &parent_of);
     for b in &also_blocked { out.push_str(&format!("⚠ skipping {} — parent branch is locked\n", b)); }
-    let branches: Vec<String> = branches.into_iter()
-        .filter(|b| !directly_locked.contains(b) && !also_blocked.contains(b)).collect();
+    let branches: Vec<String> = scoped_branches.iter()
+        .filter(|b| !directly_locked.contains(*b) && !also_blocked.contains(*b))
+        .cloned().collect();
 
     let base_of: std::collections::HashMap<String, String> = if let Some(c) = client {
         normalize_base_of(

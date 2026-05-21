@@ -701,10 +701,10 @@ Add lifecycle prompts and feature-membership surfacing to `fp switch`. Non-block
 design — the switch always completes regardless of lifecycle choice. Ship after Stage 4
 so the health check is known-good before `fp switch` depends on it.
 
-**Stage 6 — `fp rebase-stack` warning** *(existing command modification with fail-open)*
-Add a stack-level health-check pass before rebasing, with a stack-level total timeout and
-fail-open behavior: on timeout, emit a structured warning and proceed with the rebase.
-The rebase logic is unchanged.
+**Stage 6 — removed.** A sibling-envelope warning on `fp rebase-stack` was implemented and
+then reverted. The warning was vacuous: `fp rebase-stack` always rebases the full stack, so
+envelope siblings are already included in the run; and envelope siblings are independent
+trees that share no ancestry, so rebasing one has no bearing on the others.
 
 **Stage 7 — `fp merge` envelope cleanup** *(existing command modification with failure isolation)*
 Add post-merge envelope cleanup with hard failure isolation: merge exit code is never

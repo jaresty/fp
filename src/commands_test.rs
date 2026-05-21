@@ -1817,4 +1817,5 @@ mod tests {
         assert!(state.envelope_deps.get("my-feature").map(|v| v.contains(&"notifications-svc".to_string())).unwrap_or(false),
             "cmd_feature_add_dep must store dep in envelope_deps");
     }
+
 }
