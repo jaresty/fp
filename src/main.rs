@@ -333,6 +333,9 @@ enum AppCommands {
         /// Optional health-check command (exit 0 = healthy)
         #[arg(long)]
         health_check: Option<String>,
+        /// App exits immediately after install (e.g. Chrome extension); health-check required
+        #[arg(long, default_value_t = false)]
+        ephemeral: bool,
     },
     /// Assign a named app config to all PRs on a repo
     SetConfig {
@@ -563,8 +566,8 @@ fn main() -> Result<()> {
         Commands::App { subcommand } => {
             let store = app_config::AppConfigStore::open(app_config::AppConfigStore::default_path()?);
             match subcommand {
-                AppCommands::DefineConfig { name, bootstrap, teardown, startup_timeout, health_check } => {
-                    let out = commands::cmd_app_define_config(&store, &name, &bootstrap, &teardown, &startup_timeout, health_check.as_deref())?;
+                AppCommands::DefineConfig { name, bootstrap, teardown, startup_timeout, health_check, ephemeral } => {
+                    let out = commands::cmd_app_define_config(&store, &name, &bootstrap, &teardown, &startup_timeout, health_check.as_deref(), ephemeral)?;
                     println!("{}", out);
                 }
                 AppCommands::SetConfig { repo, config_name } => {

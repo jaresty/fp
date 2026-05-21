@@ -1,8 +1,8 @@
 #[cfg(test)]
 mod tests {
     use crate::feature::{
-        feature_new, feature_add, feature_list, feature_list_running, feature_status,
-        bootstrap_pr, teardown_pr,
+        feature_new, feature_add, feature_list, feature_list_running, feature_list_running_with_config,
+        feature_status, bootstrap_pr, teardown_pr,
         health_check_branch, health_check_pid, health_check_service,
         check_conflicts, ConflictResult, PrHealthStatus,
     };
@@ -34,6 +34,7 @@ mod tests {
             teardown: "echo teardown-ok".into(),
             startup_timeout: "5s".into(),
             health_check: None,
+            ephemeral: false,
         }
     }
 
@@ -44,6 +45,18 @@ mod tests {
             pid: None,
             feature_envelope: None,
             worktree: worktree.into(),
+            app_config_name: None,
+        }
+    }
+
+    fn ephemeral_config(name: &str) -> crate::app_config::AppConfig {
+        crate::app_config::AppConfig {
+            name: name.into(),
+            bootstrap: "echo install".into(),
+            teardown: "echo uninstall".into(),
+            startup_timeout: "5s".into(),
+            health_check: Some("true".into()),
+            ephemeral: true,
         }
     }
 
@@ -313,5 +326,47 @@ mod tests {
         let result = check_conflicts(&ps, "my-feature").unwrap();
         assert!(matches!(result, ConflictResult::Conflict { .. }),
             "check_conflicts must return Conflict when other-feature has live PR, got: {:?}", result);
+    }
+
+    // Ephemeral: feature_status reports pid_alive=false and installed=true for passing health_check
+    #[test]
+    fn feature_governs_status_ephemeral_installed_when_health_check_passes() {
+        let (ps, _dir) = ps_store();
+        let (app_store, _app_dir) = app_store();
+        let wt = tempdir().unwrap();
+        app_store.save_app_config(ephemeral_config("my-ext")).unwrap();
+        let mut rec = record(789, "feat/ext", &wt.path().to_string_lossy());
+        rec.feature_envelope = Some("ext-feature".into());
+        rec.app_config_name = Some("my-ext".into());
+        // no pid — ephemeral
+        ps.activate(rec).unwrap();
+        let mut state = ps.load().unwrap();
+        state.feature_envelopes.insert("ext-feature".to_string());
+        ps.save_state(state).unwrap();
+        let statuses = feature_status(&ps, &app_store, "ext-feature").unwrap();
+        assert_eq!(statuses.len(), 1);
+        assert!(!statuses[0].pid_alive, "ephemeral app must have pid_alive=false");
+        assert_eq!(statuses[0].service_healthy, Some(true),
+            "ephemeral app with passing health_check must report service_healthy=true");
+    }
+
+    // Ephemeral: feature_list_running includes envelope when ephemeral health_check passes
+    #[test]
+    fn feature_governs_list_running_includes_ephemeral_when_health_check_passes() {
+        let (ps, _dir) = ps_store();
+        let (app_store, _app_dir) = app_store();
+        let wt = tempdir().unwrap();
+        app_store.save_app_config(ephemeral_config("my-ext")).unwrap();
+        let mut rec = record(789, "feat/ext", &wt.path().to_string_lossy());
+        rec.feature_envelope = Some("ext-feature".into());
+        rec.app_config_name = Some("my-ext".into());
+        ps.activate(rec).unwrap();
+        let mut state = ps.load().unwrap();
+        state.feature_envelopes.insert("ext-feature".to_string());
+        ps.save_state(state).unwrap();
+        let running = feature_list_running_with_config(&ps, &app_store).unwrap();
+        assert!(running.iter().any(|f| f.name == "ext-feature"),
+            "feature_list_running must include ephemeral envelope with passing health_check, got: {:?}",
+            running.iter().map(|f| &f.name).collect::<Vec<_>>());
     }
 }

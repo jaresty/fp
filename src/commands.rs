@@ -815,6 +815,7 @@ pub fn cmd_app_define_config(
     teardown: &str,
     startup_timeout: &str,
     health_check: Option<&str>,
+    ephemeral: bool,
 ) -> anyhow::Result<String> {
     store.save_app_config(crate::app_config::AppConfig {
         name: name.to_string(),
@@ -822,6 +823,7 @@ pub fn cmd_app_define_config(
         teardown: teardown.to_string(),
         startup_timeout: startup_timeout.to_string(),
         health_check: health_check.map(str::to_string),
+        ephemeral,
     })?;
     Ok(format!("Defined app config '{}'", name))
 }

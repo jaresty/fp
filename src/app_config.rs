@@ -11,6 +11,8 @@ pub struct AppConfig {
     pub teardown: String,
     pub startup_timeout: String,
     pub health_check: Option<String>,
+    #[serde(default)]
+    pub ephemeral: bool,
 }
 
 #[derive(Debug, Default, Serialize, Deserialize)]

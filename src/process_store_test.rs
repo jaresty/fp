@@ -16,6 +16,7 @@ mod tests {
             pid: Some(12345),
             feature_envelope: None,
             worktree: "/tmp/worktree".into(),
+            app_config_name: None,
         }
     }
 

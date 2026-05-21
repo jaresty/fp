@@ -1502,6 +1502,7 @@ mod tests {
             "docker-compose down",
             "60s",
             None,
+            false,
         );
         assert!(result.is_ok(), "cmd_app_define_config must succeed: {:?}", result);
         let cfg = store.load_app_config("payments-api").unwrap().unwrap();
@@ -1541,6 +1542,7 @@ mod tests {
             pid: Some(live_pid),
             feature_envelope: Some("auth-refactor".into()),
             worktree: dir.path().to_string_lossy().to_string(),
+            app_config_name: None,
         };
         ps.activate(rec).unwrap();
         let mut state = ps.load().unwrap();
@@ -1562,6 +1564,7 @@ mod tests {
             &store, "svc",
             "npm start", "pkill node", "30s",
             Some("curl -f http://localhost:3000/health"),
+            false,
         ).unwrap();
         let cfg = store.load_app_config("svc").unwrap().unwrap();
         assert_eq!(cfg.health_check, Some("curl -f http://localhost:3000/health".into()),

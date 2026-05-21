@@ -16,7 +16,31 @@ mod tests {
             teardown: "docker-compose down".into(),
             startup_timeout: "60s".into(),
             health_check: None,
+            ephemeral: false,
         }
+    }
+
+    // ephemeral: false is the default when loading a config that omits the field
+    #[test]
+    fn app_config_store_governs_ephemeral_defaults_false() {
+        let (store, _dir) = make_store();
+        store.save_app_config(sample_config("svc")).unwrap();
+        let cfg = store.load_app_config("svc").unwrap().unwrap();
+        assert!(!cfg.ephemeral,
+            "ephemeral must default to false, got: {}", cfg.ephemeral);
+    }
+
+    // ephemeral: true round-trips through TOML
+    #[test]
+    fn app_config_store_governs_ephemeral_true_persists() {
+        let (store, _dir) = make_store();
+        let mut cfg = sample_config("ext");
+        cfg.ephemeral = true;
+        cfg.health_check = Some("test -f /tmp/ext".into());
+        store.save_app_config(cfg).unwrap();
+        let loaded = store.load_app_config("ext").unwrap().unwrap();
+        assert!(loaded.ephemeral,
+            "ephemeral must persist as true, got: {}", loaded.ephemeral);
     }
 
     // D1: save and load an app config by name

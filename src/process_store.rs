@@ -11,6 +11,8 @@ pub struct ProcessRecord {
     pub pid: Option<u32>,
     pub feature_envelope: Option<String>,
     pub worktree: String,
+    #[serde(default)]
+    pub app_config_name: Option<String>,
 }
 
 #[derive(Debug, Default, Serialize, Deserialize)]

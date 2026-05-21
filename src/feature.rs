@@ -41,19 +41,52 @@ pub fn feature_list_running(ps: &ProcessStateStore) -> Result<Vec<FeatureInfo>> 
     Ok(running)
 }
 
+pub fn feature_list_running_with_config(ps: &ProcessStateStore, config: &crate::app_config::AppConfigStore) -> Result<Vec<FeatureInfo>> {
+    let state = ps.load()?;
+    let running: Vec<FeatureInfo> = state.feature_envelopes.iter().filter(|name| {
+        state.records.values().any(|r| {
+            if r.feature_envelope.as_deref() != Some(name) { return false; }
+            let app_cfg = r.app_config_name.as_deref()
+                .and_then(|n| config.load_app_config(n).ok().flatten());
+            let is_ephemeral = app_cfg.as_ref().map(|c| c.ephemeral).unwrap_or(false);
+            if is_ephemeral {
+                app_cfg.and_then(|c| c.health_check)
+                    .map(|cmd| health_check_service(&cmd, std::path::Path::new(&r.worktree), r.pr, std::path::Path::new(&r.worktree)))
+                    .unwrap_or(false)
+            } else {
+                r.pid.map(health_check_pid).unwrap_or(false)
+            }
+        })
+    }).map(|name| {
+        let prs = state.records.values()
+            .filter(|r| r.feature_envelope.as_deref() == Some(name))
+            .map(|r| r.pr)
+            .collect();
+        FeatureInfo { name: name.clone(), prs }
+    }).collect();
+    Ok(running)
+}
+
 pub fn feature_status(ps: &ProcessStateStore, config: &crate::app_config::AppConfigStore, name: &str) -> Result<Vec<PrHealthStatus>> {
     let state = ps.load()?;
     let mut statuses: Vec<PrHealthStatus> = state.records.values()
         .filter(|r| r.feature_envelope.as_deref() == Some(name))
         .map(|r| {
-            let pid_alive = r.pid.map(health_check_pid).unwrap_or(false);
             let worktree = std::path::Path::new(&r.worktree);
             let branch_ok = health_check_branch(worktree, &r.expected_branch);
-            let service_healthy = config.get_repo_config("").ok().flatten()
-                .and_then(|cfg_name| config.load_app_config(&cfg_name).ok().flatten())
-                .and_then(|cfg| cfg.health_check)
-                .map(|cmd| health_check_service(&cmd, worktree, r.pr, worktree));
-            PrHealthStatus { pr: r.pr, pid_alive, service_healthy, branch_ok }
+            let app_cfg = r.app_config_name.as_deref()
+                .and_then(|n| config.load_app_config(n).ok().flatten());
+            let is_ephemeral = app_cfg.as_ref().map(|c| c.ephemeral).unwrap_or(false);
+            if is_ephemeral {
+                let service_healthy = app_cfg.and_then(|c| c.health_check)
+                    .map(|cmd| health_check_service(&cmd, worktree, r.pr, worktree));
+                PrHealthStatus { pr: r.pr, pid_alive: false, service_healthy, branch_ok }
+            } else {
+                let pid_alive = r.pid.map(health_check_pid).unwrap_or(false);
+                let service_healthy = app_cfg.and_then(|c| c.health_check)
+                    .map(|cmd| health_check_service(&cmd, worktree, r.pr, worktree));
+                PrHealthStatus { pr: r.pr, pid_alive, service_healthy, branch_ok }
+            }
         })
         .collect();
     statuses.sort_by_key(|s| s.pr);
@@ -79,6 +112,7 @@ pub fn feature_add(ps: &ProcessStateStore, store: &Store, name: &str, pr: u64) -
         pid: None,
         feature_envelope: None,
         worktree: String::new(),
+        app_config_name: None,
     });
     rec.feature_envelope = Some(name.to_string());
     ps.save_state(state)
@@ -114,6 +148,7 @@ pub fn bootstrap_pr(ps: &ProcessStateStore, config: &AppConfig, pr: u64, worktre
         pid: Some(pid),
         feature_envelope: None,
         worktree: worktree.to_string_lossy().to_string(),
+        app_config_name: None,
     })
 }
 
