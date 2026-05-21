@@ -159,7 +159,7 @@ mod tests {
         for (k,v) in &env { cmd.env(k,v); }
         cmd.output().unwrap();
         let result = health_check_branch(tmp.path(), "feat/test");
-        assert!(result, "health_check_branch must return true when HEAD is feat/test");
+        assert_eq!(result, Some(true), "health_check_branch must return Some(true) when HEAD is feat/test");
     }
 
     // D7b: health_check_branch returns false when worktree HEAD differs
@@ -173,7 +173,7 @@ mod tests {
         for (k,v) in &env { cmd.env(k,v); }
         cmd.output().unwrap();
         let result = health_check_branch(tmp.path(), "feat/other");
-        assert!(!result, "health_check_branch must return false when HEAD is main, expected feat/other");
+        assert_eq!(result, Some(false), "health_check_branch must return Some(false) when HEAD is main, expected feat/other");
     }
 
     // D6: health_check_pid returns false for a dead PID
@@ -310,8 +310,8 @@ mod tests {
         state.feature_envelopes.insert("auth-refactor".to_string());
         ps.save_state(state).unwrap();
         let statuses = feature_status(&ps, &app_store, "auth-refactor").unwrap();
-        assert!(statuses[0].branch_ok,
-            "feature_status must report branch_ok=true when HEAD is feat/pay");
+        assert_eq!(statuses[0].branch_ok, Some(true),
+            "feature_status must report branch_ok=Some(true) when HEAD is feat/pay");
     }
 
     // D10b: check_conflicts returns Conflict when another envelope has a live record

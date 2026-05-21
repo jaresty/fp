@@ -1724,7 +1724,7 @@ mod tests {
         let mut state = ps.load().unwrap();
         state.feature_envelopes.insert("auth-refactor".to_string());
         ps.save_state(state).unwrap();
-        let result = crate::commands::cmd_feature_status(&ps, &app_store, "auth-refactor");
+        let result = crate::commands::cmd_feature_status(&ps, &app_store, "auth-refactor", false);
         assert!(result.is_ok(), "cmd_feature_status must succeed: {:?}", result);
         let output = result.unwrap();
         assert!(output.contains("123"),
@@ -2072,6 +2072,74 @@ mod tests {
                 "non_interactive must skip dirty-check, got: {}", e);
         }
         // (ok or another error is acceptable — we only govern that dirty-check is skipped)
+    }
+
+    // fp feature status --json: output is valid JSON
+    #[test]
+    fn cmd_feature_status_governs_json_output() {
+        let tmp = tempfile::tempdir().unwrap();
+        let git_dir = tmp.path().join(".git");
+        std::fs::create_dir_all(&git_dir).unwrap();
+        let ps = crate::process_store::ProcessStateStore::open(&git_dir);
+        let app_store = crate::app_config::AppConfigStore::open(tmp.path().join("config.toml"));
+        crate::feature::feature_new(&ps, "my-feat").unwrap();
+        let mut state = ps.load().unwrap();
+        state.records.insert(10, crate::process_store::ProcessRecord {
+            pr: 10, expected_branch: "feat/x".into(), pid: None,
+            feature_envelope: Some("my-feat".into()),
+            worktree: tmp.path().to_string_lossy().to_string(),
+            app_config_names: vec![],
+        });
+        ps.save_state(state).unwrap();
+        let result = crate::commands::cmd_feature_status(&ps, &app_store, "my-feat", true);
+        assert!(result.is_ok(), "cmd_feature_status with json=true must succeed: {:?}", result);
+        let out = result.unwrap();
+        assert!(serde_json::from_str::<serde_json::Value>(&out).is_ok(),
+            "output must be valid JSON: {}", out);
+    }
+
+    // fp feature status: branch_ok must not show 'wrong branch' when worktree doesn't exist
+    #[test]
+    fn cmd_feature_status_governs_no_false_positive_branch_check_nonexistent_worktree() {
+        let tmp = tempfile::tempdir().unwrap();
+        let git_dir = tmp.path().join(".git");
+        std::fs::create_dir_all(&git_dir).unwrap();
+        let ps = crate::process_store::ProcessStateStore::open(&git_dir);
+        let app_store = crate::app_config::AppConfigStore::open(tmp.path().join("config.toml"));
+        crate::feature::feature_new(&ps, "my-feat").unwrap();
+        let mut state = ps.load().unwrap();
+        state.records.insert(10, crate::process_store::ProcessRecord {
+            pr: 10, expected_branch: "feat/x".into(), pid: None,
+            feature_envelope: Some("my-feat".into()),
+            worktree: tmp.path().join("no-such-worktree").to_string_lossy().to_string(),
+            app_config_names: vec![],
+        });
+        ps.save_state(state).unwrap();
+        let result = crate::commands::cmd_feature_status(&ps, &app_store, "my-feat", false);
+        assert!(result.is_ok(), "cmd_feature_status must succeed: {:?}", result);
+        let out = result.unwrap();
+        assert!(!out.contains("wrong branch"),
+            "must not show 'wrong branch' when worktree does not exist: {}", out);
+    }
+
+    // fp feature add: expected_branch must be populated from store cache (not left empty)
+    #[test]
+    fn feature_add_governs_populates_expected_branch_from_store() {
+        let tmp = tempfile::tempdir().unwrap();
+        let git_dir = tmp.path().join(".git");
+        std::fs::create_dir_all(&git_dir).unwrap();
+        let store = crate::store::Store::open(&git_dir);
+        let ps = crate::process_store::ProcessStateStore::open(&git_dir);
+        store.track(10).unwrap();
+        store.update_cache(crate::store::PrCache {
+            number: 10, title: "X".into(), branch: "feat/x".into(), base: "main".into(),
+        }).unwrap();
+        crate::feature::feature_new(&ps, "my-feat").unwrap();
+        crate::feature::feature_add(&ps, &store, "my-feat", 10, &[]).unwrap();
+        let state = ps.load().unwrap();
+        let rec = state.records.get(&10).unwrap();
+        assert_eq!(rec.expected_branch, "feat/x",
+            "expected_branch must be populated from store cache, got: {:?}", rec.expected_branch);
     }
 
 }

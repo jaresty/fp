@@ -318,6 +318,9 @@ enum FeatureCommands {
     Status {
         /// Feature envelope name
         name: String,
+        /// Output as JSON
+        #[arg(long)]
+        json: bool,
     },
     /// Bootstrap all PRs in a feature envelope
     Up {
@@ -599,8 +602,13 @@ fn main() -> Result<()> {
                     };
                     println!("{}", out);
                 }
-                FeatureCommands::Status { name } => {
+                FeatureCommands::Status { name, json } => {
                     let app_store = app_config::AppConfigStore::open(app_config::AppConfigStore::default_path()?);
+                    if json {
+                        let out = commands::cmd_feature_status(&ps, &app_store, &name, true)?;
+                        println!("{}", out);
+                        return Ok(());
+                    }
                     let (client, owner, repo_name) = if let (Ok(tok), Some((o, r))) = (resolve_github_token(), detect_repo()) {
                         let c: Box<dyn github::GithubClientTrait> = Box::new(GithubClient::new(tok));
                         (Some(c), o, r)

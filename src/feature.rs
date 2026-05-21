@@ -19,12 +19,12 @@ pub enum ConflictResult {
     Conflict { blocking_feature: String, blocking_prs: Vec<u64> },
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize)]
 pub struct PrHealthStatus {
     pub pr: u64,
     pub pid_alive: bool,
     pub service_healthy: Option<bool>,
-    pub branch_ok: bool,
+    pub branch_ok: Option<bool>,
 }
 
 pub fn feature_list_running(ps: &ProcessStateStore) -> Result<Vec<FeatureInfo>> {
@@ -108,12 +108,22 @@ pub fn feature_add(ps: &ProcessStateStore, store: &Store, name: &str, pr: u64, c
     }
     let mut state = ps.load()?;
     state.feature_envelopes.insert(name.to_string());
+    let branch = s.cache.get(&pr).map(|c| c.branch.clone()).unwrap_or_default();
+    let worktree_path = if !branch.is_empty() {
+        crate::worktree::main_repo_root(&std::env::current_dir().unwrap_or_default())
+            .ok()
+            .and_then(|root| {
+                let p = crate::worktree::worktree_path(&root, &branch);
+                if p.exists() { Some(p.to_string_lossy().to_string()) } else { None }
+            })
+            .unwrap_or_default()
+    } else { String::new() };
     let rec = state.records.entry(pr).or_insert_with(|| crate::process_store::ProcessRecord {
         pr,
-        expected_branch: String::new(),
+        expected_branch: branch.clone(),
         pid: None,
         feature_envelope: None,
-        worktree: String::new(),
+        worktree: worktree_path,
         app_config_names: vec![],
     });
     rec.feature_envelope = Some(name.to_string());
@@ -302,7 +312,10 @@ pub fn teardown_pr(ps: &ProcessStateStore, config: &AppConfig, pr: u64, worktree
     ps.deactivate(pr)
 }
 
-pub fn health_check_branch(worktree: &Path, expected_branch: &str) -> bool {
+pub fn health_check_branch(worktree: &Path, expected_branch: &str) -> Option<bool> {
+    if !worktree.exists() || expected_branch.is_empty() {
+        return None;
+    }
     std::process::Command::new("git")
         .args(["rev-parse", "--abbrev-ref", "HEAD"])
         .current_dir(worktree)
@@ -310,7 +323,6 @@ pub fn health_check_branch(worktree: &Path, expected_branch: &str) -> bool {
         .ok()
         .and_then(|o| String::from_utf8(o.stdout).ok())
         .map(|s| s.trim() == expected_branch)
-        .unwrap_or(false)
 }
 
 pub fn health_check_pid(pid: u32) -> bool {

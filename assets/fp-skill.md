@@ -87,6 +87,7 @@ fp feature up <name> --no               # abort if any conflicting running featu
 fp feature down <name>                  # tear down all member PRs (stop app processes)
 fp feature rebuild <name> [--pr <pr>]   # re-run bootstrap for ephemeral members without teardown
 fp feature status <name>                # health of all member PRs; flags merged PRs (GitHub API)
+fp feature status <name> --json         # output as JSON (skips GitHub merged-PR check)
 fp feature list                         # list all envelopes and members
 fp feature list --running               # list envelopes with at least one live instance
 fp feature remove <name> <pr>           # remove a PR from an envelope (deletes envelope if empty)

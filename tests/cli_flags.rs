@@ -58,3 +58,15 @@ fn cli_pr_up_config_flag_is_recognized() {
     assert!(!stderr.contains("unexpected argument"),
         "--config must be a recognized flag, got: {}", stderr);
 }
+
+/// fp feature status --json must be a recognized flag
+#[test]
+fn cli_feature_status_json_flag_is_recognized() {
+    let dir = setup_repo();
+    let out = fp(dir.path(), &["feature", "status", "nonexistent", "--json"]);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(!stderr.contains("unrecognized argument"),
+        "--json must be a recognized flag, got: {}", stderr);
+    assert!(!stderr.contains("unexpected argument"),
+        "--json must be a recognized flag, got: {}", stderr);
+}

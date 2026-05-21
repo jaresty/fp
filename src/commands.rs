@@ -834,7 +834,7 @@ pub fn cmd_feature_status_with_client(
     owner: &str,
     repo: &str,
 ) -> anyhow::Result<String> {
-    let mut out = cmd_feature_status(ps, config, name)?;
+    let mut out = cmd_feature_status(ps, config, name, false)?;
     if let Some(client) = client {
         let state = ps.load()?;
         for (&pr, rec) in &state.records {
@@ -891,21 +891,25 @@ pub fn cmd_feature_status(
     ps: &crate::process_store::ProcessStateStore,
     config: &crate::app_config::AppConfigStore,
     name: &str,
+    json: bool,
 ) -> anyhow::Result<String> {
     let statuses = crate::feature::feature_status(ps, config, name)?;
     if statuses.is_empty() {
         return Ok(format!("Feature '{}' has no member PRs.", name));
     }
+    if json {
+        return Ok(serde_json::to_string_pretty(&statuses)?);
+    }
     let mut out = String::new();
     for s in &statuses {
         let pid = if s.pid_alive { "✓ running" } else { "✗ stopped" };
-        let branch = if s.branch_ok { "✓ branch ok" } else { "✗ wrong branch" };
+        let branch = match s.branch_ok { Some(true) => " ✓ branch ok", Some(false) => " ✗ wrong branch", None => "" };
         let health = match s.service_healthy {
             Some(true) => " ✓ healthy",
             Some(false) => " ✗ unhealthy",
             None => "",
         };
-        out.push_str(&format!("  PR #{}  {}{}  {}\n", s.pr, pid, health, branch));
+        out.push_str(&format!("  PR #{}  {}{}{}\n", s.pr, pid, health, branch));
     }
     Ok(out.trim_end().to_string())
 }
