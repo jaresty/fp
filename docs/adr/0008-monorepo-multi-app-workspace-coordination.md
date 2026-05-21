@@ -48,6 +48,7 @@ bootstrap       = "docker-compose up -d"
 teardown        = "docker-compose down"
 startup_timeout = "60s"
 # health_check omitted → fp uses automatic detection (see Health Check section)
+# fallback_worktree omitted → when the PR merges, the slot is left empty
 
 [app-configs.checkout-service]
 bootstrap       = "npm start"
@@ -319,6 +320,69 @@ Behaviour:
 `rebuild` assumes the bootstrap command is idempotent for the install target (i.e. an
 overwrite-in-place is safe). If the target requires teardown to clean state first, the
 user should run `fp feature down && fp feature up` instead.
+
+---
+
+### Partial Merge and Fallback Worktrees
+
+When a feature envelope has multiple member PRs and one merges before the others, the
+remaining members still need all services running. The merged PR's service slot would
+otherwise go dark, breaking the integration test environment for the PRs still in review.
+
+**The problem in concrete terms:**
+
+Feature `auth-refactor` has two members:
+- PR #123 — payments-api (owns the checkout flow changes)
+- PR #456 — checkout-svc (depends on the updated payments-api contract)
+
+PR #123 merges. The payments-api worktree is removed by `fp merge` cleanup. PR #456 is
+still in review and checkout-svc is still running — but now the payments-api it depends
+on is gone.
+
+**Solution: `fallback_worktree` on app config**
+
+Each app config may declare a `fallback_worktree` — a path to a worktree (typically the
+main-branch worktree) that fp should bootstrap when the PR owning this service slot merges:
+
+```toml
+[app-configs.payments-api]
+bootstrap         = "docker-compose up -d"
+teardown          = "docker-compose down"
+startup_timeout   = "60s"
+fallback_worktree = "~/repos/payments-api"   # main-branch worktree to use after merge
+```
+
+When `fp merge` removes PR #123 from `auth-refactor`, fp checks whether the envelope has
+remaining members. If it does, and the merged PR's app config declares a `fallback_worktree`:
+
+1. fp tears down the PR #123 instance
+2. fp bootstraps the same app config against `fallback_worktree` instead
+3. The fallback instance is recorded in the process state store under a sentinel PR number
+   (`0`) with `worktree = fallback_worktree` and `feature_envelope = "auth-refactor"`
+4. `fp feature status auth-refactor` shows it as `(main) payments-api ✓ running ✓ healthy`
+
+**Fallback lifecycle:**
+
+- The fallback instance runs until the entire envelope is torn down (`fp feature down`) or
+  the last remaining member PR merges (at which point fp tears down the fallback too)
+- `fp feature up` starts fallback instances for any app config slots that have no live PR
+  member but declare a `fallback_worktree`
+- Fallback instances are excluded from conflict detection — they are not "owned" by a PR
+  and cannot block another envelope from starting
+
+**When `fallback_worktree` is omitted:**
+
+fp removes the merged PR from the envelope and emits a warning that the service slot is
+now empty. The remaining members continue running; the user is responsible for starting
+the dependency manually. This matches the current Stage 7 behavior and is the safe default.
+
+**`fp feature status` output with a fallback running:**
+
+```
+$ fp feature status auth-refactor
+  (main)  payments-api   ✓ running  ✓ healthy   — (fallback after PR #123 merged)
+  PR #456 checkout-svc   ✓ running  ✓ healthy   ✓ branch ok
+```
 
 ---
 
@@ -597,7 +661,9 @@ The rebase logic is unchanged.
 **Stage 7 — `fp merge` envelope cleanup** *(existing command modification with failure isolation)*
 Add post-merge envelope cleanup with hard failure isolation: merge exit code is never
 affected by envelope write failures. Validation of closed-PR members in `fp feature status`
-covers the gap for merges performed outside `fp merge`.
+covers the gap for merges performed outside `fp merge`. If the merged PR's app config
+declares a `fallback_worktree` and the envelope has remaining members, fp bootstraps the
+fallback instance before removing the PR record (see Partial Merge and Fallback Worktrees).
 
 ### Deferred (not part of initial delivery)
 
