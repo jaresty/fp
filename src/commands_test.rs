@@ -1883,4 +1883,78 @@ mod tests {
             "cmd_feature_add_dep must store dep in envelope_deps");
     }
 
+    // fp feature remove: removes PR from envelope
+    #[test]
+    fn cmd_feature_remove_governs_removes_pr_from_envelope() {
+        let dir = tempfile::tempdir().unwrap();
+        let ps = crate::process_store::ProcessStateStore::open(dir.path());
+        let mut state = ps.load().unwrap();
+        state.feature_envelopes.insert("auth-refactor".into());
+        state.records.insert(10, crate::process_store::ProcessRecord {
+            pr: 10, expected_branch: "feat/x".into(), pid: None,
+            feature_envelope: Some("auth-refactor".into()),
+            worktree: dir.path().to_string_lossy().to_string(),
+            app_config_names: vec![],
+        });
+        state.records.insert(20, crate::process_store::ProcessRecord {
+            pr: 20, expected_branch: "feat/y".into(), pid: None,
+            feature_envelope: Some("auth-refactor".into()),
+            worktree: dir.path().to_string_lossy().to_string(),
+            app_config_names: vec![],
+        });
+        ps.save_state(state).unwrap();
+        let result = crate::commands::cmd_feature_remove(&ps, "auth-refactor", 10);
+        assert!(result.is_ok(), "cmd_feature_remove must succeed: {:?}", result);
+        let msg = result.unwrap();
+        assert!(msg.contains("Removed PR #10"), "must confirm removal: {}", msg);
+        let after = ps.load().unwrap();
+        assert!(!after.records.contains_key(&10), "PR #10 must be absent after remove");
+        assert!(after.records.contains_key(&20), "PR #20 must remain");
+        assert!(after.feature_envelopes.contains("auth-refactor"), "envelope must remain with members");
+    }
+
+    // fp feature remove: deletes envelope when it becomes empty
+    #[test]
+    fn cmd_feature_remove_governs_deletes_empty_envelope() {
+        let dir = tempfile::tempdir().unwrap();
+        let ps = crate::process_store::ProcessStateStore::open(dir.path());
+        let mut state = ps.load().unwrap();
+        state.feature_envelopes.insert("solo".into());
+        state.records.insert(10, crate::process_store::ProcessRecord {
+            pr: 10, expected_branch: "feat/x".into(), pid: None,
+            feature_envelope: Some("solo".into()),
+            worktree: dir.path().to_string_lossy().to_string(),
+            app_config_names: vec![],
+        });
+        ps.save_state(state).unwrap();
+        let result = crate::commands::cmd_feature_remove(&ps, "solo", 10);
+        assert!(result.is_ok(), "cmd_feature_remove must succeed: {:?}", result);
+        let after = ps.load().unwrap();
+        assert!(!after.feature_envelopes.contains("solo"), "empty envelope must be deleted");
+    }
+
+    // fp feature status: flags closed PRs when GitHub client provided
+    #[test]
+    fn cmd_feature_status_governs_flags_closed_prs() {
+        let dir = tempfile::tempdir().unwrap();
+        let ps = crate::process_store::ProcessStateStore::open(dir.path());
+        let app_store = crate::app_config::AppConfigStore::open(dir.path().join("config.toml"));
+        let mut state = ps.load().unwrap();
+        state.feature_envelopes.insert("auth-refactor".into());
+        state.records.insert(99, crate::process_store::ProcessRecord {
+            pr: 99, expected_branch: "feat/z".into(), pid: None,
+            feature_envelope: Some("auth-refactor".into()),
+            worktree: dir.path().to_string_lossy().to_string(),
+            app_config_names: vec![],
+        });
+        ps.save_state(state).unwrap();
+        let mut fake = crate::github::FakeGithubClient::new_with_pr(99, "feat/z", "Z", "main");
+        fake.set_pr_merged(99, true);
+        let result = crate::commands::cmd_feature_status_with_client(&ps, &app_store, "auth-refactor", Some(&fake), "o", "r");
+        assert!(result.is_ok(), "cmd_feature_status_with_client must succeed: {:?}", result);
+        let output = result.unwrap();
+        assert!(output.contains("merged"), "must flag PR #99 as merged: {}", output);
+        assert!(output.contains("fp feature remove"), "must show remove hint: {}", output);
+    }
+
 }

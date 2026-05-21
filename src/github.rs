@@ -644,12 +644,14 @@ impl GithubClientTrait for GithubClient {
 pub struct FakeGithubClient {
     prs: std::collections::HashMap<u64, PrState>,
     checks: std::collections::HashMap<String, Vec<Check>>,
+    merged: std::collections::HashMap<u64, bool>,
     pub head_behind: bool,
 }
 
 #[cfg(test)]
 impl FakeGithubClient {
-    pub fn new() -> Self { Self { prs: std::collections::HashMap::new(), checks: std::collections::HashMap::new(), head_behind: false } }
+    pub fn new() -> Self { Self { prs: std::collections::HashMap::new(), checks: std::collections::HashMap::new(), merged: std::collections::HashMap::new(), head_behind: false } }
+    pub fn set_pr_merged(&mut self, number: u64, is_merged: bool) { self.merged.insert(number, is_merged); }
     pub fn new_with_pr(number: u64, branch: &str, title: &str, base: &str) -> Self {
         let mut client = Self::new();
         client.set_pr(number, PrState { number, title: title.into(), branch: branch.into(), base: base.into(), head_sha: String::new(), draft: false, approved: false, checks: vec![], threads: vec![], needs_parent_rebase: false, has_merge_conflict: false, codeowners_eligibility: Default::default(), created_at: None });
@@ -682,7 +684,7 @@ impl GithubClientTrait for FakeGithubClient {
     fn fetch_pr_body(&self, _o: &str, _r: &str, _n: u64) -> Result<String> { Ok(String::new()) }
     fn fetch_pr_is_merged(&self, _o: &str, _r: &str, n: u64) -> Result<(bool, Option<String>)> {
         let created_at = self.prs.get(&n).and_then(|p| p.created_at.clone());
-        Ok((false, created_at))
+        Ok((*self.merged.get(&n).unwrap_or(&false), created_at))
     }
     fn fetch_pr_head_sha_and_base(&self, o: &str, r: &str, n: u64) -> Result<(String, String)> {
         let p = self.fetch_pr(o, r, n)?; Ok((p.head_sha, p.base))

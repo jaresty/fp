@@ -337,6 +337,13 @@ enum FeatureCommands {
         #[arg(long)]
         pr: Option<u64>,
     },
+    /// Remove a PR from a feature envelope
+    Remove {
+        /// Feature envelope name
+        name: String,
+        /// PR number to remove
+        pr: u64,
+    },
 }
 
 #[derive(Subcommand)]
@@ -585,7 +592,11 @@ fn main() -> Result<()> {
                 }
                 FeatureCommands::Status { name } => {
                     let app_store = app_config::AppConfigStore::open(app_config::AppConfigStore::default_path()?);
-                    let out = commands::cmd_feature_status(&ps, &app_store, &name)?;
+                    let (client, owner, repo_name) = if let (Ok(tok), Some((o, r))) = (resolve_github_token(), detect_repo()) {
+                        let c: Box<dyn github::GithubClientTrait> = Box::new(GithubClient::new(tok));
+                        (Some(c), o, r)
+                    } else { (None, String::new(), String::new()) };
+                    let out = commands::cmd_feature_status_with_client(&ps, &app_store, &name, client.as_deref(), &owner, &repo_name)?;
                     println!("{}", out);
                 }
                 FeatureCommands::Up { name, yes: _ } => {
@@ -606,6 +617,10 @@ fn main() -> Result<()> {
                 FeatureCommands::AddDep { name, app_config } => {
                     let out = commands::cmd_feature_add_dep(&ps, &name, &app_config)?;
                     println!("{}", out);
+                }
+                FeatureCommands::Remove { name, pr } => {
+                    let out = commands::cmd_feature_remove(&ps, &name, pr)?;
+                    print!("{}", out);
                 }
             }
         }

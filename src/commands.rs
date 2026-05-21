@@ -808,6 +808,44 @@ pub fn cmd_feature_list(ps: &crate::process_store::ProcessStateStore) -> anyhow:
     Ok(out.trim_end().to_string())
 }
 
+pub fn cmd_feature_remove(ps: &crate::process_store::ProcessStateStore, name: &str, pr: u64) -> anyhow::Result<String> {
+    let mut state = ps.load()?;
+    anyhow::ensure!(state.feature_envelopes.contains(name), "Feature envelope '{}' not found", name);
+    anyhow::ensure!(state.records.get(&pr).and_then(|r| r.feature_envelope.as_deref()) == Some(name),
+        "PR #{} is not a member of feature envelope '{}'", pr, name);
+    state.records.remove(&pr);
+    let remaining = state.records.values().filter(|r| r.feature_envelope.as_deref() == Some(name)).count();
+    if remaining == 0 {
+        state.feature_envelopes.remove(name);
+        ps.save_state(state)?;
+        Ok(format!("Removed PR #{} from feature envelope '{}' (envelope deleted)\n", pr, name))
+    } else {
+        ps.save_state(state)?;
+        Ok(format!("Removed PR #{} from feature envelope '{}' ({} members remaining)\n", pr, name, remaining))
+    }
+}
+
+pub fn cmd_feature_status_with_client(
+    ps: &crate::process_store::ProcessStateStore,
+    config: &crate::app_config::AppConfigStore,
+    name: &str,
+    client: Option<&dyn crate::github::GithubClientTrait>,
+    owner: &str,
+    repo: &str,
+) -> anyhow::Result<String> {
+    let mut out = cmd_feature_status(ps, config, name)?;
+    if let Some(client) = client {
+        let state = ps.load()?;
+        for (&pr, rec) in &state.records {
+            if rec.feature_envelope.as_deref() != Some(name) { continue; }
+            if let Ok((true, _)) = client.fetch_pr_is_merged(owner, repo, pr) {
+                out.push_str(&format!("  PR #{} (merged — remove with: fp feature remove {} {})\n", pr, name, pr));
+            }
+        }
+    }
+    Ok(out)
+}
+
 pub fn cmd_feature_up(ps: &crate::process_store::ProcessStateStore, config: &crate::app_config::AppConfigStore, name: &str) -> anyhow::Result<String> {
     let msgs = crate::feature::feature_up(ps, config, name)?;
     if msgs.is_empty() {
