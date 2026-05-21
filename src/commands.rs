@@ -712,7 +712,7 @@ pub fn cmd_watch(
     use crate::model;
 
     let mut prev_tasks: std::collections::HashMap<u64, Vec<crate::tasks::Task>> = std::collections::HashMap::new();
-    let mut out = String::new();
+    let mut collected = String::new();
 
     loop {
         let state = store.load()?;
@@ -758,16 +758,17 @@ pub fn cmd_watch(
             let prev = prev_tasks.get(&cached.number).map(|v| v.as_slice()).unwrap_or(&[]);
             let (new, resolved) = task_diff(prev, &curr);
 
+            let mut chunk = String::new();
             if prev_tasks.contains_key(&cached.number) {
                 if json {
-                    out.push_str(&format!("{}\n", format_watch_event_json(cached.number, &new, &resolved)));
+                    chunk.push_str(&format!("{}\n", format_watch_event_json(cached.number, &new, &resolved)));
                 } else {
                     for t in &new {
                         let flag = if t.blocking { "[blocking]" } else { "[waiting]" };
-                        out.push_str(&format!("+ PR #{} {} {:?}: {}\n", cached.number, flag, t.task_type, t.description));
+                        chunk.push_str(&format!("+ PR #{} {} {:?}: {}\n", cached.number, flag, t.task_type, t.description));
                     }
                     for t in &resolved {
-                        out.push_str(&format!("✓ PR #{} resolved {:?}: {}\n", cached.number, t.task_type, t.description));
+                        chunk.push_str(&format!("✓ PR #{} resolved {:?}: {}\n", cached.number, t.task_type, t.description));
                     }
                     for (title, msg) in watch_notification_messages(cached.number, &new, &resolved) {
                         notify_macos_titled(&title, &msg);
@@ -776,7 +777,14 @@ pub fn cmd_watch(
             } else {
                 let lock = crate::worktree::lock_status(git_dir, &cached.branch);
                 let prefix = tree_prefixes.get(&cached.number).cloned().unwrap_or_default();
-                out.push_str(&format_watch_initial_state(cached.number, &cached.title, &curr, json, lock.as_deref(), &prefix));
+                chunk.push_str(&format_watch_initial_state(cached.number, &cached.title, &curr, json, lock.as_deref(), &prefix));
+            }
+            if once {
+                collected.push_str(&chunk);
+            } else if !chunk.is_empty() {
+                use std::io::Write;
+                print!("{}", chunk);
+                let _ = std::io::stdout().flush();
             }
             prev_tasks.insert(cached.number, curr);
         }
@@ -789,7 +797,7 @@ pub fn cmd_watch(
         std::thread::sleep(std::time::Duration::from_secs(interval));
     }
 
-    Ok(out)
+    Ok(collected)
 }
 
 pub fn cmd_app_set_config(store: &crate::app_config::AppConfigStore, repo: &str, config_name: &str) -> anyhow::Result<String> {
