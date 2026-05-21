@@ -725,11 +725,13 @@ pub fn cmd_watch(
                 std::collections::HashMap::new()
             };
 
-        let new_cache: std::collections::HashMap<u64, PrCache> = fetched.values()
-            .filter(|p| state.tracked.contains(&p.number))
-            .map(|p| (p.number, PrCache { number: p.number, title: p.title.clone(), branch: p.branch.clone(), base: p.base.clone() }))
-            .collect();
-        let _ = store.replace_cache(new_cache);
+        if !fetched.is_empty() {
+            let new_cache: std::collections::HashMap<u64, PrCache> = fetched.values()
+                .filter(|p| state.tracked.contains(&p.number))
+                .map(|p| (p.number, PrCache { number: p.number, title: p.title.clone(), branch: p.branch.clone(), base: p.base.clone() }))
+                .collect();
+            let _ = store.replace_cache(new_cache);
+        }
         let state = store.load()?;
 
         let prs = state.tracked_prs();
