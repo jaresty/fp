@@ -634,7 +634,8 @@ mod tests {
         store.track(10).unwrap();
         store.update_cache(crate::store::PrCache { number: 10, title: "T".into(), branch: "feat/x".into(), base: "main".into() }).unwrap();
         let fake = crate::github::FakeGithubClient::new_with_pr(10, "feat/x", "T", "main");
-        let result = crate::commands::cmd_merge(&fake, "o", "r", 10, crate::commands::MergeContext { store: &store, dir: tmp.path(), git_dir: &git_dir, merge_method: "squash" });
+        let ps = crate::process_store::ProcessStateStore::open(&git_dir);
+        let result = crate::commands::cmd_merge(&fake, "o", "r", 10, crate::commands::MergeContext { store: &store, dir: tmp.path(), git_dir: &git_dir, merge_method: "squash" }, &ps);
         assert!(result.is_ok(), "cmd_merge must succeed: {:?}", result);
         let msg = result.unwrap();
         assert!(msg.contains("merged PR #10"), "must mention merged PR: {}", msg);
@@ -649,9 +650,73 @@ mod tests {
         store.track(10).unwrap();
         store.update_cache(crate::store::PrCache { number: 10, title: "T".into(), branch: "feat/x".into(), base: "main".into() }).unwrap();
         let fake = crate::github::FakeGithubClient::new_with_pr(10, "feat/x", "T", "main");
-        crate::commands::cmd_merge(&fake, "o", "r", 10, crate::commands::MergeContext { store: &store, dir: tmp.path(), git_dir: &git_dir, merge_method: "squash" }).unwrap();
+        let ps = crate::process_store::ProcessStateStore::open(&git_dir);
+        crate::commands::cmd_merge(&fake, "o", "r", 10, crate::commands::MergeContext { store: &store, dir: tmp.path(), git_dir: &git_dir, merge_method: "squash" }, &ps).unwrap();
         let state = store.load().unwrap();
         assert!(!state.tracked.contains(&10), "cmd_merge must untrack the PR");
+    }
+
+    // Stage 7: cmd_merge removes merged PR from its feature envelope
+    #[test]
+    fn cmd_merge_governs_removes_pr_from_feature_envelope() {
+        let tmp = tempfile::tempdir().unwrap();
+        let git_dir = tmp.path().join("git_dir");
+        std::fs::create_dir_all(&git_dir).unwrap();
+        let store = crate::store::Store::open(&git_dir);
+        store.track(10).unwrap();
+        store.update_cache(crate::store::PrCache { number: 10, title: "T".into(), branch: "feat/x".into(), base: "main".into() }).unwrap();
+        let ps = crate::process_store::ProcessStateStore::open(&git_dir);
+        let mut ps_state = ps.load().unwrap();
+        ps_state.feature_envelopes.insert("auth-refactor".into());
+        ps_state.records.insert(10, crate::process_store::ProcessRecord {
+            pr: 10, expected_branch: "feat/x".into(), pid: None,
+            feature_envelope: Some("auth-refactor".into()),
+            worktree: tmp.path().to_string_lossy().to_string(),
+            app_config_names: vec![],
+        });
+        ps_state.records.insert(20, crate::process_store::ProcessRecord {
+            pr: 20, expected_branch: "feat/y".into(), pid: None,
+            feature_envelope: Some("auth-refactor".into()),
+            worktree: tmp.path().to_string_lossy().to_string(),
+            app_config_names: vec![],
+        });
+        ps.save_state(ps_state).unwrap();
+        let fake = crate::github::FakeGithubClient::new_with_pr(10, "feat/x", "T", "main");
+        let result = crate::commands::cmd_merge(&fake, "o", "r", 10, crate::commands::MergeContext { store: &store, dir: tmp.path(), git_dir: &git_dir, merge_method: "squash" }, &ps);
+        assert!(result.is_ok(), "cmd_merge must succeed: {:?}", result);
+        let msg = result.unwrap();
+        assert!(msg.contains("auth-refactor"), "must mention envelope name: {}", msg);
+        let ps_after = ps.load().unwrap();
+        assert!(!ps_after.records.contains_key(&10), "PR #10 must be removed from process state");
+        assert!(ps_after.records.contains_key(&20), "PR #20 must remain in process state");
+    }
+
+    // Stage 7: cmd_merge deletes empty envelope after last member merges
+    #[test]
+    fn cmd_merge_governs_deletes_envelope_when_empty() {
+        let tmp = tempfile::tempdir().unwrap();
+        let git_dir = tmp.path().join("git_dir");
+        std::fs::create_dir_all(&git_dir).unwrap();
+        let store = crate::store::Store::open(&git_dir);
+        store.track(10).unwrap();
+        store.update_cache(crate::store::PrCache { number: 10, title: "T".into(), branch: "feat/x".into(), base: "main".into() }).unwrap();
+        let ps = crate::process_store::ProcessStateStore::open(&git_dir);
+        let mut ps_state = ps.load().unwrap();
+        ps_state.feature_envelopes.insert("solo-feature".into());
+        ps_state.records.insert(10, crate::process_store::ProcessRecord {
+            pr: 10, expected_branch: "feat/x".into(), pid: None,
+            feature_envelope: Some("solo-feature".into()),
+            worktree: tmp.path().to_string_lossy().to_string(),
+            app_config_names: vec![],
+        });
+        ps.save_state(ps_state).unwrap();
+        let fake = crate::github::FakeGithubClient::new_with_pr(10, "feat/x", "T", "main");
+        let result = crate::commands::cmd_merge(&fake, "o", "r", 10, crate::commands::MergeContext { store: &store, dir: tmp.path(), git_dir: &git_dir, merge_method: "squash" }, &ps);
+        assert!(result.is_ok(), "cmd_merge must succeed: {:?}", result);
+        let msg = result.unwrap();
+        assert!(msg.contains("solo-feature"), "must mention envelope name: {}", msg);
+        let ps_after = ps.load().unwrap();
+        assert!(!ps_after.feature_envelopes.contains("solo-feature"), "empty envelope must be deleted");
     }
 
     #[test]

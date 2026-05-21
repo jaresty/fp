@@ -471,6 +471,7 @@ pub fn cmd_merge(
     repo: &str,
     pr: u64,
     ctx: MergeContext<'_>,
+    ps: &crate::process_store::ProcessStateStore,
 ) -> anyhow::Result<String> {
     let MergeContext { store, dir, git_dir, merge_method } = ctx;
     let state = store.load()?;
@@ -500,6 +501,20 @@ pub fn cmd_merge(
     }
     store.untrack(pr)?;
     out.push_str(&format!("✓ untracked PR #{}\n", pr));
+    if let Ok(mut ps_state) = ps.load()
+        && let Some(rec) = ps_state.records.remove(&pr)
+        && let Some(envelope) = rec.feature_envelope {
+            let remaining = ps_state.records.values()
+                .filter(|r| r.feature_envelope.as_deref() == Some(&envelope))
+                .count();
+            if remaining == 0 {
+                ps_state.feature_envelopes.remove(&envelope);
+                out.push_str(&format!("Removed PR #{} from feature envelope '{}' (envelope deleted)\n", pr, envelope));
+            } else {
+                out.push_str(&format!("Removed PR #{} from feature envelope '{}' ({} members remaining)\n", pr, envelope, remaining));
+            }
+            let _ = ps.save_state(ps_state);
+    }
     Ok(out)
 }
 
@@ -575,7 +590,10 @@ pub fn cmd_rebase_stack(
                 .filter(|s| !s.is_empty())
         }).min();
         if let Some(ref since_date) = min_tip_date {
-            let squash_commits = crate::stack::squash_pr_numbers_since_date("origin/main", since_date, 200, dir);
+            // Subtract 1 second so the --since bound is inclusive when the squash commit lands
+            // at the same timestamp as the branch tip (common under parallel test execution).
+            let since_date = crate::date::subtract_one_second(since_date).unwrap_or_else(|| since_date.clone());
+            let squash_commits = crate::stack::squash_pr_numbers_since_date("origin/main", &since_date, 200, dir);
             let untracked: Vec<u64> = squash_commits.into_iter()
                 .filter(|(_, pr_num)| !state.tracked.contains(pr_num))
                 .map(|(_, pr_num)| pr_num)

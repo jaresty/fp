@@ -17,6 +17,7 @@ pub mod commands;
 pub mod process_store;
 pub mod app_config;
 pub mod feature;
+pub mod date;
 
 #[cfg(test)]
 mod tasks_test;
@@ -699,7 +700,8 @@ fn main() -> Result<()> {
                 store.save(&state)?;
                 &resolved_method
             };
-            print!("{}", commands::cmd_merge(&client, &owner, &repo_name, pr, commands::MergeContext { store: &store, dir: &repo_root()?, git_dir: &git_dir, merge_method })?);
+            let ps = process_store::ProcessStateStore::open(&git_dir);
+            print!("{}", commands::cmd_merge(&client, &owner, &repo_name, pr, commands::MergeContext { store: &store, dir: &repo_root()?, git_dir: &git_dir, merge_method }, &ps)?);
         }
 
         Commands::RebaseStack { pr: rebase_from_pr, verbose } => {
