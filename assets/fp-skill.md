@@ -72,6 +72,7 @@ fp app set-config <owner/repo> <name>   # assign a named app config to all PRs i
 
 # Single-PR app lifecycle
 fp pr up <pr>                           # bootstrap the app for a single PR (uses its bound app config)
+fp pr up <pr> --config <name>           # override app config at call time (repeatable: --config a --config b)
 
 # Feature envelopes (multi-PR coordinated workspaces)
 fp feature new <name>                   # create a named feature envelope
@@ -81,6 +82,8 @@ fp feature add <name> <pr> --config <a> --config <b>  # bind multiple app config
 fp feature add-dep <name> <app>         # declare a baseline service dependency with no PR
                                         # (starts alongside the envelope but is not PR-owned)
 fp feature up <name>                    # bootstrap all member PRs (start app processes)
+fp feature up <name> --yes              # tear down conflicting running features without prompting
+fp feature up <name> --no               # abort if any conflicting running feature is detected
 fp feature down <name>                  # tear down all member PRs (stop app processes)
 fp feature rebuild <name> [--pr <pr>]   # re-run bootstrap for ephemeral members without teardown
 fp feature status <name>                # health of all member PRs; flags merged PRs (GitHub API)
@@ -111,6 +114,7 @@ fp ready <pr>                           # mark draft PR as ready for review
 fp switch <pr> <id>                     # print worktree path for PR (create if needed); <id> is a session label (e.g. "claude-session-1")
 fp switch <pr> <id> --force            # skip dirty-check on current worktree
 fp switch <pr> <id> --adopt            # branch is checked out in main worktree — check out main there, create fp worktree
+fp switch <pr> <id> --non-interactive  # skip all lifecycle prompts; apply safe defaults silently
 fp unlock <branch>                      # remove the lock on a worktree branch so it can be switched to again
 fp root                                 # print main repo root (works from inside a worktree)
 fp install-shell                        # install fps shell function (auto-detects fish/zsh/bash)

@@ -257,6 +257,9 @@ enum Commands {
         /// Move branch from main worktree to an fp worktree (checks out main in main worktree)
         #[arg(long)]
         adopt: bool,
+        /// Skip lifecycle prompts; apply safe defaults silently
+        #[arg(long)]
+        non_interactive: bool,
     },
     /// Remove the lock on a worktree branch so it can be switched to again
     Unlock {
@@ -320,9 +323,12 @@ enum FeatureCommands {
     Up {
         /// Feature envelope name
         name: String,
-        /// Skip conflict detection prompt
+        /// Tear down conflicting running features without prompting
         #[arg(long)]
         yes: bool,
+        /// Abort if any conflicting running feature is detected
+        #[arg(long)]
+        no: bool,
     },
     /// Tear down all PRs in a feature envelope
     Down {
@@ -386,6 +392,9 @@ enum PrCommands {
     Up {
         /// PR number
         pr: u64,
+        /// Override app config(s) to use (repeatable); defaults to configs bound to the PR
+        #[arg(long = "config")]
+        configs: Vec<String>,
     },
 }
 
@@ -481,10 +490,10 @@ fn main() -> Result<()> {
             println!("{}", commands::cmd_untrack(&store, &repo_root()?, &git_dir, pr)?);
         }
 
-        Commands::Switch { pr, id, force, adopt } => {
+        Commands::Switch { pr, id, force, adopt, non_interactive } => {
             let ps = process_store::ProcessStateStore::open(&git_dir);
             let app_cfg_store = app_config::AppConfigStore::open(app_config::AppConfigStore::default_path()?);
-            let wt_path = commands::cmd_switch(&store, &ps, &app_cfg_store, &git_dir, pr, &id, force, adopt)?;
+            let wt_path = commands::cmd_switch(&store, &ps, &app_cfg_store, &git_dir, pr, &id, force, adopt, non_interactive)?;
             println!("{}", wt_path.display());
         }
 
@@ -599,9 +608,9 @@ fn main() -> Result<()> {
                     let out = commands::cmd_feature_status_with_client(&ps, &app_store, &name, client.as_deref(), &owner, &repo_name)?;
                     println!("{}", out);
                 }
-                FeatureCommands::Up { name, yes: _ } => {
+                FeatureCommands::Up { name, yes, no } => {
                     let app_store = app_config::AppConfigStore::open(app_config::AppConfigStore::default_path()?);
-                    let out = commands::cmd_feature_up(&ps, &app_store, &name)?;
+                    let out = commands::cmd_feature_up_checked(&ps, &app_store, &name, yes, no)?;
                     println!("{}", out);
                 }
                 FeatureCommands::Down { name } => {
@@ -642,10 +651,16 @@ fn main() -> Result<()> {
         Commands::Pr { subcommand } => {
             let store = app_config::AppConfigStore::open(app_config::AppConfigStore::default_path()?);
             match subcommand {
-                PrCommands::Up { pr } => {
+                PrCommands::Up { pr, configs } => {
                     let ps = process_store::ProcessStateStore::open(&git_dir);
-                    let out = commands::cmd_pr_up(&ps, &store, pr)?;
-                    println!("{}", out);
+                    if configs.is_empty() {
+                        let out = commands::cmd_pr_up(&ps, &store, pr)?;
+                        println!("{}", out);
+                    } else {
+                        let cfg_refs: Vec<&str> = configs.iter().map(|s| s.as_str()).collect();
+                        let out = commands::cmd_pr_up_with_configs(&ps, &store, pr, &cfg_refs)?;
+                        println!("{}", out);
+                    }
                 }
             }
         }

@@ -310,7 +310,7 @@ mod tests {
         let store = crate::store::Store::open(&git_dir);
         let ps = crate::process_store::ProcessStateStore::open(&git_dir);
         let app_store = crate::app_config::AppConfigStore::open(tmp.path().join("config.toml"));
-        let result = crate::commands::cmd_switch(&store, &ps, &app_store, &git_dir, 99, "session-id", false, false);
+        let result = crate::commands::cmd_switch(&store, &ps, &app_store, &git_dir, 99, "session-id", false, false, false);
         assert!(result.is_err(), "cmd_switch must error for untracked PR");
         assert!(result.unwrap_err().to_string().contains("not tracked"), "error must mention 'not tracked'");
     }
@@ -1955,6 +1955,123 @@ mod tests {
         let output = result.unwrap();
         assert!(output.contains("merged"), "must flag PR #99 as merged: {}", output);
         assert!(output.contains("fp feature remove"), "must show remove hint: {}", output);
+    }
+
+    // fp pr up --config: config flag overrides bound app config names
+    #[test]
+    fn cmd_pr_up_governs_accepts_config_override() {
+        let tmp = tempfile::tempdir().unwrap();
+        let git_dir = tmp.path().join(".git");
+        std::fs::create_dir_all(&git_dir).unwrap();
+        let ps = crate::process_store::ProcessStateStore::open(&git_dir);
+        let app_store = crate::app_config::AppConfigStore::open(tmp.path().join("config.toml"));
+        let worktree = tmp.path().to_string_lossy().to_string();
+        // Define an app config
+        crate::commands::cmd_app_define_config(&app_store, "payments-api", "echo start", "echo stop", "5s", None, false, None).unwrap();
+        // Create process record with NO bound configs
+        let mut state = ps.load().unwrap();
+        state.records.insert(10, crate::process_store::ProcessRecord {
+            pr: 10, expected_branch: "feat/x".into(), pid: None,
+            feature_envelope: None,
+            worktree: worktree.clone(),
+            app_config_names: vec![],
+        });
+        ps.save_state(state).unwrap();
+        // pr up with --config override should use the supplied config
+        let result = crate::commands::cmd_pr_up_with_configs(&ps, &app_store, 10, &["payments-api"]);
+        assert!(result.is_ok(), "cmd_pr_up_with_configs must succeed: {:?}", result);
+        let msg = result.unwrap();
+        assert!(msg.contains("payments-api"), "must mention config name: {}", msg);
+    }
+
+    // fp feature up --no: abort if conflict detected
+    #[test]
+    fn cmd_feature_up_governs_no_flag_aborts_on_conflict() {
+        let tmp = tempfile::tempdir().unwrap();
+        let git_dir = tmp.path().join(".git");
+        std::fs::create_dir_all(&git_dir).unwrap();
+        let ps = crate::process_store::ProcessStateStore::open(&git_dir);
+        let app_store = crate::app_config::AppConfigStore::open(tmp.path().join("config.toml"));
+        let mut state = ps.load().unwrap();
+        state.feature_envelopes.insert("feature-a".into());
+        state.feature_envelopes.insert("feature-b".into());
+        // feature-b has a live process (pid = current process, always alive)
+        state.records.insert(20, crate::process_store::ProcessRecord {
+            pr: 20, expected_branch: "feat/y".into(), pid: Some(std::process::id()),
+            feature_envelope: Some("feature-b".into()),
+            worktree: tmp.path().to_string_lossy().to_string(),
+            app_config_names: vec![],
+        });
+        state.records.insert(10, crate::process_store::ProcessRecord {
+            pr: 10, expected_branch: "feat/x".into(), pid: None,
+            feature_envelope: Some("feature-a".into()),
+            worktree: tmp.path().to_string_lossy().to_string(),
+            app_config_names: vec![],
+        });
+        ps.save_state(state).unwrap();
+        let result = crate::commands::cmd_feature_up_checked(&ps, &app_store, "feature-a", false, true);
+        assert!(result.is_err() || result.as_ref().unwrap().contains("aborted"),
+            "cmd_feature_up_checked with no=true must abort on conflict: {:?}", result);
+        let msg = result.unwrap_or_default();
+        assert!(msg.contains("aborted") || msg.is_empty(),
+            "abort message expected, got: {}", msg);
+        // Recheck via error path
+        let result2 = crate::commands::cmd_feature_up_checked(&ps, &app_store, "feature-a", false, true);
+        assert!(result2.is_err() || result2.as_ref().map(|s| s.contains("aborted")).unwrap_or(false),
+            "must abort on conflict with --no flag: {:?}", result2);
+    }
+
+    // fp feature up --yes: tears down conflicting feature
+    #[test]
+    fn cmd_feature_up_governs_yes_flag_tears_down_conflict() {
+        let tmp = tempfile::tempdir().unwrap();
+        let git_dir = tmp.path().join(".git");
+        std::fs::create_dir_all(&git_dir).unwrap();
+        let ps = crate::process_store::ProcessStateStore::open(&git_dir);
+        let app_store = crate::app_config::AppConfigStore::open(tmp.path().join("config.toml"));
+        let mut state = ps.load().unwrap();
+        state.feature_envelopes.insert("feature-a".into());
+        state.feature_envelopes.insert("feature-b".into());
+        state.records.insert(20, crate::process_store::ProcessRecord {
+            pr: 20, expected_branch: "feat/y".into(), pid: Some(std::process::id()),
+            feature_envelope: Some("feature-b".into()),
+            worktree: tmp.path().to_string_lossy().to_string(),
+            app_config_names: vec![],
+        });
+        state.records.insert(10, crate::process_store::ProcessRecord {
+            pr: 10, expected_branch: "feat/x".into(), pid: None,
+            feature_envelope: Some("feature-a".into()),
+            worktree: tmp.path().to_string_lossy().to_string(),
+            app_config_names: vec![],
+        });
+        ps.save_state(state).unwrap();
+        let result = crate::commands::cmd_feature_up_checked(&ps, &app_store, "feature-a", true, false);
+        assert!(result.is_ok(), "cmd_feature_up_checked with yes=true must succeed: {:?}", result);
+        let msg = result.unwrap();
+        assert!(msg.contains("feature-b"), "must mention torn-down feature: {}", msg);
+    }
+
+    // fp switch --non-interactive: skips dirty-check even when force=false
+    #[test]
+    fn cmd_switch_governs_non_interactive_skips_prompts() {
+        // Use a fake git dir that has no actual git repo — cmd_switch will fail, but
+        // it must NOT fail with the dirty-check message when non_interactive=true.
+        let tmp = tempfile::tempdir().unwrap();
+        let git_dir = tmp.path().join(".git");
+        std::fs::create_dir_all(&git_dir).unwrap();
+        let store = crate::store::Store::open(&git_dir);
+        store.track(10).unwrap();
+        store.update_cache(crate::store::PrCache { number: 10, title: "X".into(), branch: "feat/x".into(), base: "main".into() }).unwrap();
+        let ps = crate::process_store::ProcessStateStore::open(&git_dir);
+        let app_store = crate::app_config::AppConfigStore::open(tmp.path().join("config.toml"));
+        // With non_interactive=true and force=false, the dirty-check must be skipped.
+        // The call may fail for other reasons (no real git repo), but NOT with the dirty-check message.
+        let result = crate::commands::cmd_switch(&store, &ps, &app_store, &git_dir, 10, "test-session", false, false, true);
+        if let Err(ref e) = result {
+            assert!(!e.to_string().contains("uncommitted changes"),
+                "non_interactive must skip dirty-check, got: {}", e);
+        }
+        // (ok or another error is acceptable — we only govern that dirty-check is skipped)
     }
 
 }

@@ -208,6 +208,7 @@ pub fn cmd_switch(
     id: &str,
     force: bool,
     adopt: bool,
+    non_interactive: bool,
 ) -> anyhow::Result<std::path::PathBuf> {
     let state = store.load()?;
     let cached = state.cache.get(&pr)
@@ -215,7 +216,7 @@ pub fn cmd_switch(
     let branch = cached.branch.clone();
     let root = crate::worktree::main_repo_root(&std::env::current_dir()?)?;
 
-    if !force && crate::worktree::repo_is_dirty(&std::env::current_dir()?)? {
+    if !force && !non_interactive && crate::worktree::repo_is_dirty(&std::env::current_dir()?)? {
         anyhow::bail!("current worktree has uncommitted changes — commit, stash, or use --force to override");
     }
 
@@ -225,7 +226,7 @@ pub fn cmd_switch(
         .output()?;
     let current_head = String::from_utf8(head_out.stdout)?.trim().to_string();
     if current_head == branch {
-        if adopt {
+        if adopt || non_interactive {
             let checkout = std::process::Command::new("git")
                 .args(["checkout", "main"])
                 .current_dir(&root)
@@ -947,6 +948,50 @@ pub fn cmd_pr_up(ps: &crate::process_store::ProcessStateStore, config: &crate::a
         messages.push(format!("PR #{}: started ({})", pr, cfg.name));
     }
     Ok(messages.join("\n"))
+}
+
+pub fn cmd_pr_up_with_configs(ps: &crate::process_store::ProcessStateStore, config: &crate::app_config::AppConfigStore, pr: u64, configs: &[&str]) -> anyhow::Result<String> {
+    let state = ps.load()?;
+    let rec = state.records.get(&pr)
+        .ok_or_else(|| anyhow::anyhow!("PR #{} not found in process state — run `fp feature add` first", pr))?;
+    let wt = std::path::Path::new(&rec.worktree);
+    let mut messages = Vec::new();
+    for cfg_name in configs {
+        let cfg = config.load_app_config(cfg_name)?.ok_or_else(|| anyhow::anyhow!("app config '{}' not found", cfg_name))?;
+        crate::feature::bootstrap_pr(ps, &cfg, pr, wt, "", "")?;
+        messages.push(format!("PR #{}: started ({})", pr, cfg.name));
+    }
+    Ok(messages.join("\n"))
+}
+
+pub fn cmd_feature_up_checked(ps: &crate::process_store::ProcessStateStore, config: &crate::app_config::AppConfigStore, name: &str, yes: bool, no: bool) -> anyhow::Result<String> {
+    let state = ps.load()?;
+    // Find any other running feature envelope (has a PR with a live pid)
+    let conflicting: Vec<String> = state.feature_envelopes.iter()
+        .filter(|e| e.as_str() != name)
+        .filter(|e| {
+            state.records.values()
+                .any(|r| r.feature_envelope.as_deref() == Some(e.as_str())
+                    && r.pid.map(crate::feature::health_check_pid).unwrap_or(false))
+        })
+        .cloned()
+        .collect();
+    if !conflicting.is_empty() {
+        if no {
+            return Ok(format!("aborted: conflicting running feature(s): {}", conflicting.join(", ")));
+        }
+        if yes {
+            let mut out = String::new();
+            for c in &conflicting {
+                let msgs = crate::feature::feature_down(ps, config, c)?;
+                out.push_str(&format!("torn down feature '{}': {}\n", c, msgs.join(", ")));
+            }
+            out.push_str(&cmd_feature_up(ps, config, name)?);
+            return Ok(out);
+        }
+        anyhow::bail!("conflicting running feature(s): {} — use --yes to tear down or --no to abort", conflicting.join(", "));
+    }
+    cmd_feature_up(ps, config, name)
 }
 
 pub fn cmd_feature_add_dep(ps: &crate::process_store::ProcessStateStore, name: &str, app_config: &str) -> anyhow::Result<String> {
