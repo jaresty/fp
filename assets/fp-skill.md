@@ -317,6 +317,40 @@ fp feature rebuild my-feature --pr 0
 
 The `--pr 0` flag targets the dep slot specifically, leaving the backend PR untouched.
 
+### Health-Check Environment Variables
+
+fp sets the following environment variables when running bootstrap, teardown, and health-check commands:
+
+| Variable | Value |
+|---|---|
+| `FP_WORKTREE` | Absolute path of the worktree the app was started from |
+| `FP_PR` | PR number (0 for dep slots) |
+| `FP_INSTANCE` | Unique instance label (also set as `COMPOSE_PROJECT_NAME`) |
+| `COMPOSE_PROJECT_NAME` | Same as `FP_INSTANCE` — scopes docker compose commands to this PR |
+
+These variables are available to the **host shell** running the command, not inside containers. Use them on the host side of any command pipeline.
+
+### Verifying Docker Volume Mounts
+
+A service health-check that only tests liveness (`curl http://localhost:PORT/health`) will pass even if the container is mounted from the wrong directory (e.g., main instead of the PR worktree). To catch mount mismatches without changing the compose config, extend the health-check to verify the volume source using `docker inspect`:
+
+```sh
+fp app define-config backend \
+  --bootstrap "docker compose up -d" \
+  --teardown "docker compose down" \
+  --health-check "curl -sf http://127.0.0.1:6363/health && \
+    docker inspect \$(docker compose ps -q backend) \
+      --format '{{range .Mounts}}{{.Source}} {{end}}' \
+    | grep -qF \"$FP_WORKTREE\""
+```
+
+How this works:
+- `docker compose ps -q backend` is scoped by `COMPOSE_PROJECT_NAME` (set by fp), so it finds the container for *this* PR's instance only
+- `docker inspect ... --format '{{range .Mounts}}{{.Source}} {{end}}'` lists all host paths mounted into the container
+- `grep -qF "$FP_WORKTREE"` checks that the PR's worktree is one of them — fails if the container is serving from main or another PR's directory
+
+This gives a true mount-correct health signal without touching compose.yml.
+
 ## Agent-Context Manifest
 
 `fp agent-context --json` returns a machine-readable manifest:
