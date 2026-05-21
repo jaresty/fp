@@ -308,6 +308,23 @@ enum FeatureCommands {
 
 #[derive(Subcommand)]
 enum AppCommands {
+    /// Define (create or update) a named app config with lifecycle commands
+    DefineConfig {
+        /// Name for this config (e.g. payments-api)
+        name: String,
+        /// Command to start the app
+        #[arg(long)]
+        bootstrap: String,
+        /// Command to stop the app
+        #[arg(long)]
+        teardown: String,
+        /// How long to wait for startup (e.g. 60s)
+        #[arg(long, default_value = "60s")]
+        startup_timeout: String,
+        /// Optional health-check command (exit 0 = healthy)
+        #[arg(long)]
+        health_check: Option<String>,
+    },
     /// Assign a named app config to all PRs on a repo
     SetConfig {
         /// Repository slug (e.g. acme/payments-api)
@@ -528,6 +545,10 @@ fn main() -> Result<()> {
         Commands::App { subcommand } => {
             let store = app_config::AppConfigStore::open(app_config::AppConfigStore::default_path()?);
             match subcommand {
+                AppCommands::DefineConfig { name, bootstrap, teardown, startup_timeout, health_check } => {
+                    let out = commands::cmd_app_define_config(&store, &name, &bootstrap, &teardown, &startup_timeout, health_check.as_deref())?;
+                    println!("{}", out);
+                }
                 AppCommands::SetConfig { repo, config_name } => {
                     let out = commands::cmd_app_set_config(&store, &repo, &config_name)?;
                     println!("{}", out);

@@ -1490,4 +1490,43 @@ mod tests {
         assert!(result.unwrap().contains("my-feature"),
             "cmd_feature_list output must contain 'my-feature'");
     }
+
+    // CLI: fp app define-config stores all config fields
+    #[test]
+    fn cmd_app_define_config_governs_stores_all_fields() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = crate::app_config::AppConfigStore::open(dir.path().join("config.toml"));
+        let result = crate::commands::cmd_app_define_config(
+            &store, "payments-api",
+            "docker-compose up -d",
+            "docker-compose down",
+            "60s",
+            None,
+        );
+        assert!(result.is_ok(), "cmd_app_define_config must succeed: {:?}", result);
+        let cfg = store.load_app_config("payments-api").unwrap().unwrap();
+        assert_eq!(cfg.bootstrap, "docker-compose up -d",
+            "cmd_app_define_config must store bootstrap, got: {:?}", cfg.bootstrap);
+        assert_eq!(cfg.teardown, "docker-compose down",
+            "cmd_app_define_config must store teardown, got: {:?}", cfg.teardown);
+        assert_eq!(cfg.startup_timeout, "60s",
+            "cmd_app_define_config must store startup_timeout, got: {:?}", cfg.startup_timeout);
+        assert_eq!(cfg.health_check, None,
+            "cmd_app_define_config must store None health_check, got: {:?}", cfg.health_check);
+    }
+
+    // CLI: fp app define-config stores optional health_check
+    #[test]
+    fn cmd_app_define_config_governs_stores_health_check() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = crate::app_config::AppConfigStore::open(dir.path().join("config.toml"));
+        crate::commands::cmd_app_define_config(
+            &store, "svc",
+            "npm start", "pkill node", "30s",
+            Some("curl -f http://localhost:3000/health"),
+        ).unwrap();
+        let cfg = store.load_app_config("svc").unwrap().unwrap();
+        assert_eq!(cfg.health_check, Some("curl -f http://localhost:3000/health".into()),
+            "cmd_app_define_config must store health_check, got: {:?}", cfg.health_check);
+    }
 }

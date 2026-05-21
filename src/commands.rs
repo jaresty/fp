@@ -771,3 +771,21 @@ pub fn cmd_feature_add(ps: &crate::process_store::ProcessStateStore, store: &cra
     crate::feature::feature_add(ps, store, name, pr)?;
     Ok(format!("Added PR #{} to feature '{}'", pr, name))
 }
+
+pub fn cmd_app_define_config(
+    store: &crate::app_config::AppConfigStore,
+    name: &str,
+    bootstrap: &str,
+    teardown: &str,
+    startup_timeout: &str,
+    health_check: Option<&str>,
+) -> anyhow::Result<String> {
+    store.save_app_config(crate::app_config::AppConfig {
+        name: name.to_string(),
+        bootstrap: bootstrap.to_string(),
+        teardown: teardown.to_string(),
+        startup_timeout: startup_timeout.to_string(),
+        health_check: health_check.map(str::to_string),
+    })?;
+    Ok(format!("Defined app config '{}'", name))
+}

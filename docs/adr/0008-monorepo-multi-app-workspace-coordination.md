@@ -59,6 +59,20 @@ startup_timeout = "30s"
 Config is per-fp-operator, not per-team. Two developers can have different `payments-api`
 configs reflecting their local environment.
 
+#### Definition
+
+A named config is created or updated with its lifecycle commands:
+
+```
+fp app define-config <name> \
+  --bootstrap  "docker-compose up -d" \
+  --teardown   "docker-compose down" \
+  --startup-timeout 60s \
+  --health-check "curl -f http://localhost:8080/health"   # optional
+```
+
+This writes a `[configs.<name>]` entry to `~/.fp/config.toml`. Re-running with the same name overwrites the previous definition. `--health-check` is optional; omit it to use automatic detection.
+
 #### Assignment
 
 A named config is assigned to a repo, and inherited by all PRs on that repo:
