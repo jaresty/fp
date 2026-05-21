@@ -101,19 +101,25 @@ fp pr set-config <pr#>   <config-name>      # override for one specific PR
 A feature envelope is a named set of PRs that fp activates together for local testing.
 
 ```
-fp feature new <name>              # create a feature envelope
-fp feature add <name> <pr#>        # add a PR to the feature (auto-tracks if not tracked)
-fp feature up   <name>             # bootstrap all PRs in the feature
-fp feature down <name>             # tear down all PRs in the feature
-fp feature list                    # list features and their member PRs
-fp feature list --running          # list only features with live instances
-fp feature status <name>           # health-check all members
-fp feature rebuild <name>          # re-run bootstrap for ephemeral members (no teardown)
-fp feature rebuild <name> --pr <n> # rebuild one specific PR in the feature
+fp feature new <name>                       # create a feature envelope
+fp feature add <name> <pr#>                 # add a PR to the feature (auto-tracks if not tracked)
+fp feature add-dep <name> <app-config>      # add a baseline app config dependency (no PR)
+fp feature up   <name>                      # bootstrap all PRs and baseline deps
+fp feature down <name>                      # tear down all PRs and baseline deps
+fp feature list                             # list features and their member PRs
+fp feature list --running                   # list only features with live instances
+fp feature status <name>                    # health-check all members and baseline deps
+fp feature rebuild <name>                   # re-run bootstrap for ephemeral members (no teardown)
+fp feature rebuild <name> --pr <n>          # rebuild one specific PR in the feature
 ```
 
 `fp feature add` automatically tracks any untracked PR before adding it to the envelope.
 This removes the requirement that users run `fp track` separately before building a feature.
+
+`fp feature add-dep` declares that an app config must run for this feature even though no
+PR in this feature owns it. The app config's `main_worktree` is used as the worktree.
+This is the mechanism for baseline services (unchanged dependencies) and is also how
+`fp feature up` knows to restart a service off `main` after the PR for it merges.
 
 **Single-member envelopes** are permitted. They carry the same lifecycle tracking, health
 checking, and conflict detection as multi-member envelopes. `fp pr up <pr#>` is syntactic
@@ -190,6 +196,12 @@ This ADR requires a new **process state store** alongside the existing store, pe
 - The expected branch name at activation time (for branch-drift detection)
 - The PID of the bootstrap process group (for direct-process liveness)
 - The feature envelope each PR belongs to (if any)
+- **Per-envelope app config dependency list** — the set of app config names the envelope
+  requires, independent of which PRs own them; used by `fp feature up` to start
+  main-worktree instances for slots with no live PR member (baseline services and
+  post-merge continuity); stored as `envelope_deps: HashMap<String, Vec<String>>` in the
+  process state JSON, where the key is the envelope name and the value is the list of
+  app config names declared via `fp feature add-dep`
 
 This is a lightweight append-only file (e.g. `~/.fp/process-state.json`) separate from
 the main store to isolate volatile runtime state from stable PR metadata. It is read by
@@ -638,10 +650,14 @@ is now populated on activation. Feature envelope create/add/list also ships here
 
 Deliverables:
 - `fp feature new <name>` / `fp feature add <name> <pr#>` / `fp feature list`
+- `fp feature add-dep <name> <app-config>` — declare a baseline app config dependency
 - `fp feature up <name>` / `fp feature down <name>` — bootstrap/teardown all members
+  and baseline deps (main-worktree instances for slots with no live PR)
 - `fp pr up <pr#>` — single-PR shorthand
 - `fp feature rebuild <name> [--pr <n>]` — re-run bootstrap for ephemeral members without teardown
 - Ephemeral app support (`ephemeral = true` in app config; health_check-based status)
+- `main_worktree` field on `AppConfig` — worktree used when no PR owns the slot
+- `envelope_deps` in process state — per-envelope app config dependency list
 - CLI wiring for all of the above in `main.rs` with org/repo slug and worktree resolution
 
 **Stage 3 — `fp feature status` and `fp feature list --running`** *(new read surface)*
