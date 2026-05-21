@@ -5,7 +5,7 @@ fn setup_repo() -> TempDir {
     let dir = TempDir::new().unwrap();
     let p = dir.path();
     let git = |args: &[&str]| Command::new("git").args(args).current_dir(p).output().unwrap();
-    git(&["init"]);
+    git(&["init", "-b", "main"]);
     git(&["config", "user.email", "t@t.com"]);
     git(&["config", "user.name", "T"]);
     std::fs::write(p.join("f"), "x").unwrap();
