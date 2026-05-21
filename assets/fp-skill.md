@@ -54,10 +54,24 @@ fp comment <pr> "<text>"                # post top-level PR comment (not a threa
 # Stack management
 fp rebase-stack                         # rebase each tracked branch onto parent tip
 fp merge <pr>                           # merge PR via GitHub API, auto-detect merge method,
-                                        # rebase full downstream stack after merge
+                                        # rebase full downstream stack after merge;
+                                        # removes PR from its feature envelope automatically
 fp merge <pr> --squash                  # force squash merge
 fp merge <pr> --rebase                  # force rebase merge
 fp merge <pr> --merge                   # force merge commit
+
+# Feature envelopes (multi-PR coordinated workspaces)
+fp feature new <name>                   # create a named feature envelope
+fp feature add <name> <pr> [--config <app>]  # add PR to envelope (optionally bind an app config)
+fp feature add-dep <name> <app>         # declare a baseline app dependency (no PR required)
+fp feature up <name>                    # bootstrap all member PRs (start app processes)
+fp feature down <name>                  # tear down all member PRs (stop app processes)
+fp feature rebuild <name> [--pr <pr>]   # re-run bootstrap for ephemeral members without teardown
+fp feature status <name>                # health of all member PRs; flags merged PRs (GitHub API)
+fp feature list                         # list all envelopes and members
+fp feature list --running               # list envelopes with at least one live instance
+fp feature remove <name> <pr>           # remove a PR from an envelope (deletes envelope if empty)
+                                        # use when PR was merged outside fp merge
 
 # Branch and worktree creation
 fp new <branch> [--base <base>]         # create new branch + worktree without a PR (default base: main)
