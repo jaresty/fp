@@ -17,6 +17,49 @@ pub enum ConflictResult {
     Conflict { blocking_feature: String, blocking_prs: Vec<u64> },
 }
 
+#[derive(Debug, Clone)]
+pub struct PrHealthStatus {
+    pub pr: u64,
+    pub pid_alive: bool,
+    pub service_healthy: Option<bool>,
+    pub branch_ok: bool,
+}
+
+pub fn feature_list_running(ps: &ProcessStateStore) -> Result<Vec<FeatureInfo>> {
+    let state = ps.load()?;
+    let running: Vec<FeatureInfo> = state.feature_envelopes.iter().filter(|name| {
+        state.records.values().any(|r| {
+            r.feature_envelope.as_deref() == Some(name) && r.pid.map(health_check_pid).unwrap_or(false)
+        })
+    }).map(|name| {
+        let prs = state.records.values()
+            .filter(|r| r.feature_envelope.as_deref() == Some(name))
+            .map(|r| r.pr)
+            .collect();
+        FeatureInfo { name: name.clone(), prs }
+    }).collect();
+    Ok(running)
+}
+
+pub fn feature_status(ps: &ProcessStateStore, config: &crate::app_config::AppConfigStore, name: &str) -> Result<Vec<PrHealthStatus>> {
+    let state = ps.load()?;
+    let mut statuses: Vec<PrHealthStatus> = state.records.values()
+        .filter(|r| r.feature_envelope.as_deref() == Some(name))
+        .map(|r| {
+            let pid_alive = r.pid.map(health_check_pid).unwrap_or(false);
+            let worktree = std::path::Path::new(&r.worktree);
+            let branch_ok = health_check_branch(worktree, &r.expected_branch);
+            let service_healthy = config.get_repo_config("").ok().flatten()
+                .and_then(|cfg_name| config.load_app_config(&cfg_name).ok().flatten())
+                .and_then(|cfg| cfg.health_check)
+                .map(|cmd| health_check_service(&cmd, worktree, r.pr, worktree));
+            PrHealthStatus { pr: r.pr, pid_alive, service_healthy, branch_ok }
+        })
+        .collect();
+    statuses.sort_by_key(|s| s.pr);
+    Ok(statuses)
+}
+
 pub fn feature_new(ps: &ProcessStateStore, name: &str) -> Result<()> {
     let mut state = ps.load()?;
     state.feature_envelopes.insert(name.to_string());

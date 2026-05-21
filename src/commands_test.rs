@@ -1515,6 +1515,44 @@ mod tests {
             "cmd_app_define_config must store None health_check, got: {:?}", cfg.health_check);
     }
 
+    // Stage 3: fp feature list --running
+    #[test]
+    fn cmd_feature_list_running_governs_returns_only_live_envelopes() {
+        let dir = tempfile::tempdir().unwrap();
+        let ps = crate::process_store::ProcessStateStore::open(dir.path().join("ps.json"));
+        crate::feature::feature_new(&ps, "dead-feature").unwrap();
+        let result = crate::commands::cmd_feature_list_running(&ps);
+        assert!(result.is_ok(), "cmd_feature_list_running must succeed: {:?}", result);
+        let output = result.unwrap();
+        assert!(!output.contains("dead-feature"),
+            "cmd_feature_list_running must not include envelope with no live PIDs, got: {}", output);
+    }
+
+    // Stage 3: fp feature status
+    #[test]
+    fn cmd_feature_status_governs_returns_health_per_pr() {
+        let dir = tempfile::tempdir().unwrap();
+        let ps = crate::process_store::ProcessStateStore::open(dir.path().join("ps.json"));
+        let app_store = crate::app_config::AppConfigStore::open(dir.path().join("config.toml"));
+        let live_pid = std::process::id();
+        let rec = crate::process_store::ProcessRecord {
+            pr: 123,
+            expected_branch: "feat/pay".into(),
+            pid: Some(live_pid),
+            feature_envelope: Some("auth-refactor".into()),
+            worktree: dir.path().to_string_lossy().to_string(),
+        };
+        ps.activate(rec).unwrap();
+        let mut state = ps.load().unwrap();
+        state.feature_envelopes.insert("auth-refactor".to_string());
+        ps.save_state(state).unwrap();
+        let result = crate::commands::cmd_feature_status(&ps, &app_store, "auth-refactor");
+        assert!(result.is_ok(), "cmd_feature_status must succeed: {:?}", result);
+        let output = result.unwrap();
+        assert!(output.contains("123"),
+            "cmd_feature_status output must contain PR number 123, got: {}", output);
+    }
+
     // CLI: fp app define-config stores optional health_check
     #[test]
     fn cmd_app_define_config_governs_stores_health_check() {

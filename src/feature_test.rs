@@ -1,10 +1,10 @@
 #[cfg(test)]
 mod tests {
     use crate::feature::{
-        feature_new, feature_add, feature_list,
+        feature_new, feature_add, feature_list, feature_list_running, feature_status,
         bootstrap_pr, teardown_pr,
         health_check_branch, health_check_pid, health_check_service,
-        check_conflicts, ConflictResult,
+        check_conflicts, ConflictResult, PrHealthStatus,
     };
     use crate::process_store::{ProcessRecord, ProcessStateStore};
     use crate::app_config::{AppConfig, AppConfigStore};
@@ -201,6 +201,102 @@ mod tests {
         let result = check_conflicts(&ps, "my-feature").unwrap();
         assert!(matches!(result, ConflictResult::NoConflict),
             "check_conflicts must return NoConflict when nothing else is live, got: {:?}", result);
+    }
+
+    // Stage 3: feature_list_running — D11
+    #[test]
+    fn feature_governs_list_running_excludes_envelopes_with_no_live_pid() {
+        let (ps, _dir) = ps_store();
+        feature_new(&ps, "dead-feature").unwrap();
+        let running = feature_list_running(&ps).unwrap();
+        assert!(running.is_empty(),
+            "feature_list_running must exclude envelopes with no live PIDs, got: {:?}", running.iter().map(|f| &f.name).collect::<Vec<_>>());
+    }
+
+    // Stage 3: feature_list_running — D11b
+    #[test]
+    fn feature_governs_list_running_includes_envelope_with_live_pid() {
+        let (ps, _dir) = ps_store();
+        let live_pid = std::process::id();
+        let mut rec = record(77, "feat/foo", "/tmp/wt77");
+        rec.feature_envelope = Some("live-feature".into());
+        rec.pid = Some(live_pid);
+        ps.activate(rec).unwrap();
+        let mut state = ps.load().unwrap();
+        state.feature_envelopes.insert("live-feature".to_string());
+        ps.save_state(state).unwrap();
+        let running = feature_list_running(&ps).unwrap();
+        assert!(running.iter().any(|f| f.name == "live-feature"),
+            "feature_list_running must include 'live-feature' with live PID, got: {:?}", running.iter().map(|f| &f.name).collect::<Vec<_>>());
+    }
+
+    // Stage 3: feature_status — D12
+    #[test]
+    fn feature_governs_status_returns_entry_per_pr() {
+        let (ps, _dir) = ps_store();
+        let (app_store, _app_dir) = app_store();
+        let tmp = tempdir().unwrap();
+        let env = [("GIT_AUTHOR_NAME","t"),("GIT_AUTHOR_EMAIL","t@t"),("GIT_COMMITTER_NAME","t"),("GIT_COMMITTER_EMAIL","t@t")];
+        std::process::Command::new("git").args(["init", "-b", "feat/pay"]).current_dir(tmp.path()).output().unwrap();
+        let mut cmd = std::process::Command::new("git");
+        cmd.args(["commit", "--allow-empty", "-m", "init"]).current_dir(tmp.path());
+        for (k,v) in &env { cmd.env(k,v); }
+        cmd.output().unwrap();
+        let live_pid = std::process::id();
+        let mut rec = record(123, "feat/pay", &tmp.path().to_string_lossy());
+        rec.feature_envelope = Some("auth-refactor".into());
+        rec.pid = Some(live_pid);
+        ps.activate(rec).unwrap();
+        let mut state = ps.load().unwrap();
+        state.feature_envelopes.insert("auth-refactor".to_string());
+        ps.save_state(state).unwrap();
+        let statuses = feature_status(&ps, &app_store, "auth-refactor").unwrap();
+        assert_eq!(statuses.len(), 1,
+            "feature_status must return one entry for PR 123, got: {:?}", statuses.len());
+        assert_eq!(statuses[0].pr, 123);
+    }
+
+    // Stage 3: feature_status — D12b: pid_alive reflects live PID
+    #[test]
+    fn feature_governs_status_pid_alive_true_for_live_pid() {
+        let (ps, _dir) = ps_store();
+        let (app_store, _app_dir) = app_store();
+        let tmp = tempdir().unwrap();
+        let live_pid = std::process::id();
+        let mut rec = record(123, "feat/pay", &tmp.path().to_string_lossy());
+        rec.feature_envelope = Some("auth-refactor".into());
+        rec.pid = Some(live_pid);
+        ps.activate(rec).unwrap();
+        let mut state = ps.load().unwrap();
+        state.feature_envelopes.insert("auth-refactor".to_string());
+        ps.save_state(state).unwrap();
+        let statuses = feature_status(&ps, &app_store, "auth-refactor").unwrap();
+        assert!(statuses[0].pid_alive,
+            "feature_status must report pid_alive=true for live PID {}", live_pid);
+    }
+
+    // Stage 3: feature_status — D12c: branch_ok true when HEAD matches expected
+    #[test]
+    fn feature_governs_status_branch_ok_when_head_matches_expected() {
+        let (ps, _dir) = ps_store();
+        let (app_store, _app_dir) = app_store();
+        let tmp = tempdir().unwrap();
+        let env = [("GIT_AUTHOR_NAME","t"),("GIT_AUTHOR_EMAIL","t@t"),("GIT_COMMITTER_NAME","t"),("GIT_COMMITTER_EMAIL","t@t")];
+        std::process::Command::new("git").args(["init", "-b", "feat/pay"]).current_dir(tmp.path()).output().unwrap();
+        let mut cmd = std::process::Command::new("git");
+        cmd.args(["commit", "--allow-empty", "-m", "init"]).current_dir(tmp.path());
+        for (k,v) in &env { cmd.env(k,v); }
+        cmd.output().unwrap();
+        let mut rec = record(123, "feat/pay", &tmp.path().to_string_lossy());
+        rec.feature_envelope = Some("auth-refactor".into());
+        rec.pid = None;
+        ps.activate(rec).unwrap();
+        let mut state = ps.load().unwrap();
+        state.feature_envelopes.insert("auth-refactor".to_string());
+        ps.save_state(state).unwrap();
+        let statuses = feature_status(&ps, &app_store, "auth-refactor").unwrap();
+        assert!(statuses[0].branch_ok,
+            "feature_status must report branch_ok=true when HEAD is feat/pay");
     }
 
     // D10b: check_conflicts returns Conflict when another envelope has a live record

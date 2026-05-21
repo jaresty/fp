@@ -303,7 +303,16 @@ enum FeatureCommands {
     /// Add a PR to a feature envelope (auto-tracks if untracked)
     Add { name: String, pr: u64 },
     /// List feature envelopes and their member PRs
-    List,
+    List {
+        /// Show only envelopes with at least one live instance
+        #[arg(long)]
+        running: bool,
+    },
+    /// Show health status of all member PRs in a feature envelope
+    Status {
+        /// Feature envelope name
+        name: String,
+    },
 }
 
 #[derive(Subcommand)]
@@ -535,8 +544,17 @@ fn main() -> Result<()> {
                     let out = commands::cmd_feature_add(&ps, &store, &name, pr)?;
                     println!("{}", out);
                 }
-                FeatureCommands::List => {
-                    let out = commands::cmd_feature_list(&ps)?;
+                FeatureCommands::List { running } => {
+                    let out = if running {
+                        commands::cmd_feature_list_running(&ps)?
+                    } else {
+                        commands::cmd_feature_list(&ps)?
+                    };
+                    println!("{}", out);
+                }
+                FeatureCommands::Status { name } => {
+                    let app_store = app_config::AppConfigStore::open(app_config::AppConfigStore::default_path()?);
+                    let out = commands::cmd_feature_status(&ps, &app_store, &name)?;
                     println!("{}", out);
                 }
             }

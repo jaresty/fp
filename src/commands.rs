@@ -767,6 +767,42 @@ pub fn cmd_feature_list(ps: &crate::process_store::ProcessStateStore) -> anyhow:
     Ok(out.trim_end().to_string())
 }
 
+pub fn cmd_feature_list_running(ps: &crate::process_store::ProcessStateStore) -> anyhow::Result<String> {
+    let list = crate::feature::feature_list_running(ps)?;
+    if list.is_empty() {
+        return Ok("No running feature envelopes.".to_string());
+    }
+    let mut out = String::new();
+    for f in &list {
+        out.push_str(&format!("  {} ({} PR(s)): {}\n", f.name, f.prs.len(),
+            f.prs.iter().map(|p| format!("#{}", p)).collect::<Vec<_>>().join(", ")));
+    }
+    Ok(out.trim_end().to_string())
+}
+
+pub fn cmd_feature_status(
+    ps: &crate::process_store::ProcessStateStore,
+    config: &crate::app_config::AppConfigStore,
+    name: &str,
+) -> anyhow::Result<String> {
+    let statuses = crate::feature::feature_status(ps, config, name)?;
+    if statuses.is_empty() {
+        return Ok(format!("Feature '{}' has no member PRs.", name));
+    }
+    let mut out = String::new();
+    for s in &statuses {
+        let pid = if s.pid_alive { "✓ running" } else { "✗ stopped" };
+        let branch = if s.branch_ok { "✓ branch ok" } else { "✗ wrong branch" };
+        let health = match s.service_healthy {
+            Some(true) => " ✓ healthy",
+            Some(false) => " ✗ unhealthy",
+            None => "",
+        };
+        out.push_str(&format!("  PR #{}  {}{}  {}\n", s.pr, pid, health, branch));
+    }
+    Ok(out.trim_end().to_string())
+}
+
 pub fn cmd_feature_add(ps: &crate::process_store::ProcessStateStore, store: &crate::store::Store, name: &str, pr: u64) -> anyhow::Result<String> {
     crate::feature::feature_add(ps, store, name, pr)?;
     Ok(format!("Added PR #{} to feature '{}'", pr, name))
