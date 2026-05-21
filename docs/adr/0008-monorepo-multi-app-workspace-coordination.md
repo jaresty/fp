@@ -107,6 +107,8 @@ fp feature down <name>             # tear down all PRs in the feature
 fp feature list                    # list features and their member PRs
 fp feature list --running          # list only features with live instances
 fp feature status <name>           # health-check all members
+fp feature rebuild <name>          # re-run bootstrap for ephemeral members (no teardown)
+fp feature rebuild <name> --pr <n> # rebuild one specific PR in the feature
 ```
 
 `fp feature add` automatically tracks any untracked PR before adding it to the envelope.
@@ -293,6 +295,30 @@ extensions, compiled artifacts, etc.), declare `ephemeral = true`. fp will:
   required when `ephemeral = true`; fp rejects the config without it)
 - Report `✓ installed` / `✗ not installed` in `fp feature status` instead of running/stopped
 - Include ephemeral members in `fp feature list --running` when their `health_check` passes
+
+#### Rebuild
+
+When iterating on an ephemeral app (editing code, then reinstalling), a full teardown +
+bootstrap would discard browser/app state (extension storage, session data, open tabs).
+`fp feature rebuild` re-runs `bootstrap` without running `teardown` first:
+
+```
+fp feature rebuild auth-refactor           # rebuild all ephemeral members
+fp feature rebuild auth-refactor --pr 789  # rebuild one PR
+```
+
+Behaviour:
+- **Ephemeral members**: re-runs `bootstrap`; overwrites the install target in place; updates
+  `installed_at` timestamp in the process state store; reports exit code of bootstrap
+- **Persistent members**: rejected with error "PR #N uses a persistent app config — use
+  `fp feature down` + `fp feature up` instead"; does not run bootstrap
+- If the feature has a mix of ephemeral and persistent members, `rebuild` applies only to
+  the ephemeral ones (persistent members are skipped with a per-member warning unless
+  `--pr` targets one explicitly, in which case it errors)
+
+`rebuild` assumes the bootstrap command is idempotent for the install target (i.e. an
+overwrite-in-place is safe). If the target requires teardown to clean state first, the
+user should run `fp feature down && fp feature up` instead.
 
 ---
 
