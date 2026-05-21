@@ -48,7 +48,7 @@ bootstrap       = "docker-compose up -d"
 teardown        = "docker-compose down"
 startup_timeout = "60s"
 # health_check omitted → fp uses automatic detection (see Health Check section)
-# fallback_worktree omitted → when the PR merges, the slot is left empty
+# main_worktree omitted → slot is left empty when no PR owns it or after merge
 
 [app-configs.checkout-service]
 bootstrap       = "npm start"
@@ -323,65 +323,69 @@ user should run `fp feature down && fp feature up` instead.
 
 ---
 
-### Partial Merge and Fallback Worktrees
+### Main-Worktree Baseline and Partial-Merge Continuity
 
-When a feature envelope has multiple member PRs and one merges before the others, the
-remaining members still need all services running. The merged PR's service slot would
-otherwise go dark, breaking the integration test environment for the PRs still in review.
+Two distinct situations require a service to run off `main` rather than a PR worktree:
 
-**The problem in concrete terms:**
+1. **Baseline** — the service has no PR in this feature at all (e.g. notifications-svc is
+   unchanged but checkout-svc depends on it). The slot needs filling from the start.
 
-Feature `auth-refactor` has two members:
-- PR #123 — payments-api (owns the checkout flow changes)
-- PR #456 — checkout-svc (depends on the updated payments-api contract)
+2. **Post-merge continuity** — a PR in the feature merges before the others. The slot goes
+   dark unless something fills it.
 
-PR #123 merges. The payments-api worktree is removed by `fp merge` cleanup. PR #456 is
-still in review and checkout-svc is still running — but now the payments-api it depends
-on is gone.
+Both cases have the same resolution: run the app config against a fixed `main`-branch
+worktree. They are unified into a single field.
 
-**Solution: `fallback_worktree` on app config**
-
-Each app config may declare a `fallback_worktree` — a path to a worktree (typically the
-main-branch worktree) that fp should bootstrap when the PR owning this service slot merges:
+#### `main_worktree` on app config
 
 ```toml
 [app-configs.payments-api]
-bootstrap         = "docker-compose up -d"
-teardown          = "docker-compose down"
-startup_timeout   = "60s"
-fallback_worktree = "~/repos/payments-api"   # main-branch worktree to use after merge
+bootstrap      = "docker-compose up -d"
+teardown       = "docker-compose down"
+startup_timeout = "60s"
+main_worktree  = "~/repos/payments-api"   # run off main when no PR owns this slot
 ```
 
-When `fp merge` removes PR #123 from `auth-refactor`, fp checks whether the envelope has
-remaining members. If it does, and the merged PR's app config declares a `fallback_worktree`:
+`main_worktree` declares the path fp uses whenever the app config's slot in an envelope
+has no live PR instance — whether because there was never a PR for this service, or because
+the PR merged. It is omitted when the service should only run from a PR worktree.
 
-1. fp tears down the PR #123 instance
-2. fp bootstraps the same app config against `fallback_worktree` instead
-3. The fallback instance is recorded in the process state store under a sentinel PR number
-   (`0`) with `worktree = fallback_worktree` and `feature_envelope = "auth-refactor"`
-4. `fp feature status auth-refactor` shows it as `(main) payments-api ✓ running ✓ healthy`
+#### When fp starts a main-worktree instance
 
-**Fallback lifecycle:**
+`fp feature up` checks each app config referenced by any envelope member. For any config
+that declares `main_worktree` and has no live PR instance in the envelope, fp bootstraps
+that config against `main_worktree`. This covers both cases:
 
-- The fallback instance runs until the entire envelope is torn down (`fp feature down`) or
-  the last remaining member PR merges (at which point fp tears down the fallback too)
-- `fp feature up` starts fallback instances for any app config slots that have no live PR
-  member but declare a `fallback_worktree`
-- Fallback instances are excluded from conflict detection — they are not "owned" by a PR
+- **Baseline** (no PR ever): `fp feature up` starts the main instance alongside the PR instances
+- **Post-merge** (`fp merge` removes the last PR for this config): fp tears down the PR
+  instance and immediately bootstraps `main_worktree` if the envelope has remaining members
+
+Main-worktree instances are recorded in the process state store under sentinel PR number
+`0`, with `worktree = main_worktree` and `feature_envelope = <name>`.
+
+#### Lifecycle rules
+
+- Main-worktree instances are started and stopped with the envelope — `fp feature up/down`
+  manages them alongside PR instances
+- They are **excluded from conflict detection** — they are dependencies, not owned instances,
   and cannot block another envelope from starting
+- `fp feature rebuild` applies to ephemeral main-worktree instances the same as PR instances
+- When the last PR member of an envelope merges, fp tears down all main-worktree instances
+  for that envelope along with the final PR instance
 
-**When `fallback_worktree` is omitted:**
+#### When `main_worktree` is omitted
 
 fp removes the merged PR from the envelope and emits a warning that the service slot is
 now empty. The remaining members continue running; the user is responsible for starting
-the dependency manually. This matches the current Stage 7 behavior and is the safe default.
+the dependency manually. This is the safe default — no implicit behavior.
 
-**`fp feature status` output with a fallback running:**
+#### `fp feature status` output with main-worktree instances
 
 ```
 $ fp feature status auth-refactor
-  (main)  payments-api   ✓ running  ✓ healthy   — (fallback after PR #123 merged)
-  PR #456 checkout-svc   ✓ running  ✓ healthy   ✓ branch ok
+  (main)  notifications-svc  ✓ running  ✓ healthy   — (baseline, no PR)
+  (main)  payments-api       ✓ running  ✓ healthy   — (main after PR #123 merged)
+  PR #456 checkout-svc       ✓ running  ✓ healthy   ✓ branch ok
 ```
 
 ---
@@ -661,9 +665,9 @@ The rebase logic is unchanged.
 **Stage 7 — `fp merge` envelope cleanup** *(existing command modification with failure isolation)*
 Add post-merge envelope cleanup with hard failure isolation: merge exit code is never
 affected by envelope write failures. Validation of closed-PR members in `fp feature status`
-covers the gap for merges performed outside `fp merge`. If the merged PR's app config
-declares a `fallback_worktree` and the envelope has remaining members, fp bootstraps the
-fallback instance before removing the PR record (see Partial Merge and Fallback Worktrees).
+covers the gap for merges performed outside `fp merge`. If the merged PR's app config declares a `main_worktree` and the envelope has remaining
+members, fp bootstraps the main-worktree instance before removing the PR record
+(see Main-Worktree Baseline and Partial-Merge Continuity).
 
 ### Deferred (not part of initial delivery)
 
