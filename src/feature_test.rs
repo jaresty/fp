@@ -663,4 +663,40 @@ mod tests {
         assert!(running.is_empty(),
             "feature must not appear running when derived worktree absent (must not fall back to rec.worktree): {:?}", running);
     }
+
+    #[test]
+    fn bootstrap_pr_governs_preserves_feature_envelope_and_app_config_names_on_existing_record() {
+        let (ps, _dir) = ps_store();
+        let wt = tempfile::tempdir().unwrap();
+        // Pre-populate record with feature_envelope and app_config_names
+        let existing = crate::process_store::ProcessRecord {
+            pr: 55,
+            expected_branch: "feat/x".into(),
+            pid: None,
+            feature_envelope: Some("my-feat".into()),
+            worktree: wt.path().to_string_lossy().to_string(),
+            app_config_names: vec!["svc".into()],
+        };
+        ps.activate(existing).unwrap();
+        let cfg = crate::app_config::AppConfig {
+            name: "svc".into(),
+            bootstrap: "true".into(),
+            teardown: "true".into(),
+            startup_timeout: "1s".into(),
+            health_check: None,
+            ephemeral: false,
+            main_worktree: None,
+        };
+        bootstrap_pr(&ps, &cfg, 55, wt.path(), "org", "repo").unwrap();
+        let state = ps.load().unwrap();
+        let rec = &state.records[&55];
+        assert_eq!(rec.feature_envelope.as_deref(), Some("my-feat"),
+            "bootstrap_pr must not overwrite feature_envelope on existing record, got: {:?}", rec.feature_envelope);
+        assert_eq!(rec.app_config_names, vec!["svc"],
+            "bootstrap_pr must not overwrite app_config_names on existing record, got: {:?}", rec.app_config_names);
+        assert_eq!(rec.expected_branch, "feat/x",
+            "bootstrap_pr must not overwrite expected_branch on existing record, got: {:?}", rec.expected_branch);
+        assert!(rec.pid.is_some(), "bootstrap_pr must set pid on existing record");
+        if let Some(pid) = rec.pid { unsafe { libc::kill(pid as libc::pid_t, libc::SIGTERM); } }
+    }
 }

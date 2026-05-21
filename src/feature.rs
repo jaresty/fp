@@ -293,14 +293,18 @@ pub fn bootstrap_pr(ps: &ProcessStateStore, config: &AppConfig, pr: u64, worktre
         .process_group(0)
         .spawn()?;
     let pid = child.id();
-    ps.activate(ProcessRecord {
+    let mut state = ps.load()?;
+    let rec = state.records.entry(pr).or_insert_with(|| ProcessRecord {
         pr,
         expected_branch: String::new(),
-        pid: Some(pid),
+        pid: None,
         feature_envelope: None,
-        worktree: worktree.to_string_lossy().to_string(),
+        worktree: String::new(),
         app_config_names: vec![],
-    })
+    });
+    rec.pid = Some(pid);
+    rec.worktree = worktree.to_string_lossy().to_string();
+    ps.save_state(state)
 }
 
 pub fn teardown_pr(ps: &ProcessStateStore, config: &AppConfig, pr: u64, worktree: &Path, org: &str, repo: &str) -> Result<()> {
