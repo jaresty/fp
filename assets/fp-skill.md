@@ -60,6 +60,19 @@ fp merge <pr> --squash                  # force squash merge
 fp merge <pr> --rebase                  # force rebase merge
 fp merge <pr> --merge                   # force merge commit
 
+# App lifecycle configs (define how to start/stop/health-check an app)
+fp app define-config <name> \
+  --bootstrap "<cmd>" \                 # command to start the app in its worktree
+  --teardown "<cmd>" \                  # command to stop the app
+  --startup-timeout <dur> \             # how long to wait for startup (default: 60s)
+  [--health-check "<cmd>"] \            # optional: exit 0 = healthy
+  [--ephemeral] \                       # app exits immediately after install (health-check required)
+  [--main-worktree <path>]              # path to use when no PR owns this config slot
+fp app set-config <owner/repo> <name>   # assign a named app config to all PRs in a repo
+
+# Single-PR app lifecycle
+fp pr up <pr>                           # bootstrap the app for a single PR (uses its bound app config)
+
 # Feature envelopes (multi-PR coordinated workspaces)
 fp feature new <name>                   # create a named feature envelope
 fp feature add <name> <pr> [--config <app>]  # add PR to envelope (optionally bind an app config)
