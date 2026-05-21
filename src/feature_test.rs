@@ -54,7 +54,7 @@ mod tests {
     /// `worktree_path(repo_path, branch)`. Returns the derived worktree path.
     fn setup_git_worktree(repo_path: &std::path::Path, branch: &str) -> std::path::PathBuf {
         use std::process::Command;
-        Command::new("git").args(["init", repo_path.to_str().unwrap()]).output().unwrap();
+        Command::new("git").args(["init", "-b", "main", repo_path.to_str().unwrap()]).output().unwrap();
         for arg in &[["config","user.email","t@t.com"],["config","user.name","T"]] {
             Command::new("git").args(["-C", repo_path.to_str().unwrap()]).args(arg).output().unwrap();
         }
@@ -517,7 +517,7 @@ mod tests {
         use std::process::Command;
         let tmp = tempfile::tempdir().unwrap();
         let repo = tmp.path().join("repo");
-        Command::new("git").args(["init", repo.to_str().unwrap()]).output().unwrap();
+        Command::new("git").args(["init", "-b", "main", repo.to_str().unwrap()]).output().unwrap();
         for arg in &[["config","user.email","t@t.com"],["config","user.name","T"]] {
             Command::new("git").args(["-C", repo.to_str().unwrap()]).args(arg).output().unwrap();
         }
@@ -566,7 +566,7 @@ mod tests {
         use std::process::Command;
         let tmp = tempfile::tempdir().unwrap();
         let repo = tmp.path().join("repo");
-        Command::new("git").args(["init", repo.to_str().unwrap()]).output().unwrap();
+        Command::new("git").args(["init", "-b", "main", repo.to_str().unwrap()]).output().unwrap();
         for arg in &[["config","user.email","t@t.com"],["config","user.name","T"]] {
             Command::new("git").args(["-C", repo.to_str().unwrap()]).args(arg).output().unwrap();
         }
@@ -616,7 +616,7 @@ mod tests {
         // Set up: repo with two branches; correct worktree at derived path, wrong worktree at rec.worktree
         let tmp = tempfile::tempdir().unwrap();
         let repo = tmp.path().join("repo");
-        Command::new("git").args(["init", repo.to_str().unwrap()]).output().unwrap();
+        Command::new("git").args(["init", "-b", "main", repo.to_str().unwrap()]).output().unwrap();
         for arg in &[["config","user.email","t@t.com"],["config","user.name","T"]] {
             Command::new("git").args(["-C", repo.to_str().unwrap()]).args(arg).output().unwrap();
         }

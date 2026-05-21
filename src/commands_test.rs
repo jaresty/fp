@@ -1754,7 +1754,7 @@ mod tests {
         use std::process::Command;
         let tmp = tempfile::tempdir().unwrap();
         let repo = tmp.path().join("repo");
-        Command::new("git").args(["init", repo.to_str().unwrap()]).output().unwrap();
+        Command::new("git").args(["init", "-b", "main", repo.to_str().unwrap()]).output().unwrap();
         for arg in &[["config","user.email","t@t.com"],["config","user.name","T"]] {
             Command::new("git").args(["-C", repo.to_str().unwrap()]).args(arg).output().unwrap();
         }
@@ -1834,7 +1834,7 @@ mod tests {
         use std::process::Command;
         let tmp = tempfile::tempdir().unwrap();
         let repo = tmp.path().join("repo");
-        Command::new("git").args(["init", repo.to_str().unwrap()]).output().unwrap();
+        Command::new("git").args(["init", "-b", "main", repo.to_str().unwrap()]).output().unwrap();
         for arg in &[["config","user.email","t@t.com"],["config","user.name","T"]] {
             Command::new("git").args(["-C", repo.to_str().unwrap()]).args(arg).output().unwrap();
         }
@@ -2207,7 +2207,7 @@ mod tests {
         use std::process::Command;
         let tmp = tempfile::tempdir().unwrap();
         let repo = tmp.path().join("repo");
-        Command::new("git").args(["init", repo.to_str().unwrap()]).output().unwrap();
+        Command::new("git").args(["init", "-b", "main", repo.to_str().unwrap()]).output().unwrap();
         for arg in &[["config","user.email","t@t.com"],["config","user.name","T"]] {
             Command::new("git").args(["-C", repo.to_str().unwrap()]).args(arg).output().unwrap();
         }
