@@ -302,6 +302,8 @@ enum FeatureCommands {
     New { name: String },
     /// Add a PR to a feature envelope (auto-tracks if untracked)
     Add { name: String, pr: u64 },
+    /// Declare a baseline app config dependency (no PR required)
+    AddDep { name: String, app_config: String },
     /// List feature envelopes and their member PRs
     List {
         /// Show only envelopes with at least one live instance
@@ -357,6 +359,9 @@ enum AppCommands {
         /// App exits immediately after install (e.g. Chrome extension); health-check required
         #[arg(long, default_value_t = false)]
         ephemeral: bool,
+        /// Path to the main worktree to use when no PR owns this app config slot
+        #[arg(long)]
+        main_worktree: Option<String>,
     },
     /// Assign a named app config to all PRs on a repo
     SetConfig {
@@ -369,6 +374,14 @@ enum AppCommands {
 
 #[derive(Subcommand)]
 enum PrCommands {
+    /// Bootstrap the app for a single PR
+    Up {
+        /// PR number
+        pr: u64,
+        /// Path to the worktree for this PR
+        #[arg(long)]
+        worktree: String,
+    },
     /// Override the app config for a specific PR
     SetConfig {
         /// PR number
@@ -596,14 +609,18 @@ fn main() -> Result<()> {
                     let out = commands::cmd_feature_rebuild(&ps, &app_store, &name, pr)?;
                     println!("{}", out);
                 }
+                FeatureCommands::AddDep { name, app_config } => {
+                    let out = commands::cmd_feature_add_dep(&ps, &name, &app_config)?;
+                    println!("{}", out);
+                }
             }
         }
 
         Commands::App { subcommand } => {
             let store = app_config::AppConfigStore::open(app_config::AppConfigStore::default_path()?);
             match subcommand {
-                AppCommands::DefineConfig { name, bootstrap, teardown, startup_timeout, health_check, ephemeral } => {
-                    let out = commands::cmd_app_define_config(&store, &name, &bootstrap, &teardown, &startup_timeout, health_check.as_deref(), ephemeral)?;
+                AppCommands::DefineConfig { name, bootstrap, teardown, startup_timeout, health_check, ephemeral, main_worktree } => {
+                    let out = commands::cmd_app_define_config(&store, &name, &bootstrap, &teardown, &startup_timeout, health_check.as_deref(), ephemeral, main_worktree.as_deref())?;
                     println!("{}", out);
                 }
                 AppCommands::SetConfig { repo, config_name } => {
@@ -616,6 +633,11 @@ fn main() -> Result<()> {
         Commands::Pr { subcommand } => {
             let store = app_config::AppConfigStore::open(app_config::AppConfigStore::default_path()?);
             match subcommand {
+                PrCommands::Up { pr, worktree } => {
+                    let ps = process_store::ProcessStateStore::open(process_store::ProcessStateStore::default_path()?);
+                    let out = commands::cmd_pr_up(&ps, &store, pr, &worktree)?;
+                    println!("{}", out);
+                }
                 PrCommands::SetConfig { pr, config_name } => {
                     let out = commands::cmd_pr_set_config(&store, pr, &config_name)?;
                     println!("{}", out);

@@ -830,11 +830,27 @@ pub fn cmd_feature_status(
     Ok(out.trim_end().to_string())
 }
 
+pub fn cmd_pr_up(ps: &crate::process_store::ProcessStateStore, config: &crate::app_config::AppConfigStore, pr: u64, worktree: &str) -> anyhow::Result<String> {
+    let app_cfg_name = config.get_pr_config(pr)?;
+    let cfg = app_cfg_name.as_deref()
+        .and_then(|n| config.load_app_config(n).ok().flatten())
+        .ok_or_else(|| anyhow::anyhow!("no app config assigned to PR #{}", pr))?;
+    let wt = std::path::Path::new(worktree);
+    crate::feature::bootstrap_pr(ps, &cfg, pr, wt, "", "")?;
+    Ok(format!("PR #{}: started ({})", pr, cfg.name))
+}
+
+pub fn cmd_feature_add_dep(ps: &crate::process_store::ProcessStateStore, name: &str, app_config: &str) -> anyhow::Result<String> {
+    crate::feature::feature_add_dep(ps, name, app_config)?;
+    Ok(format!("Added dep '{}' to feature '{}'", app_config, name))
+}
+
 pub fn cmd_feature_add(ps: &crate::process_store::ProcessStateStore, store: &crate::store::Store, name: &str, pr: u64) -> anyhow::Result<String> {
     crate::feature::feature_add(ps, store, name, pr)?;
     Ok(format!("Added PR #{} to feature '{}'", pr, name))
 }
 
+#[allow(clippy::too_many_arguments)]
 pub fn cmd_app_define_config(
     store: &crate::app_config::AppConfigStore,
     name: &str,
@@ -843,6 +859,7 @@ pub fn cmd_app_define_config(
     startup_timeout: &str,
     health_check: Option<&str>,
     ephemeral: bool,
+    main_worktree: Option<&str>,
 ) -> anyhow::Result<String> {
     store.save_app_config(crate::app_config::AppConfig {
         name: name.to_string(),
@@ -851,6 +868,7 @@ pub fn cmd_app_define_config(
         startup_timeout: startup_timeout.to_string(),
         health_check: health_check.map(str::to_string),
         ephemeral,
+        main_worktree: main_worktree.map(str::to_string),
     })?;
     Ok(format!("Defined app config '{}'", name))
 }

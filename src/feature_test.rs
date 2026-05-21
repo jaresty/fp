@@ -1,8 +1,8 @@
 #[cfg(test)]
 mod tests {
     use crate::feature::{
-        feature_new, feature_add, feature_list, feature_list_running, feature_list_running_with_config,
-        feature_status, bootstrap_pr, teardown_pr,
+        feature_new, feature_add, feature_add_dep, feature_list, feature_list_running,
+        feature_list_running_with_config, feature_status, bootstrap_pr, teardown_pr,
         health_check_branch, health_check_pid, health_check_service,
         check_conflicts, ConflictResult, PrHealthStatus,
     };
@@ -31,6 +31,7 @@ mod tests {
         AppConfig {
             name: name.into(),
             bootstrap: "echo bootstrap-ok".into(),
+            main_worktree: None,
             teardown: "echo teardown-ok".into(),
             startup_timeout: "5s".into(),
             health_check: None,
@@ -57,6 +58,7 @@ mod tests {
             startup_timeout: "5s".into(),
             health_check: Some("true".into()),
             ephemeral: true,
+            main_worktree: None,
         }
     }
 
@@ -368,5 +370,38 @@ mod tests {
         assert!(running.iter().any(|f| f.name == "ext-feature"),
             "feature_list_running must include ephemeral envelope with passing health_check, got: {:?}",
             running.iter().map(|f| &f.name).collect::<Vec<_>>());
+    }
+
+    // envelope_deps: feature_add_dep stores app config name in envelope_deps
+    #[test]
+    fn feature_governs_add_dep_stores_config_in_envelope_deps() {
+        let (ps, _dir) = ps_store();
+        feature_new(&ps, "my-feature").unwrap();
+        feature_add_dep(&ps, "my-feature", "notifications-svc").unwrap();
+        let state = ps.load().unwrap();
+        let deps = state.envelope_deps.get("my-feature").cloned().unwrap_or_default();
+        assert!(deps.contains(&"notifications-svc".to_string()),
+            "envelope_deps must contain 'notifications-svc', got: {:?}", deps);
+    }
+
+    // feature_up starts main-worktree instance for dep slot with no live PR
+    #[test]
+    fn feature_governs_up_starts_main_worktree_for_dep_with_no_pr() {
+        let (ps, _dir) = ps_store();
+        let (app_store, _app_dir) = app_store();
+        let main_wt = tempdir().unwrap();
+        let mut cfg = echo_config("notifications-svc");
+        cfg.main_worktree = Some(main_wt.path().to_string_lossy().to_string());
+        app_store.save_app_config(cfg).unwrap();
+        feature_new(&ps, "my-feature").unwrap();
+        feature_add_dep(&ps, "my-feature", "notifications-svc").unwrap();
+        crate::feature::feature_up(&ps, &app_store, "my-feature").unwrap();
+        let state = ps.load().unwrap();
+        // sentinel PR 0 should be recorded for notifications-svc main-worktree instance
+        assert!(state.records.contains_key(&0),
+            "feature_up must record sentinel PR 0 for main-worktree dep instance, got keys: {:?}",
+            state.records.keys().collect::<Vec<_>>());
+        assert_eq!(state.records[&0].worktree, main_wt.path().to_string_lossy().as_ref(),
+            "sentinel record must use main_worktree path");
     }
 }

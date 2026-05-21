@@ -13,6 +13,8 @@ pub struct AppConfig {
     pub health_check: Option<String>,
     #[serde(default)]
     pub ephemeral: bool,
+    #[serde(default)]
+    pub main_worktree: Option<String>,
 }
 
 #[derive(Debug, Default, Serialize, Deserialize)]

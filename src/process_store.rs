@@ -20,6 +20,8 @@ pub struct ProcessState {
     pub records: HashMap<u64, ProcessRecord>,
     #[serde(default)]
     pub feature_envelopes: HashSet<String>,
+    #[serde(default)]
+    pub envelope_deps: HashMap<String, Vec<String>>,
 }
 
 pub struct ProcessStateStore {

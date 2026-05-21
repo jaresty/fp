@@ -17,7 +17,28 @@ mod tests {
             startup_timeout: "60s".into(),
             health_check: None,
             ephemeral: false,
+            main_worktree: None,
         }
+    }
+
+    #[test]
+    fn app_config_store_governs_main_worktree_defaults_none() {
+        let (store, _dir) = make_store();
+        store.save_app_config(sample_config("svc")).unwrap();
+        let cfg = store.load_app_config("svc").unwrap().unwrap();
+        assert!(cfg.main_worktree.is_none(),
+            "main_worktree must default to None, got: {:?}", cfg.main_worktree);
+    }
+
+    #[test]
+    fn app_config_store_governs_main_worktree_persists() {
+        let (store, _dir) = make_store();
+        let mut cfg = sample_config("svc");
+        cfg.main_worktree = Some("/repos/svc".into());
+        store.save_app_config(cfg).unwrap();
+        let loaded = store.load_app_config("svc").unwrap().unwrap();
+        assert_eq!(loaded.main_worktree, Some("/repos/svc".into()),
+            "main_worktree must persist, got: {:?}", loaded.main_worktree);
     }
 
     // ephemeral: false is the default when loading a config that omits the field

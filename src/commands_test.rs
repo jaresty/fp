@@ -1467,6 +1467,25 @@ mod tests {
             "cmd_pr_set_config must persist PR assignment, got: {:?}", assigned);
     }
 
+    // fp pr up bootstraps a single PR
+    #[test]
+    fn cmd_pr_up_governs_activates_pr_record() {
+        let dir = tempfile::tempdir().unwrap();
+        let ps = crate::process_store::ProcessStateStore::open(dir.path().join("ps.json"));
+        let app_store = crate::app_config::AppConfigStore::open(dir.path().join("config.toml"));
+        let wt = tempfile::tempdir().unwrap();
+        app_store.save_app_config(crate::app_config::AppConfig {
+            name: "svc".into(), bootstrap: "echo up".into(), teardown: "echo down".into(),
+            startup_timeout: "5s".into(), health_check: None, ephemeral: false, main_worktree: None,
+        }).unwrap();
+        app_store.set_pr_config(42, "svc").unwrap();
+        let result = crate::commands::cmd_pr_up(&ps, &app_store, 42, wt.path().to_str().unwrap());
+        assert!(result.is_ok(), "cmd_pr_up must succeed: {:?}", result);
+        let state = ps.load().unwrap();
+        assert!(state.records.contains_key(&42),
+            "cmd_pr_up must activate PR 42 in process state");
+    }
+
     // CLI: fp feature new creates envelope
     #[test]
     fn cmd_feature_new_governs_creates_envelope() {
@@ -1503,6 +1522,7 @@ mod tests {
             "60s",
             None,
             false,
+            None,
         );
         assert!(result.is_ok(), "cmd_app_define_config must succeed: {:?}", result);
         let cfg = store.load_app_config("payments-api").unwrap().unwrap();
@@ -1514,6 +1534,26 @@ mod tests {
             "cmd_app_define_config must store startup_timeout, got: {:?}", cfg.startup_timeout);
         assert_eq!(cfg.health_check, None,
             "cmd_app_define_config must store None health_check, got: {:?}", cfg.health_check);
+    }
+
+    // cmd_app_define_config stores main_worktree when provided
+    #[test]
+    fn cmd_app_define_config_governs_stores_main_worktree() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = crate::app_config::AppConfigStore::open(dir.path().join("config.toml"));
+        let result = crate::commands::cmd_app_define_config(
+            &store, "payments-api",
+            "docker-compose up -d",
+            "docker-compose down",
+            "60s",
+            None,
+            false,
+            Some("/path/to/main"),
+        );
+        assert!(result.is_ok(), "cmd_app_define_config must succeed: {:?}", result);
+        let cfg = store.load_app_config("payments-api").unwrap().unwrap();
+        assert_eq!(cfg.main_worktree, Some("/path/to/main".to_string()),
+            "cmd_app_define_config must store main_worktree, got: {:?}", cfg.main_worktree);
     }
 
     // Stage 3: fp feature list --running
@@ -1565,6 +1605,7 @@ mod tests {
             "npm start", "pkill node", "30s",
             Some("curl -f http://localhost:3000/health"),
             false,
+            None,
         ).unwrap();
         let cfg = store.load_app_config("svc").unwrap().unwrap();
         assert_eq!(cfg.health_check, Some("curl -f http://localhost:3000/health".into()),
@@ -1581,7 +1622,7 @@ mod tests {
         let wt2 = tempfile::tempdir().unwrap();
         app_store.save_app_config(crate::app_config::AppConfig {
             name: "svc".into(), bootstrap: "echo up".into(), teardown: "echo down".into(),
-            startup_timeout: "5s".into(), health_check: None, ephemeral: false,
+            startup_timeout: "5s".into(), health_check: None, ephemeral: false, main_worktree: None,
         }).unwrap();
         // Activate two PRs in the envelope with known worktrees
         crate::feature::feature_new(&ps, "my-feature").unwrap();
@@ -1618,7 +1659,7 @@ mod tests {
         let wt = tempfile::tempdir().unwrap();
         app_store.save_app_config(crate::app_config::AppConfig {
             name: "svc".into(), bootstrap: "echo up".into(), teardown: "echo down".into(),
-            startup_timeout: "5s".into(), health_check: None, ephemeral: false,
+            startup_timeout: "5s".into(), health_check: None, ephemeral: false, main_worktree: None,
         }).unwrap();
         crate::feature::feature_new(&ps, "my-feature").unwrap();
         ps.activate(crate::process_store::ProcessRecord {
@@ -1646,7 +1687,7 @@ mod tests {
         let wt = tempfile::tempdir().unwrap();
         app_store.save_app_config(crate::app_config::AppConfig {
             name: "ext".into(), bootstrap: "echo rebuild-ok".into(), teardown: "echo down".into(),
-            startup_timeout: "5s".into(), health_check: Some("true".into()), ephemeral: true,
+            startup_timeout: "5s".into(), health_check: Some("true".into()), ephemeral: true, main_worktree: None,
         }).unwrap();
         crate::feature::feature_new(&ps, "ext-feature").unwrap();
         ps.activate(crate::process_store::ProcessRecord {
@@ -1674,7 +1715,7 @@ mod tests {
         let wt = tempfile::tempdir().unwrap();
         app_store.save_app_config(crate::app_config::AppConfig {
             name: "svc".into(), bootstrap: "echo up".into(), teardown: "echo down".into(),
-            startup_timeout: "5s".into(), health_check: None, ephemeral: false,
+            startup_timeout: "5s".into(), health_check: None, ephemeral: false, main_worktree: None,
         }).unwrap();
         crate::feature::feature_new(&ps, "my-feature").unwrap();
         ps.activate(crate::process_store::ProcessRecord {
@@ -1689,5 +1730,20 @@ mod tests {
         let result = crate::commands::cmd_feature_rebuild(&ps, &app_store, "my-feature", None);
         assert!(result.is_err() || result.as_ref().unwrap().contains("persistent"),
             "cmd_feature_rebuild must error or warn for persistent app, got: {:?}", result);
+    }
+
+    // cmd_feature_add_dep stores dep and returns confirmation message
+    #[test]
+    fn cmd_feature_add_dep_governs_stores_dep_in_envelope_deps() {
+        let dir = tempfile::tempdir().unwrap();
+        let ps = crate::process_store::ProcessStateStore::open(dir.path().join("ps.json"));
+        let result = crate::commands::cmd_feature_add_dep(&ps, "my-feature", "notifications-svc");
+        assert!(result.is_ok(), "cmd_feature_add_dep must succeed: {:?}", result);
+        let msg = result.unwrap();
+        assert!(msg.contains("notifications-svc"),
+            "cmd_feature_add_dep output must mention dep name, got: {}", msg);
+        let state = ps.load().unwrap();
+        assert!(state.envelope_deps.get("my-feature").map(|v| v.contains(&"notifications-svc".to_string())).unwrap_or(false),
+            "cmd_feature_add_dep must store dep in envelope_deps");
     }
 }

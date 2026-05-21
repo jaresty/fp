@@ -131,14 +131,23 @@ pub fn feature_list(ps: &ProcessStateStore) -> Result<Vec<FeatureInfo>> {
     Ok(infos)
 }
 
+pub fn feature_add_dep(ps: &ProcessStateStore, envelope: &str, app_config_name: &str) -> Result<()> {
+    let mut state = ps.load()?;
+    state.feature_envelopes.insert(envelope.to_string());
+    state.envelope_deps.entry(envelope.to_string()).or_default().push(app_config_name.to_string());
+    ps.save_state(state)
+}
+
 pub fn feature_up(ps: &ProcessStateStore, config: &crate::app_config::AppConfigStore, name: &str) -> Result<Vec<String>> {
     let state = ps.load()?;
     let records: Vec<_> = state.records.values()
         .filter(|r| r.feature_envelope.as_deref() == Some(name))
         .cloned()
         .collect();
+    let deps = state.envelope_deps.get(name).cloned().unwrap_or_default();
     let mut messages = Vec::new();
-    for rec in records {
+    // Bootstrap PR members
+    for rec in &records {
         let app_cfg = rec.app_config_name.as_deref()
             .and_then(|n| config.load_app_config(n).ok().flatten());
         let cfg = match app_cfg {
@@ -151,6 +160,40 @@ pub fn feature_up(ps: &ProcessStateStore, config: &crate::app_config::AppConfigS
         let worktree = std::path::Path::new(&rec.worktree);
         bootstrap_pr(ps, &cfg, rec.pr, worktree, "", "")?;
         messages.push(format!("PR #{}: started ({})", rec.pr, cfg.name));
+    }
+    // Bootstrap main-worktree instances for dep slots with no live PR member
+    let live_configs: std::collections::HashSet<String> = records.iter()
+        .filter_map(|r| r.app_config_name.clone())
+        .collect();
+    for dep_cfg_name in &deps {
+        if live_configs.contains(dep_cfg_name) {
+            continue;
+        }
+        let cfg = match config.load_app_config(dep_cfg_name).ok().flatten() {
+            Some(c) => c,
+            None => {
+                messages.push(format!("dep {}: app config not found — skipped", dep_cfg_name));
+                continue;
+            }
+        };
+        let main_wt = match &cfg.main_worktree {
+            Some(p) => p.clone(),
+            None => {
+                messages.push(format!("dep {}: no main_worktree configured — skipped", dep_cfg_name));
+                continue;
+            }
+        };
+        let worktree = std::path::Path::new(&main_wt);
+        ps.activate(ProcessRecord {
+            pr: 0,
+            expected_branch: String::new(),
+            pid: None,
+            feature_envelope: Some(name.to_string()),
+            worktree: main_wt.clone(),
+            app_config_name: Some(dep_cfg_name.clone()),
+        })?;
+        bootstrap_pr(ps, &cfg, 0, worktree, "", "")?;
+        messages.push(format!("dep {} (main): started", dep_cfg_name));
     }
     Ok(messages)
 }
