@@ -80,12 +80,15 @@ fp feature add <name> <pr>              # add PR to envelope; auto-tracks if not
 fp feature add <name> <pr> --config <app>           # bind one app config to this PR
 fp feature add <name> <pr> --config <a> --config <b>  # bind multiple app configs (repeatable)
 fp feature add-dep <name> <app>         # declare a baseline service dependency with no PR
-                                        # (starts alongside the envelope but is not PR-owned)
+                                        # bootstraps from the main repo root when no live PR
+                                        # covers that app config (dep slot: pr=0, branch="")
 fp feature up <name>                    # bootstrap all member PRs (start app processes)
+                                        # dep slots run from main repo root if no PR covers them
 fp feature up <name> --yes              # tear down conflicting running features without prompting
 fp feature up <name> --no               # abort if any conflicting running feature is detected
 fp feature down <name>                  # tear down all member PRs (stop app processes)
 fp feature rebuild <name> [--pr <pr>]   # re-run bootstrap for ephemeral members without teardown
+fp feature rebuild <name> --pr 0        # rebuild the main-branch dep slot specifically
 fp feature status <name>                # health of all member PRs; flags merged PRs (GitHub API)
 fp feature status <name> --json         # output as JSON (skips GitHub merged-PR check)
 fp feature list                         # list all envelopes and members
@@ -262,6 +265,57 @@ fp rebase-stack
 `fp ls`, `fp status --all`, and `fp watch` all show the stack tree with indented `└─` children.
 
 Conflicts are reported by branch name. Resolve manually, then re-run `fp rebase-stack`.
+
+## Feature Envelopes and Dep Slots
+
+A **feature envelope** groups multiple PRs into a coordinated workspace. `fp feature up <name>` bootstraps all member PRs simultaneously — starting each app from its PR's worktree.
+
+A **dep slot** (declared with `fp feature add-dep`) is a service that has no open PR — it runs from the main repo root instead. Use it when a feature depends on a service that hasn't changed (e.g., a shared backend) or when the artifact is built from the main branch.
+
+Key behavior:
+- Members with an open PR → bootstrap runs from that PR's worktree
+- Dep slots (`pr=0`, `expected_branch=""`) → bootstrap runs from the main repo root
+- `fp feature rebuild <name> --pr 0` re-runs the dep slot bootstrap without tearing down other members
+
+### Worked Example: Chrome Extension + Backend PRs
+
+Suppose your feature has a backend API PR and a Chrome extension. The extension is an **ephemeral build artifact** (it installs and exits), and you want to rebuild it from main while the backend PRs are running.
+
+```sh
+# Define app configs
+fp app define-config backend \
+  --bootstrap "docker compose up -d" \
+  --teardown "docker compose down" \
+  --health-check "curl -sf http://localhost:3000/health"
+
+fp app define-config extension \
+  --bootstrap "npm run build && npm run install-extension" \
+  --teardown "echo done" \
+  --ephemeral \
+  --health-check "test -f dist/manifest.json"
+
+# Build the feature envelope
+fp feature new my-feature
+
+# Add the backend PR (will run from its worktree)
+fp feature add my-feature 42 --config backend
+
+# Declare the extension as a dep slot (builds from main — no open PR)
+fp feature add-dep my-feature extension
+
+# Bring everything up
+fp feature up my-feature
+# Output:
+#   ✓ bootstrapped backend (PR #42)
+#   ✓ bootstrapped extension (main)
+
+# Rebuild just the extension from main (after pulling changes)
+fp feature rebuild my-feature --pr 0
+# Output:
+#   ✓ rebuilt extension (main)
+```
+
+The `--pr 0` flag targets the dep slot specifically, leaving the backend PR untouched.
 
 ## Agent-Context Manifest
 

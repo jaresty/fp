@@ -4,7 +4,7 @@ mod tests {
         feature_new, feature_add, feature_add_dep, feature_list, feature_list_running,
         feature_list_running_with_config, feature_status, bootstrap_pr, teardown_pr,
         health_check_branch, health_check_pid, health_check_service,
-        check_conflicts, ConflictResult, PrHealthStatus,
+        check_conflicts, ConflictResult, PrHealthStatus, resolve_worktree,
     };
     use crate::process_store::{ProcessRecord, ProcessStateStore};
     use crate::app_config::{AppConfig, AppConfigStore};
@@ -698,5 +698,88 @@ mod tests {
             "bootstrap_pr must not overwrite expected_branch on existing record, got: {:?}", rec.expected_branch);
         assert!(rec.pid.is_some(), "bootstrap_pr must set pid on existing record");
         if let Some(pid) = rec.pid { unsafe { libc::kill(pid as libc::pid_t, libc::SIGTERM); } }
+    }
+
+    #[test]
+    fn resolve_worktree_governs_empty_branch_returns_repo_root() {
+        let root = std::path::Path::new("/some/repo");
+        let result = resolve_worktree(root, "");
+        assert_eq!(result, std::path::Path::new("/some/repo"),
+            "resolve_worktree with empty branch must return repo_root, got: {:?}", result);
+    }
+
+    #[test]
+    fn resolve_worktree_governs_nonempty_branch_returns_worktree_path() {
+        let root = std::path::Path::new("/some/repo");
+        let result = resolve_worktree(root, "feat/x");
+        let expected = crate::worktree::worktree_path(root, "feat/x");
+        assert_eq!(result, expected,
+            "resolve_worktree with non-empty branch must return worktree_path, got: {:?}", result);
+    }
+
+    #[test]
+    fn feature_status_governs_dep_slot_uses_repo_root_as_worktree() {
+        let (ps, _) = ps_store();
+        let (app_cfg_store, _) = app_store();
+        let tmp = tempfile::tempdir().unwrap();
+        let repo = tmp.path().join("repo");
+        std::fs::create_dir_all(&repo).unwrap();
+        app_cfg_store.save_app_config(ephemeral_config("svc")).unwrap();
+        feature_new(&ps, "feat").unwrap();
+        let mut state = ps.load().unwrap();
+        // dep slot: pr=0, expected_branch=""
+        state.records.insert(0, crate::process_store::ProcessRecord {
+            pr: 0,
+            expected_branch: String::new(),
+            pid: None,
+            feature_envelope: Some("feat".into()),
+            worktree: String::new(),
+            app_config_names: vec!["svc".into()],
+        });
+        ps.save_state(state).unwrap();
+        // feature_status must not error for dep slot — it should use repo_root as worktree
+        let result = crate::feature::feature_status(&ps, &app_cfg_store, "feat", &repo);
+        assert!(result.is_ok(),
+            "feature_status must not error for dep slot with empty expected_branch: {:?}", result);
+        let statuses = result.unwrap();
+        assert_eq!(statuses.len(), 1,
+            "feature_status must return one entry for dep slot pr=0: {:?}", statuses);
+    }
+
+    #[test]
+    fn feature_list_running_with_config_governs_dep_slot_uses_repo_root() {
+        let (ps, _) = ps_store();
+        let (app_cfg_store, _) = app_store();
+        let tmp = tempfile::tempdir().unwrap();
+        let repo = tmp.path().join("repo");
+        std::fs::create_dir_all(&repo).unwrap();
+        // ephemeral config with health_check that succeeds when run from repo root
+        let cfg = crate::app_config::AppConfig {
+            name: "svc".into(),
+            bootstrap: "true".into(),
+            teardown: "true".into(),
+            startup_timeout: "1s".into(),
+            health_check: Some("true".into()),
+            ephemeral: true,
+            main_worktree: None,
+        };
+        app_cfg_store.save_app_config(cfg).unwrap();
+        feature_new(&ps, "feat").unwrap();
+        let mut state = ps.load().unwrap();
+        state.records.insert(0, crate::process_store::ProcessRecord {
+            pr: 0,
+            expected_branch: String::new(),
+            pid: None,
+            feature_envelope: Some("feat".into()),
+            worktree: String::new(),
+            app_config_names: vec!["svc".into()],
+        });
+        ps.save_state(state).unwrap();
+        // repo exists as a directory — health check "true" should pass from repo_root
+        let result = crate::feature::feature_list_running_with_config(&ps, &app_cfg_store, &repo);
+        assert!(result.is_ok(), "feature_list_running_with_config must not error for dep slot: {:?}", result);
+        let running = result.unwrap();
+        assert!(running.iter().any(|f| f.name == "feat"),
+            "dep slot with passing health_check must appear running when repo_root exists: {:?}", running);
     }
 }

@@ -1,6 +1,11 @@
-use std::path::Path;
+use std::path::{Path, PathBuf};
 #[cfg(unix)]
 use std::os::unix::process::CommandExt;
+
+pub fn resolve_worktree(repo_root: &Path, branch: &str) -> PathBuf {
+    if branch.is_empty() { repo_root.to_path_buf() }
+    else { crate::worktree::worktree_path(repo_root, branch) }
+}
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
 use crate::process_store::{ProcessRecord, ProcessStateStore};
@@ -52,7 +57,7 @@ pub fn feature_list_running_with_config(ps: &ProcessStateStore, config: &crate::
                 .and_then(|n| config.load_app_config(n).ok().flatten());
             let is_ephemeral = app_cfg.as_ref().map(|c| c.ephemeral).unwrap_or(false);
             if is_ephemeral {
-                let worktree = crate::worktree::worktree_path(repo_root, &r.expected_branch);
+                let worktree = resolve_worktree(repo_root, &r.expected_branch);
                 app_cfg.and_then(|c| c.health_check)
                     .map(|cmd| health_check_service(&cmd, &worktree, r.pr, &worktree))
                     .unwrap_or(false)
@@ -75,7 +80,7 @@ pub fn feature_status(ps: &ProcessStateStore, config: &crate::app_config::AppCon
     let mut statuses: Vec<PrHealthStatus> = state.records.values()
         .filter(|r| r.feature_envelope.as_deref() == Some(name))
         .map(|r| {
-            let worktree = crate::worktree::worktree_path(repo_root, &r.expected_branch);
+            let worktree = resolve_worktree(repo_root, &r.expected_branch);
             let branch_ok = health_check_branch(&worktree, &r.expected_branch);
             let app_cfg = r.app_config_names.first().map(|n| n.as_str())
                 .and_then(|n| config.load_app_config(n).ok().flatten());
@@ -170,7 +175,7 @@ pub fn feature_up(ps: &ProcessStateStore, config: &crate::app_config::AppConfigS
             messages.push(format!("PR #{}: no app config assigned — skipped", rec.pr));
             continue;
         }
-        let worktree_buf = crate::worktree::worktree_path(repo_root, &rec.expected_branch);
+        let worktree_buf = resolve_worktree(repo_root, &rec.expected_branch);
         let worktree = worktree_buf.as_path();
         for cfg_name in &rec.app_config_names {
             let cfg = match config.load_app_config(cfg_name).ok().flatten() {
@@ -235,7 +240,7 @@ pub fn feature_down(ps: &ProcessStateStore, config: &crate::app_config::AppConfi
                 continue;
             }
         };
-        let worktree_buf = crate::worktree::worktree_path(repo_root, &rec.expected_branch);
+        let worktree_buf = resolve_worktree(repo_root, &rec.expected_branch);
         let worktree = worktree_buf.as_path();
         teardown_pr(ps, &cfg, rec.pr, worktree, "", "")?;
         messages.push(format!("PR #{}: stopped ({})", rec.pr, cfg.name));
@@ -265,7 +270,7 @@ pub fn feature_rebuild(ps: &ProcessStateStore, config: &crate::app_config::AppCo
             messages.push(format!("PR #{}: uses a persistent app config '{}' — use `fp feature down` + `fp feature up` instead", rec.pr, cfg.name));
             continue;
         }
-        let worktree_buf = crate::worktree::worktree_path(repo_root, &rec.expected_branch);
+        let worktree_buf = resolve_worktree(repo_root, &rec.expected_branch);
         let worktree = worktree_buf.as_path();
         let instance = format!("fp---{}", rec.pr);
         std::process::Command::new("sh")
