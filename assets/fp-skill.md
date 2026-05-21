@@ -69,6 +69,7 @@ fp app define-config <name> \
   [--ephemeral] \                       # app exits immediately after install (health-check required)
   [--main-worktree <path>]              # path to use when no PR owns this config slot
 fp app set-config <owner/repo> <name>   # assign a named app config to all PRs in a repo
+fp app list                             # list all defined app configs
 
 # Single-PR app lifecycle
 fp pr up <pr>                           # bootstrap the app for a single PR (uses its bound app config)
@@ -95,6 +96,10 @@ fp feature list                         # list all envelopes and members
 fp feature list --running               # list envelopes with at least one live instance
 fp feature remove <name> <pr>           # remove a PR from an envelope (deletes envelope if empty)
                                         # use when PR was merged outside fp merge
+fp feature remove-dep <name> <app>      # remove a dep slot from envelope_deps
+fp feature set-test <name> "<cmd>"      # store an e2e test command for this envelope
+fp feature test <name>                  # run the stored test command; reports pass/fail + output
+fp feature logs <name> [--follow]       # tail .git/fp/logs/ for all processes in this envelope
 
 # Branch and worktree creation
 fp new <branch> [--base <base>]         # create new branch + worktree without a PR (default base: main)
