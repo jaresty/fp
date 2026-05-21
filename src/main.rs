@@ -458,7 +458,8 @@ fn main() -> Result<()> {
             let client = token.as_ref().map(|t| GithubClient::new(t.clone()));
             let client_ref: Option<&dyn github::GithubClientTrait> = client.as_ref().map(|c| c as &dyn github::GithubClientTrait);
             if all {
-                print!("{}", commands::cmd_status_all(client_ref, &store, &git_dir, &owner, &repo_name, json)?);
+                let ps = process_store::ProcessStateStore::open(process_store::ProcessStateStore::default_path()?);
+                print!("{}", commands::cmd_status_all(client_ref, &store, Some(&ps), &git_dir, &owner, &repo_name, json)?);
             } else {
                 let number = pr.context("specify a PR number or use --all")?;
                 println!("{}", commands::cmd_status_one(client_ref, &store, &git_dir, &owner, &repo_name, number, json)?);

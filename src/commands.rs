@@ -69,6 +69,7 @@ pub fn cmd_status_one(
 pub fn cmd_status_all(
     client: Option<&dyn crate::github::GithubClientTrait>,
     store: &crate::store::Store,
+    ps: Option<&crate::process_store::ProcessStateStore>,
     git_dir: &std::path::Path,
     owner: &str,
     repo: &str,
@@ -90,6 +91,27 @@ pub fn cmd_status_all(
 
     let prs = state.tracked_prs();
     let tree_order = crate::stack::stack_tree_order(&prs);
+
+    let _default_ps;
+    let ps_ref: Option<&crate::process_store::ProcessStateStore> = if ps.is_some() {
+        ps
+    } else {
+        _default_ps = crate::process_store::ProcessStateStore::default_path()
+            .ok()
+            .map(crate::process_store::ProcessStateStore::open);
+        _default_ps.as_ref()
+    };
+    let health_map: std::collections::HashMap<u64, String> = ps_ref
+        .and_then(|p| p.load().ok())
+        .map(|state| state.records.values().map(|r| {
+            let label = if r.pid.map(crate::feature::health_check_pid).unwrap_or(false) {
+                "✓ up".to_string()
+            } else {
+                "✗ down".to_string()
+            };
+            (r.pr, label)
+        }).collect())
+        .unwrap_or_default();
 
     let mut out = String::new();
     if !json { out.push_str(&crate::display::repo_header(owner, repo)); out.push('\n'); }
@@ -113,12 +135,13 @@ pub fn cmd_status_all(
         let lock = crate::worktree::lock_status(git_dir, &cached.branch)
             .map(|s| format!("  {}", s))
             .unwrap_or_default();
+        let health = health_map.get(&number).map(|s| s.as_str());
 
         if json {
             out.push_str(&serde_json::to_string_pretty(&tasks).unwrap());
             out.push('\n');
         } else {
-            out.push_str(&crate::display::format_pr_status_all_entry(&prefix, cached.number, &cached.title, &tasks, &lock));
+            out.push_str(&crate::display::format_pr_status_all_entry(&prefix, cached.number, &cached.title, &tasks, &lock, health));
         }
     }
     Ok(out)

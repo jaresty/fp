@@ -21,12 +21,13 @@ pub fn format_watch_initial_state(pr: u64, title: &str, task_list: &[tasks::Task
     out
 }
 
-pub fn format_pr_status_all_entry(prefix: &str, number: u64, title: &str, tasks: &[tasks::Task], lock: &str) -> String {
+pub fn format_pr_status_all_entry(prefix: &str, number: u64, title: &str, tasks: &[tasks::Task], lock: &str, health: Option<&str>) -> String {
+    let health_str = health.map(|h| format!("  [{}]", h)).unwrap_or_default();
     if tasks.is_empty() {
-        return format!("{}PR #{} {} — ready{}\n", prefix, number, title, lock);
+        return format!("{}PR #{} {} — ready{}{}\n", prefix, number, title, lock, health_str);
     }
     let task_prefix = prefix.replace("└─ ", "   ");
-    let mut out = format!("{}PR #{} {} — {} task(s){}\n", prefix, number, title, tasks.len(), lock);
+    let mut out = format!("{}PR #{} {} — {} task(s){}{}\n", prefix, number, title, tasks.len(), lock, health_str);
     for t in tasks {
         let flag = if t.blocking { "[blocking]" } else { "[waiting]" };
         out.push_str(&format!("{}  {} {:?}: {}\n", task_prefix, flag, t.task_type, t.description));

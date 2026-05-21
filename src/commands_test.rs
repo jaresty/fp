@@ -127,7 +127,7 @@ mod tests {
         std::fs::create_dir_all(&git_dir).unwrap();
         let store = make_store_with_pr(&git_dir, 5, "feat/all-test");
         let fake = make_fake_with_pr(5);
-        let out = crate::commands::cmd_status_all(Some(&fake), &store, &git_dir, "alice", "repo", false).unwrap();
+        let out = crate::commands::cmd_status_all(Some(&fake), &store, None, &git_dir, "alice", "repo", false).unwrap();
         assert!(out.contains("PR #5") || out.contains("#5"), "must contain PR number, got: {}", out);
     }
 
@@ -162,6 +162,39 @@ mod tests {
             codeowners_eligibility: Default::default(), created_at: None,
         });
         fake
+    }
+
+    #[test]
+    // Stage 4: fp status shows health column when process state has a live PR
+    fn commands_governs_cmd_status_all_shows_health_when_live() {
+        let tmp = tempfile::tempdir().unwrap();
+        let git_dir = tmp.path().join("git_dir");
+        std::fs::create_dir_all(&git_dir).unwrap();
+        let store = make_store_with_pr(&git_dir, 5, "feat/all-test");
+        let ps = crate::process_store::ProcessStateStore::open(tmp.path().join("ps.json"));
+        let live_pid = std::process::id();
+        ps.activate(crate::process_store::ProcessRecord {
+            pr: 5, expected_branch: "feat/all-test".into(), pid: Some(live_pid),
+            feature_envelope: None, worktree: tmp.path().to_string_lossy().to_string(),
+            app_config_name: None,
+        }).unwrap();
+        let fake = make_fake_with_pr(5);
+        let out = crate::commands::cmd_status_all(Some(&fake), &store, Some(&ps), &git_dir, "alice", "repo", false).unwrap();
+        assert!(out.contains("up") || out.contains("healthy") || out.contains("live") || out.contains("✓"),
+            "cmd_status_all must show health indicator for live PR, got: {}", out);
+    }
+
+    // Stage 4: fp status succeeds (fail-open) when process state file is absent
+    #[test]
+    fn commands_governs_cmd_status_all_succeeds_without_process_state() {
+        let tmp = tempfile::tempdir().unwrap();
+        let git_dir = tmp.path().join("git_dir");
+        std::fs::create_dir_all(&git_dir).unwrap();
+        let store = make_store_with_pr(&git_dir, 5, "feat/all-test");
+        let fake = make_fake_with_pr(5);
+        // No process state file — must not error
+        let result = crate::commands::cmd_status_all(Some(&fake), &store, None, &git_dir, "alice", "repo", false);
+        assert!(result.is_ok(), "cmd_status_all must succeed without process state, got: {:?}", result);
     }
 
     #[test]
