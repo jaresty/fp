@@ -2292,4 +2292,108 @@ mod tests {
             "ephemeral with passing health-check must show healthy when repo_root is correct, got: {}", out);
     }
 
+    #[test]
+    fn cmd_app_list_governs_returns_defined_config_names() {
+        let tmp = tempfile::tempdir().unwrap();
+        let store = crate::app_config::AppConfigStore::open(tmp.path().join("config.toml"));
+        store.save_app_config(crate::app_config::AppConfig {
+            name: "backend".into(), bootstrap: "echo up".into(), teardown: "echo down".into(),
+            startup_timeout: "5s".into(), health_check: None, ephemeral: false, main_worktree: None,
+        }).unwrap();
+        store.save_app_config(crate::app_config::AppConfig {
+            name: "frontend".into(), bootstrap: "echo up".into(), teardown: "echo down".into(),
+            startup_timeout: "5s".into(), health_check: None, ephemeral: false, main_worktree: None,
+        }).unwrap();
+        let result = crate::commands::cmd_app_list(&store);
+        assert!(result.is_ok(), "cmd_app_list must succeed: {:?}", result);
+        let out = result.unwrap();
+        assert!(out.contains("backend"), "cmd_app_list must list 'backend', got: {}", out);
+        assert!(out.contains("frontend"), "cmd_app_list must list 'frontend', got: {}", out);
+    }
+
+    #[test]
+    fn cmd_feature_remove_dep_governs_removes_from_envelope_deps() {
+        let tmp = tempfile::tempdir().unwrap();
+        let git_dir = tmp.path().join(".git");
+        std::fs::create_dir_all(&git_dir).unwrap();
+        let ps = crate::process_store::ProcessStateStore::open(&git_dir);
+        crate::feature::feature_new(&ps, "my-feat").unwrap();
+        crate::commands::cmd_feature_add_dep(&ps, "my-feat", "backend").unwrap();
+        let result = crate::commands::cmd_feature_remove_dep(&ps, "my-feat", "backend");
+        assert!(result.is_ok(), "cmd_feature_remove_dep must succeed: {:?}", result);
+        let state = ps.load().unwrap();
+        let deps = state.envelope_deps.get("my-feat").map(|v| v.as_slice()).unwrap_or(&[]);
+        assert!(!deps.contains(&"backend".to_string()),
+            "cmd_feature_remove_dep must remove backend from envelope_deps, got: {:?}", deps);
+    }
+
+    #[test]
+    fn cmd_feature_logs_governs_shows_dep_log_content() {
+        let tmp = tempfile::tempdir().unwrap();
+        let git_dir = tmp.path().join(".git");
+        std::fs::create_dir_all(&git_dir).unwrap();
+        let ps = crate::process_store::ProcessStateStore::open(&git_dir);
+        crate::feature::feature_new(&ps, "my-feat").unwrap();
+        let mut state = ps.load().unwrap();
+        state.dep_records.insert("my-feat:backend".into(), crate::process_store::DepRecord {
+            app_config_name: "backend".into(), feature_envelope: "my-feat".into(),
+            pid: None, worktree: tmp.path().to_string_lossy().to_string(),
+        });
+        ps.save_state(state).unwrap();
+        let log_dir = git_dir.join("fp").join("logs");
+        std::fs::create_dir_all(&log_dir).unwrap();
+        std::fs::write(log_dir.join("fp-dep-my-feat-backend.log"), "backend started ok\n").unwrap();
+        let result = crate::commands::cmd_feature_logs(&ps, "my-feat", false);
+        assert!(result.is_ok(), "cmd_feature_logs must succeed: {:?}", result);
+        let out = result.unwrap();
+        assert!(out.contains("backend started ok"),
+            "cmd_feature_logs must include dep log content, got: {}", out);
+        assert!(out.contains("backend"),
+            "cmd_feature_logs must include dep name in header, got: {}", out);
+    }
+
+    #[test]
+    fn cmd_feature_logs_governs_empty_when_no_logs() {
+        let tmp = tempfile::tempdir().unwrap();
+        let git_dir = tmp.path().join(".git");
+        std::fs::create_dir_all(&git_dir).unwrap();
+        let ps = crate::process_store::ProcessStateStore::open(&git_dir);
+        crate::feature::feature_new(&ps, "my-feat").unwrap();
+        let result = crate::commands::cmd_feature_logs(&ps, "my-feat", false);
+        assert!(result.is_ok(), "cmd_feature_logs must succeed even with no logs: {:?}", result);
+        let out = result.unwrap();
+        assert!(out.contains("no logs") || out.contains("No logs"),
+            "cmd_feature_logs must report no logs when none exist, got: {}", out);
+    }
+
+    #[test]
+    fn cmd_feature_test_governs_runs_stored_command_and_returns_output() {
+        let tmp = tempfile::tempdir().unwrap();
+        let git_dir = tmp.path().join(".git");
+        std::fs::create_dir_all(&git_dir).unwrap();
+        let ps = crate::process_store::ProcessStateStore::open(&git_dir);
+        crate::feature::feature_new(&ps, "my-feat").unwrap();
+        crate::commands::cmd_feature_set_test(&ps, "my-feat", "echo e2e-ran").unwrap();
+        let result = crate::commands::cmd_feature_test(&ps, "my-feat", tmp.path());
+        assert!(result.is_ok(), "cmd_feature_test must succeed when test command exits 0: {:?}", result);
+        let out = result.unwrap();
+        assert!(out.contains("e2e-ran") || out.contains("passed"),
+            "cmd_feature_test must include test output or pass status, got: {}", out);
+    }
+
+    #[test]
+    fn cmd_feature_set_test_governs_stores_command() {
+        let tmp = tempfile::tempdir().unwrap();
+        let git_dir = tmp.path().join(".git");
+        std::fs::create_dir_all(&git_dir).unwrap();
+        let ps = crate::process_store::ProcessStateStore::open(&git_dir);
+        crate::feature::feature_new(&ps, "my-feat").unwrap();
+        let result = crate::commands::cmd_feature_set_test(&ps, "my-feat", "echo e2e-ok");
+        assert!(result.is_ok(), "cmd_feature_set_test must succeed: {:?}", result);
+        let state = ps.load().unwrap();
+        let cmd = state.feature_configs.get("my-feat").and_then(|c| c.test_command.as_deref());
+        assert_eq!(cmd, Some("echo e2e-ok"),
+            "cmd_feature_set_test must persist test command, got: {:?}", cmd);
+    }
+
 }

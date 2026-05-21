@@ -23,6 +23,11 @@ pub struct ProcessRecord {
     pub app_config_names: Vec<String>,
 }
 
+#[derive(Debug, Default, Clone, Serialize, Deserialize)]
+pub struct FeatureConfig {
+    pub test_command: Option<String>,
+}
+
 #[derive(Debug, Default, Serialize, Deserialize)]
 pub struct ProcessState {
     pub records: HashMap<u64, ProcessRecord>,
@@ -32,6 +37,8 @@ pub struct ProcessState {
     pub envelope_deps: HashMap<String, Vec<String>>,
     #[serde(default)]
     pub dep_records: HashMap<String, DepRecord>,
+    #[serde(default)]
+    pub feature_configs: HashMap<String, FeatureConfig>,
 }
 
 pub struct ProcessStateStore {

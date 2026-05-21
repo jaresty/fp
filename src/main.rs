@@ -353,6 +353,33 @@ enum FeatureCommands {
         /// PR number to remove
         pr: u64,
     },
+    /// Remove a baseline app config dependency from a feature envelope
+    RemoveDep {
+        /// Feature envelope name
+        name: String,
+        /// App config name to remove
+        app_config: String,
+    },
+    /// Set the e2e test command for a feature envelope
+    SetTest {
+        /// Feature envelope name
+        name: String,
+        /// Shell command to run as the e2e test
+        command: String,
+    },
+    /// Run the e2e test command for a feature envelope
+    Test {
+        /// Feature envelope name
+        name: String,
+    },
+    /// Show process logs for a feature envelope
+    Logs {
+        /// Feature envelope name
+        name: String,
+        /// Follow (tail -f) all log files
+        #[arg(long, short)]
+        follow: bool,
+    },
 }
 
 #[derive(Subcommand)]
@@ -387,6 +414,8 @@ enum AppCommands {
         /// Name of the app config to assign
         config_name: String,
     },
+    /// List all defined app configs
+    List,
 }
 
 #[derive(Subcommand)]
@@ -643,6 +672,23 @@ fn main() -> Result<()> {
                     let out = commands::cmd_feature_remove(&ps, &name, pr)?;
                     print!("{}", out);
                 }
+                FeatureCommands::RemoveDep { name, app_config } => {
+                    let out = commands::cmd_feature_remove_dep(&ps, &name, &app_config)?;
+                    print!("{}", out);
+                }
+                FeatureCommands::SetTest { name, command } => {
+                    let out = commands::cmd_feature_set_test(&ps, &name, &command)?;
+                    print!("{}", out);
+                }
+                FeatureCommands::Test { name } => {
+                    let repo_root = crate::worktree::main_repo_root(&std::env::current_dir()?)?;
+                    let out = commands::cmd_feature_test(&ps, &name, &repo_root)?;
+                    println!("{}", out);
+                }
+                FeatureCommands::Logs { name, follow } => {
+                    let out = commands::cmd_feature_logs(&ps, &name, follow)?;
+                    if !out.is_empty() { println!("{}", out); }
+                }
             }
         }
 
@@ -655,6 +701,10 @@ fn main() -> Result<()> {
                 }
                 AppCommands::SetConfig { repo, config_name } => {
                     let out = commands::cmd_app_set_config(&store, &repo, &config_name)?;
+                    println!("{}", out);
+                }
+                AppCommands::List => {
+                    let out = commands::cmd_app_list(&store)?;
                     println!("{}", out);
                 }
             }

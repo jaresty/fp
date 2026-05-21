@@ -134,6 +134,19 @@ mod tests {
         assert!(store.load_app_config("svc-b").unwrap().is_some(), "svc-b must be present");
     }
 
+    // list_app_configs returns all saved configs sorted by name
+    #[test]
+    fn list_app_configs_governs_returns_sorted_list() {
+        let (store, _dir) = make_store();
+        store.save_app_config(sample_config("zebra")).unwrap();
+        store.save_app_config(sample_config("alpha")).unwrap();
+        store.save_app_config(sample_config("mango")).unwrap();
+        let list = store.list_app_configs().unwrap();
+        let names: Vec<&str> = list.iter().map(|c| c.name.as_str()).collect();
+        assert_eq!(names, vec!["alpha", "mango", "zebra"],
+            "list_app_configs must return configs sorted by name, got: {:?}", names);
+    }
+
     // overwrite: second save replaces first for same config name
     #[test]
     fn app_config_store_governs_save_overwrites_existing_config() {

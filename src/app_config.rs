@@ -79,4 +79,11 @@ impl AppConfigStore {
         Ok(state.repo_assignments.get(repo).cloned())
     }
 
+    pub fn list_app_configs(&self) -> Result<Vec<AppConfig>> {
+        let state = self.load_state()?;
+        let mut configs: Vec<AppConfig> = state.configs.into_values().collect();
+        configs.sort_by(|a, b| a.name.cmp(&b.name));
+        Ok(configs)
+    }
+
 }

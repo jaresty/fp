@@ -942,6 +942,112 @@ pub fn cmd_feature_status(
     Ok(out.trim_end().to_string())
 }
 
+pub fn cmd_app_list(config: &crate::app_config::AppConfigStore) -> anyhow::Result<String> {
+    let configs = config.list_app_configs()?;
+    if configs.is_empty() {
+        return Ok("No app configs defined.".to_string());
+    }
+    let mut out = String::new();
+    for cfg in &configs {
+        let health = if cfg.health_check.is_some() { " (health-check)" } else { "" };
+        let ephemeral = if cfg.ephemeral { " [ephemeral]" } else { "" };
+        out.push_str(&format!("  {}{}{}\n", cfg.name, health, ephemeral));
+    }
+    Ok(out.trim_end().to_string())
+}
+
+pub fn cmd_feature_remove_dep(ps: &crate::process_store::ProcessStateStore, envelope: &str, app_config_name: &str) -> anyhow::Result<String> {
+    let mut state = ps.load()?;
+    anyhow::ensure!(state.feature_envelopes.contains(envelope), "Feature envelope '{}' not found", envelope);
+    if let Some(deps) = state.envelope_deps.get_mut(envelope) {
+        deps.retain(|d| d != app_config_name);
+    }
+    state.dep_records.remove(&format!("{}:{}", envelope, app_config_name));
+    ps.save_state(state)?;
+    Ok(format!("Removed dep '{}' from feature '{}'.\n", app_config_name, envelope))
+}
+
+pub fn cmd_feature_logs(ps: &crate::process_store::ProcessStateStore, name: &str, follow: bool) -> anyhow::Result<String> {
+    let log_dir = ps.path.parent().unwrap_or(std::path::Path::new(".")).join("logs");
+    let state = ps.load()?;
+    let mut entries: Vec<(String, std::path::PathBuf)> = Vec::new();
+    for key in state.dep_records.keys() {
+        if !key.starts_with(&format!("{}:", name)) { continue; }
+        let cfg_name = key.split_once(':').map(|x| x.1).unwrap_or(key.as_str());
+        let instance = format!("fp-dep-{}-{}", name, cfg_name).to_lowercase().replace('/', "-");
+        entries.push((format!("dep {}", cfg_name), log_dir.join(format!("{}.log", instance))));
+    }
+    for (pr, rec) in &state.records {
+        if rec.feature_envelope.as_deref() != Some(name) { continue; }
+        if log_dir.exists() && let Ok(rd) = std::fs::read_dir(&log_dir) {
+            for entry in rd.flatten() {
+                let fname = entry.file_name().to_string_lossy().to_string();
+                if fname.ends_with(&format!("-{}.log", pr)) {
+                    entries.push((format!("PR #{}", pr), entry.path()));
+                }
+            }
+        }
+    }
+    if entries.is_empty() {
+        return Ok(format!("No logs found for feature '{}'.\nLog directory: {}", name, log_dir.display()));
+    }
+    if follow {
+        let existing: Vec<_> = entries.iter().filter(|(_, p)| p.exists()).map(|(_, p)| p.clone()).collect();
+        if existing.is_empty() {
+            return Ok(format!("No log files exist yet for feature '{}'.", name));
+        }
+        let mut cmd = std::process::Command::new("tail");
+        cmd.arg("-f");
+        for p in &existing { cmd.arg(p); }
+        cmd.status()?;
+        return Ok(String::new());
+    }
+    let mut out = String::new();
+    for (label, path) in &entries {
+        out.push_str(&format!("=== {} ({}) ===\n", label, path.display()));
+        match std::fs::read_to_string(path) {
+            Ok(content) if content.is_empty() => out.push_str("(empty)\n"),
+            Ok(content) => out.push_str(&content),
+            Err(_) => out.push_str("(log file not yet created)\n"),
+        }
+        out.push('\n');
+    }
+    Ok(out.trim_end().to_string())
+}
+
+pub fn cmd_feature_test(ps: &crate::process_store::ProcessStateStore, name: &str, repo_root: &std::path::Path) -> anyhow::Result<String> {
+    let state = ps.load()?;
+    anyhow::ensure!(state.feature_envelopes.contains(name), "Feature envelope '{}' not found", name);
+    let cmd = state.feature_configs.get(name)
+        .and_then(|c| c.test_command.as_deref())
+        .ok_or_else(|| anyhow::anyhow!("No test command set for feature '{}' — use: fp feature set-test {} <command>", name, name))?;
+    let instance = format!("fp-test-{}", name).to_lowercase().replace('/', "-");
+    let output = std::process::Command::new("sh")
+        .args(["-c", cmd])
+        .current_dir(repo_root)
+        .env("FP_INSTANCE", &instance)
+        .env("FP_FEATURE", name)
+        .output()?;
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let status = if output.status.success() { "passed" } else { "FAILED" };
+    let mut out = format!("Feature '{}' test {}:\n", name, status);
+    if !stdout.is_empty() { out.push_str(&stdout); }
+    if !stderr.is_empty() { out.push_str(&stderr); }
+    if !output.status.success() {
+        anyhow::bail!("{}", out.trim_end());
+    }
+    Ok(out.trim_end().to_string())
+}
+
+pub fn cmd_feature_set_test(ps: &crate::process_store::ProcessStateStore, name: &str, command: &str) -> anyhow::Result<String> {
+    let mut state = ps.load()?;
+    anyhow::ensure!(state.feature_envelopes.contains(name), "Feature envelope '{}' not found", name);
+    state.feature_configs.entry(name.to_string()).or_default().test_command = Some(command.to_string());
+    ps.save_state(state)?;
+    Ok(format!("Set test command for feature '{}'.\n", name))
+}
+
 pub fn cmd_switch_feature_summary(ps: &crate::process_store::ProcessStateStore, config: &crate::app_config::AppConfigStore, pr: u64) -> String {
     let state = match ps.load() { Ok(s) => s, Err(_) => return String::new() };
     let envelope = match state.records.get(&pr).and_then(|r| r.feature_envelope.as_deref()) {

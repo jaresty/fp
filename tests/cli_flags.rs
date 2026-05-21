@@ -91,6 +91,66 @@ fn cli_switch_updates_process_record_worktree_path() {
         "process record worktree must match fp switch output path after switch");
 }
 
+/// fp app list must be a recognized subcommand
+#[test]
+fn cli_app_list_is_recognized() {
+    let dir = setup_repo();
+    let out = fp(dir.path(), &["app", "list"]);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(!stderr.contains("unrecognized subcommand"),
+        "app list must be a recognized subcommand, got: {}", stderr);
+    assert!(!stderr.contains("unexpected argument"),
+        "app list must be a recognized subcommand, got: {}", stderr);
+}
+
+/// fp feature test must be a recognized subcommand
+#[test]
+fn cli_feature_test_is_recognized() {
+    let dir = setup_repo();
+    let out = fp(dir.path(), &["feature", "test", "nonexistent"]);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(!stderr.contains("unrecognized subcommand"),
+        "feature test must be a recognized subcommand, got: {}", stderr);
+    assert!(!stderr.contains("unexpected argument"),
+        "feature test must be a recognized subcommand, got: {}", stderr);
+}
+
+/// fp feature set-test must be a recognized subcommand
+#[test]
+fn cli_feature_set_test_is_recognized() {
+    let dir = setup_repo();
+    let out = fp(dir.path(), &["feature", "set-test", "nonexistent", "echo ok"]);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(!stderr.contains("unrecognized subcommand"),
+        "feature set-test must be a recognized subcommand, got: {}", stderr);
+    assert!(!stderr.contains("unexpected argument"),
+        "feature set-test must be a recognized subcommand, got: {}", stderr);
+}
+
+/// fp feature remove-dep must be a recognized subcommand
+#[test]
+fn cli_feature_remove_dep_is_recognized() {
+    let dir = setup_repo();
+    let out = fp(dir.path(), &["feature", "remove-dep", "nonexistent"]);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(!stderr.contains("unrecognized subcommand"),
+        "feature remove-dep must be a recognized subcommand, got: {}", stderr);
+    assert!(!stderr.contains("unexpected argument"),
+        "feature remove-dep must be a recognized subcommand, got: {}", stderr);
+}
+
+/// fp feature logs must be a recognized subcommand
+#[test]
+fn cli_feature_logs_is_recognized() {
+    let dir = setup_repo();
+    let out = fp(dir.path(), &["feature", "logs", "nonexistent"]);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(!stderr.contains("unrecognized subcommand"),
+        "feature logs must be a recognized subcommand, got: {}", stderr);
+    assert!(!stderr.contains("unexpected argument"),
+        "feature logs must be a recognized subcommand, got: {}", stderr);
+}
+
 /// fp feature status --json must be a recognized flag
 #[test]
 fn cli_feature_status_json_flag_is_recognized() {
