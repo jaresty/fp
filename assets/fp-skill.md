@@ -75,8 +75,11 @@ fp pr up <pr>                           # bootstrap the app for a single PR (use
 
 # Feature envelopes (multi-PR coordinated workspaces)
 fp feature new <name>                   # create a named feature envelope
-fp feature add <name> <pr> [--config <app>]  # add PR to envelope (optionally bind an app config)
-fp feature add-dep <name> <app>         # declare a baseline app dependency (no PR required)
+fp feature add <name> <pr>              # add PR to envelope (no app config bound)
+fp feature add <name> <pr> --config <app>           # bind one app config to this PR
+fp feature add <name> <pr> --config <a> --config <b>  # bind multiple app configs (repeatable)
+fp feature add-dep <name> <app>         # declare a baseline service dependency with no PR
+                                        # (starts alongside the envelope but is not PR-owned)
 fp feature up <name>                    # bootstrap all member PRs (start app processes)
 fp feature down <name>                  # tear down all member PRs (stop app processes)
 fp feature rebuild <name> [--pr <pr>]   # re-run bootstrap for ephemeral members without teardown
