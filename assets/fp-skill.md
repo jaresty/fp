@@ -75,7 +75,7 @@ fp pr up <pr>                           # bootstrap the app for a single PR (use
 
 # Feature envelopes (multi-PR coordinated workspaces)
 fp feature new <name>                   # create a named feature envelope
-fp feature add <name> <pr>              # add PR to envelope (no app config bound)
+fp feature add <name> <pr>              # add PR to envelope; auto-tracks if not yet tracked
 fp feature add <name> <pr> --config <app>           # bind one app config to this PR
 fp feature add <name> <pr> --config <a> --config <b>  # bind multiple app configs (repeatable)
 fp feature add-dep <name> <app>         # declare a baseline service dependency with no PR
