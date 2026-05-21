@@ -421,6 +421,34 @@ prompt.
 times out, the prompt is skipped and the switch completes. Timeout is reported in `--json`
 output.
 
+**Post-switch feature summary (TTY only):**
+
+After completing the switch, if the target PR is a member of a feature envelope, fp emits
+a compact status block followed by contextual operation hints:
+
+```
+Switched to feat/payments (PR #123)
+
+Feature: auth-refactor
+  PR #123  (payments-api)   ✓ installed  ✓ branch ok
+  PR #456  (checkout-svc)   ✓ running    ✓ healthy   ✓ branch ok
+
+To rebuild after editing:  fp feature rebuild auth-refactor --pr 123
+To check health:           fp feature status auth-refactor
+To tear down:              fp feature down auth-refactor
+```
+
+Rules for the hints block:
+- "To rebuild after editing" appears only when the switched-to PR has an ephemeral app
+  config; the `--pr` flag scopes it to the PR just switched to
+- "To check health" always appears when the PR is in a feature envelope
+- "To tear down" always appears when the PR is in a feature envelope
+- The entire block is suppressed when stdout is not a TTY (non-interactive mode)
+- The entire block is suppressed when the PR has no feature envelope membership
+
+The status table reuses the same health-check results already computed during the
+switch (within the 2-second cap); no additional probes are issued.
+
 ---
 
 ### Impact on Existing Commands
