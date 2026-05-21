@@ -903,7 +903,12 @@ pub fn cmd_feature_status(
     repo_root: &std::path::Path,
 ) -> anyhow::Result<String> {
     let statuses = crate::feature::feature_status(ps, config, name, repo_root)?;
-    if statuses.is_empty() {
+    let state = ps.load()?;
+    let dep_keys: Vec<String> = state.dep_records.keys()
+        .filter(|k| k.starts_with(&format!("{}:", name)))
+        .cloned()
+        .collect();
+    if statuses.is_empty() && dep_keys.is_empty() {
         return Ok(format!("Feature '{}' has no member PRs.", name));
     }
     if json {
@@ -919,6 +924,20 @@ pub fn cmd_feature_status(
             None => "",
         };
         out.push_str(&format!("  PR #{}  {}{}{}\n", s.pr, pid, health, branch));
+    }
+    for key in &dep_keys {
+        let dep_cfg_name = key.split_once(':').map(|x| x.1).unwrap_or(key.as_str());
+        let dep_rec = &state.dep_records[key];
+        let worktree = std::path::Path::new(&dep_rec.worktree);
+        let health = config.load_app_config(dep_cfg_name).ok().flatten()
+            .and_then(|cfg| cfg.health_check)
+            .map(|cmd| crate::feature::health_check_service(&cmd, worktree, 0, worktree));
+        let health_str = match health {
+            Some(true) => " ✓ healthy",
+            Some(false) => " ✗ unhealthy",
+            None => "",
+        };
+        out.push_str(&format!("  dep {}  (shared){}\n", dep_cfg_name, health_str));
     }
     Ok(out.trim_end().to_string())
 }

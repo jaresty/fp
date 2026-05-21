@@ -1824,8 +1824,10 @@ mod tests {
         let result = crate::commands::cmd_feature_down(&ps, &app_store, "my-feature", std::path::Path::new("."));
         assert!(result.is_ok(), "cmd_feature_down must succeed: {:?}", result);
         let state = ps.load().unwrap();
-        assert!(!state.records.contains_key(&10),
-            "cmd_feature_down must remove PR 10 from process state");
+        assert!(state.records.contains_key(&10),
+            "cmd_feature_down must preserve PR 10 record (keep feature_envelope for re-up)");
+        assert!(state.records[&10].pid.is_none(),
+            "cmd_feature_down must clear pid for PR 10 after teardown");
     }
 
     // Stage 2b: fp feature rebuild re-runs bootstrap for ephemeral members without teardown

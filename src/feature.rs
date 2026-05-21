@@ -259,7 +259,7 @@ pub fn feature_down(ps: &ProcessStateStore, config: &crate::app_config::AppConfi
             .collect()
     };
     for key in &dep_keys {
-        let dep_cfg_name = key.splitn(2, ':').nth(1).unwrap_or("").to_string();
+        let dep_cfg_name = key.split_once(':').map(|x| x.1).unwrap_or("").to_string();
         let dep_state = ps.load()?;
         if let Some(dep_rec) = dep_state.dep_records.get(key) {
             let worktree = std::path::Path::new(&dep_rec.worktree);
@@ -295,7 +295,7 @@ pub fn feature_rebuild(ps: &ProcessStateStore, config: &crate::app_config::AppCo
                 .collect()
         };
         for key in &dep_keys {
-            let dep_cfg_name = key.splitn(2, ':').nth(1).unwrap_or("").to_string();
+            let dep_cfg_name = key.split_once(':').map(|x| x.1).unwrap_or("").to_string();
             let cfg = match config.load_app_config(&dep_cfg_name).ok().flatten() {
                 Some(c) => c,
                 None => { messages.push(format!("dep {}: app config not found — skipped", dep_cfg_name)); continue; }
@@ -395,7 +395,11 @@ pub fn teardown_pr(ps: &ProcessStateStore, config: &AppConfig, pr: u64, worktree
         .env("FP_PR", pr.to_string())
         .env("COMPOSE_PROJECT_NAME", &instance)
         .status();
-    ps.deactivate(pr)
+    let mut state = ps.load()?;
+    if let Some(rec) = state.records.get_mut(&pr) {
+        rec.pid = None;
+    }
+    ps.save_state(state)
 }
 
 pub fn health_check_branch(worktree: &Path, expected_branch: &str) -> Option<bool> {

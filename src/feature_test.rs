@@ -154,17 +154,19 @@ mod tests {
             "bootstrap_pr must store worktree path, got: {:?}", state.records[&42].worktree);
     }
 
-    // D5: teardown_pr runs teardown command and removes record from process state
+    // D5: teardown_pr runs teardown command and clears pid but preserves record
     #[test]
-    fn feature_governs_teardown_pr_removes_activation() {
+    fn feature_governs_teardown_pr_clears_pid_preserves_record() {
         let (ps, _dir) = ps_store();
         let worktree = tempdir().unwrap();
         let cfg = echo_config("svc");
         bootstrap_pr(&ps, &cfg, 42, worktree.path(), "acme", "repo").unwrap();
         teardown_pr(&ps, &cfg, 42, worktree.path(), "acme", "repo").unwrap();
         let state = ps.load().unwrap();
-        assert!(!state.records.contains_key(&42),
-            "teardown_pr must remove PR 42 from process state, got keys: {:?}", state.records.keys().collect::<Vec<_>>());
+        assert!(state.records.contains_key(&42),
+            "teardown_pr must preserve record for PR 42 (for re-up), got keys: {:?}", state.records.keys().collect::<Vec<_>>());
+        assert!(state.records[&42].pid.is_none(),
+            "teardown_pr must clear pid for PR 42");
     }
 
     // D7: health_check_branch returns true when worktree HEAD matches expected branch
@@ -859,5 +861,92 @@ mod tests {
         let running = result.unwrap();
         assert!(running.iter().any(|f| f.name == "feat"),
             "dep slot with passing health_check must appear running when repo_root exists: {:?}", running);
+    }
+
+    #[test]
+    fn teardown_pr_governs_preserves_record_with_feature_envelope() {
+        let (ps, _dir) = ps_store();
+        let wt = tempdir().unwrap();
+        let cfg = AppConfig {
+            name: "svc".into(), bootstrap: "true".into(), teardown: "true".into(),
+            startup_timeout: "1s".into(), health_check: None, ephemeral: false, main_worktree: None,
+        };
+        ps.activate(ProcessRecord {
+            pr: 88, expected_branch: "feat/x".into(), pid: Some(99999),
+            feature_envelope: Some("my-feat".into()),
+            worktree: wt.path().to_string_lossy().to_string(),
+            app_config_names: vec!["svc".into()],
+        }).unwrap();
+        teardown_pr(&ps, &cfg, 88, wt.path(), "", "").unwrap();
+        let state = ps.load().unwrap();
+        assert!(state.records.contains_key(&88),
+            "teardown_pr must preserve record (keep feature_envelope) after teardown");
+        let rec = &state.records[&88];
+        assert!(rec.pid.is_none(), "teardown_pr must clear pid after teardown");
+        assert_eq!(rec.feature_envelope.as_deref(), Some("my-feat"),
+            "teardown_pr must preserve feature_envelope after teardown");
+    }
+
+    #[test]
+    fn feature_down_up_cycle_governs_record_visible_in_feature_status() {
+        use std::process::Command;
+        let tmp = tempfile::tempdir().unwrap();
+        let repo = tmp.path().join("repo");
+        Command::new("git").args(["init", "-b", "main", repo.to_str().unwrap()]).output().unwrap();
+        for arg in &[["config","user.email","t@t.com"],["config","user.name","T"]] {
+            Command::new("git").args(["-C", repo.to_str().unwrap()]).args(arg).output().unwrap();
+        }
+        std::fs::write(repo.join("f"), "x").unwrap();
+        Command::new("git").args(["-C", repo.to_str().unwrap(), "add", "."]).output().unwrap();
+        Command::new("git").args(["-C", repo.to_str().unwrap(), "commit", "--allow-empty", "-m", "init"]).output().unwrap();
+        Command::new("git").args(["-C", repo.to_str().unwrap(), "checkout", "-b", "feat/x"]).output().unwrap();
+        Command::new("git").args(["-C", repo.to_str().unwrap(), "checkout", "main"]).output().unwrap();
+        let wt = crate::worktree::worktree_path(&repo, "feat/x");
+        std::fs::create_dir_all(wt.parent().unwrap()).unwrap();
+        Command::new("git").args(["-C", repo.to_str().unwrap(), "worktree", "add", wt.to_str().unwrap(), "feat/x"]).output().unwrap();
+        let (ps, _dir) = ps_store();
+        let (app_store, _app_dir) = app_store();
+        let cfg = AppConfig {
+            name: "svc".into(), bootstrap: "true".into(), teardown: "true".into(),
+            startup_timeout: "1s".into(), health_check: None, ephemeral: false, main_worktree: None,
+        };
+        app_store.save_app_config(cfg).unwrap();
+        feature_new(&ps, "my-feat").unwrap();
+        ps.activate(ProcessRecord {
+            pr: 78280, expected_branch: "feat/x".into(), pid: None,
+            feature_envelope: Some("my-feat".into()),
+            worktree: String::new(),
+            app_config_names: vec!["svc".into()],
+        }).unwrap();
+        crate::feature::feature_down(&ps, &app_store, "my-feat", &repo).unwrap();
+        crate::feature::feature_up(&ps, &app_store, "my-feat", &repo).unwrap();
+        let statuses = feature_status(&ps, &app_store, "my-feat", &repo).unwrap();
+        assert!(statuses.iter().any(|s| s.pr == 78280),
+            "PR 78280 must appear in feature_status after down→up cycle, got: {:?}",
+            statuses.iter().map(|s| s.pr).collect::<Vec<_>>());
+    }
+
+    #[test]
+    fn cmd_feature_status_governs_shows_dep_records_in_text_output() {
+        let dir = tempfile::tempdir().unwrap();
+        let ps = crate::process_store::ProcessStateStore::open(dir.path());
+        let app_store = crate::app_config::AppConfigStore::open(dir.path().join("config.toml"));
+        app_store.save_app_config(AppConfig {
+            name: "backend".into(), bootstrap: "true".into(), teardown: "true".into(),
+            startup_timeout: "1s".into(), health_check: Some("true".into()), ephemeral: true,
+            main_worktree: None,
+        }).unwrap();
+        feature_new(&ps, "my-feat").unwrap();
+        let mut state = ps.load().unwrap();
+        state.dep_records.insert("my-feat:backend".into(), crate::process_store::DepRecord {
+            app_config_name: "backend".into(),
+            feature_envelope: "my-feat".into(),
+            pid: None,
+            worktree: dir.path().to_string_lossy().to_string(),
+        });
+        ps.save_state(state).unwrap();
+        let out = crate::commands::cmd_feature_status(&ps, &app_store, "my-feat", false, dir.path()).unwrap();
+        assert!(out.contains("backend"),
+            "feature status must include dep slot 'backend' in output, got: {}", out);
     }
 }
