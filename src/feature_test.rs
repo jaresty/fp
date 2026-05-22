@@ -969,4 +969,37 @@ mod tests {
         assert!(out.contains("backend"),
             "feature status must include dep slot 'backend' in output, got: {}", out);
     }
+
+    #[test]
+    fn feature_up_governs_errors_when_service_healthy_but_pid_dead() {
+        let tmp = tempfile::tempdir().unwrap();
+        let (ps, _ps_dir) = ps_store();
+        let (app_cfg_store, _cfg_dir) = app_store();
+        let cfg = AppConfig {
+            name: "svc".into(),
+            bootstrap: "true".into(),
+            teardown: "true".into(),
+            startup_timeout: "1s".into(),
+            health_check: Some("true".into()),
+            ephemeral: false,
+            main_worktree: None,
+        };
+        app_cfg_store.save_app_config(cfg).unwrap();
+        crate::feature::feature_new(&ps, "my-feat").unwrap();
+        let mut state = ps.load().unwrap();
+        state.records.insert(99, crate::process_store::ProcessRecord {
+            pr: 99,
+            expected_branch: "".into(), // empty so resolve_worktree returns repo_root (tmp.path())
+            pid: None,
+            feature_envelope: Some("my-feat".into()),
+            worktree: tmp.path().to_string_lossy().to_string(),
+            app_config_names: vec!["svc".into()],
+        });
+        ps.save_state(state).unwrap();
+        let result = crate::feature::feature_up(&ps, &app_cfg_store, "my-feat", tmp.path());
+        assert!(result.is_err(), "feature_up must error when service is healthy but pid is dead (untracked process)");
+        let err = result.unwrap_err().to_string();
+        assert!(err.contains("healthy but untracked"),
+            "feature_up error must mention 'healthy but untracked', got: {}", err);
+    }
 }

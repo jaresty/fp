@@ -2416,8 +2416,8 @@ mod tests {
         }).unwrap();
         let fake = make_fake_with_pr(42);
         let out = crate::commands::cmd_status_all(Some(&fake), &store, Some(&ps), Some(&app_store), &git_dir, "alice", "repo", false).unwrap();
-        assert!(out.contains("fp feature up --force"),
-            "cmd_status_all must show 'fp feature up --force' hint when service healthy but pid dead, got: {}", out);
+        assert!(out.contains("healthy but untracked — another process may be listening"),
+            "cmd_status_all must warn 'healthy but untracked — another process may be listening' when service healthy but pid dead, got: {}", out);
     }
 
     #[test]
@@ -2523,8 +2523,8 @@ mod tests {
         let result = crate::commands::cmd_feature_status(&ps, &app_store, "my-feat", false, dir.path());
         assert!(result.is_ok(), "cmd_feature_status must succeed: {:?}", result);
         let output = result.unwrap();
-        assert!(output.contains("fp feature up --force"),
-            "cmd_feature_status must show recovery hint when PR is stopped but healthy, got: {}", output);
+        assert!(output.contains("healthy but untracked — another process may be listening"),
+            "cmd_feature_status must warn 'healthy but untracked' when PR is stopped but healthy, got: {}", output);
     }
 
     #[test]

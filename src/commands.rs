@@ -116,7 +116,7 @@ pub fn cmd_status_all(
                         crate::feature::health_check_service(&cmd, wt, r.pr, wt)
                     }));
                 if service_healthy == Some(true) {
-                    "✗ down — run: fp feature up --force to restart as managed".to_string()
+                    "✗ down — ⚠ healthy but untracked — another process may be listening".to_string()
                 } else {
                     "✗ down".to_string()
                 }
@@ -959,7 +959,7 @@ pub fn cmd_feature_status(
             .map(|r| format!(" [{}]", r.app_config_names.join(", ")))
             .unwrap_or_default();
         let recovery = if !s.pid_alive && s.service_healthy == Some(true) {
-            "\n    → run: fp feature up --force to restart as managed"
+            "\n    ⚠ healthy but untracked — another process may be listening"
         } else if !s.pid_alive {
             "\n    (if your app daemonizes, fp cannot track it — keep the process in the foreground)"
         } else {
