@@ -451,6 +451,8 @@ pub fn health_check_service(cmd: &str, worktree: &Path, pr: u64, fp_worktree: &P
         .current_dir(worktree)
         .env("FP_WORKTREE", fp_worktree)
         .env("FP_PR", pr.to_string())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
         .status()
         .map(|s| s.success())
         .unwrap_or(false)

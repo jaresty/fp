@@ -952,7 +952,11 @@ pub fn cmd_feature_status(
             Some(false) => " ✗ unhealthy",
             None => "",
         };
-        out.push_str(&format!("  PR #{}  {}{}{}\n", s.pr, pid, health, branch));
+        let apps = state.records.get(&s.pr)
+            .filter(|r| !r.app_config_names.is_empty())
+            .map(|r| format!(" [{}]", r.app_config_names.join(", ")))
+            .unwrap_or_default();
+        out.push_str(&format!("  PR #{}{}  {}{}{}\n", s.pr, apps, pid, health, branch));
     }
     for key in &dep_keys {
         let dep_cfg_name = key.split_once(':').map(|x| x.1).unwrap_or(key.as_str());

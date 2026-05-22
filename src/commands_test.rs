@@ -2447,6 +2447,31 @@ mod tests {
     }
 
     #[test]
+    fn cmd_feature_status_governs_shows_app_config_names_per_pr() {
+        let dir = tempfile::tempdir().unwrap();
+        let ps = crate::process_store::ProcessStateStore::open(dir.path());
+        let app_store = crate::app_config::AppConfigStore::open(dir.path().join("config.toml"));
+        let live_pid = std::process::id();
+        let rec = crate::process_store::ProcessRecord {
+            pr: 77,
+            expected_branch: "feat/foo".into(),
+            pid: Some(live_pid),
+            feature_envelope: Some("my-feat".into()),
+            worktree: dir.path().to_string_lossy().to_string(),
+            app_config_names: vec!["frontend".into(), "backend".into()],
+        };
+        ps.activate(rec).unwrap();
+        let mut state = ps.load().unwrap();
+        state.feature_envelopes.insert("my-feat".to_string());
+        ps.save_state(state).unwrap();
+        let result = crate::commands::cmd_feature_status(&ps, &app_store, "my-feat", false, std::path::Path::new("."));
+        assert!(result.is_ok(), "cmd_feature_status must succeed: {:?}", result);
+        let output = result.unwrap();
+        assert!(output.contains("frontend") && output.contains("backend"),
+            "cmd_feature_status must show app_config_names for each PR, got: {}", output);
+    }
+
+    #[test]
     fn cmd_feature_status_governs_shows_test_command_when_set() {
         let dir = tempfile::tempdir().unwrap();
         let ps = crate::process_store::ProcessStateStore::open(dir.path());
