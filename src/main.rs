@@ -332,6 +332,9 @@ enum FeatureCommands {
         /// Abort if any conflicting running feature is detected
         #[arg(long)]
         no: bool,
+        /// Kill any unmanaged process via teardown before bootstrapping
+        #[arg(long)]
+        force: bool,
     },
     /// Tear down all PRs in a feature envelope
     Down {
@@ -498,7 +501,8 @@ fn main() -> Result<()> {
             let client_ref: Option<&dyn github::GithubClientTrait> = client.as_ref().map(|c| c as &dyn github::GithubClientTrait);
             if all {
                 let ps = process_store::ProcessStateStore::open(&git_dir);
-                print!("{}", commands::cmd_status_all(client_ref, &store, Some(&ps), &git_dir, &owner, &repo_name, json)?);
+                let app_store = app_config::AppConfigStore::open(app_config::AppConfigStore::default_path()?);
+                print!("{}", commands::cmd_status_all(client_ref, &store, Some(&ps), Some(&app_store), &git_dir, &owner, &repo_name, json)?);
             } else {
                 let number = pr.context("specify a PR number or use --all")?;
                 println!("{}", commands::cmd_status_one(client_ref, &store, &git_dir, &owner, &repo_name, number, json)?);
@@ -646,9 +650,20 @@ fn main() -> Result<()> {
                     let out = commands::cmd_feature_status_with_client(&ps, &app_store, &name, client.as_deref(), &owner, &repo_name, &repo_root)?;
                     println!("{}", out);
                 }
-                FeatureCommands::Up { name, yes, no } => {
+                FeatureCommands::Up { name, yes, no, force } => {
                     let app_store = app_config::AppConfigStore::open(app_config::AppConfigStore::default_path()?);
                     let repo_root = crate::worktree::main_repo_root(&std::env::current_dir()?)?;
+                    if force {
+                        let state = ps.load()?;
+                        for rec in state.records.values().filter(|r| r.feature_envelope.as_deref() == Some(&name)) {
+                            let wt = std::path::Path::new(&rec.worktree);
+                            for cfg_name in &rec.app_config_names {
+                                if let Ok(Some(cfg)) = app_store.load_app_config(cfg_name) {
+                                    let _ = crate::feature::teardown_pr(&ps, &cfg, rec.pr, wt, "", "");
+                                }
+                            }
+                        }
+                    }
                     let out = commands::cmd_feature_up_checked(&ps, &app_store, &name, yes, no, &repo_root)?;
                     println!("{}", out);
                 }

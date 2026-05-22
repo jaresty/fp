@@ -66,10 +66,12 @@ pub fn cmd_status_one(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 pub fn cmd_status_all(
     client: Option<&dyn crate::github::GithubClientTrait>,
     store: &crate::store::Store,
     ps: Option<&crate::process_store::ProcessStateStore>,
+    app_config: Option<&crate::app_config::AppConfigStore>,
     git_dir: &std::path::Path,
     owner: &str,
     repo: &str,
@@ -101,11 +103,23 @@ pub fn cmd_status_all(
     };
     let health_map: std::collections::HashMap<u64, String> = ps_ref
         .and_then(|p| p.load().ok())
-        .map(|state| state.records.values().map(|r| {
-            let label = if r.pid.map(crate::feature::health_check_pid).unwrap_or(false) {
+        .map(|ps_state| ps_state.records.values().map(|r| {
+            let pid_alive = r.pid.map(crate::feature::health_check_pid).unwrap_or(false);
+            let label = if pid_alive {
                 "✓ up".to_string()
             } else {
-                "✗ down".to_string()
+                let service_healthy = r.app_config_names.first()
+                    .and_then(|n| app_config.and_then(|ac| ac.load_app_config(n).ok().flatten()))
+                    .filter(|cfg| !cfg.ephemeral)
+                    .and_then(|cfg| cfg.health_check.map(|cmd| {
+                        let wt = std::path::Path::new(&r.worktree);
+                        crate::feature::health_check_service(&cmd, wt, r.pr, wt)
+                    }));
+                if service_healthy == Some(true) {
+                    "✗ down — run: fp feature up --force to restart as managed".to_string()
+                } else {
+                    "✗ down".to_string()
+                }
             };
             (r.pr, label)
         }).collect())
@@ -1078,6 +1092,20 @@ pub fn cmd_switch_feature_summary(ps: &crate::process_store::ProcessStateStore, 
         out.push_str(&format!("  PR #{}: {}{}\n", s.pr, health, ephemeral_hint));
     }
     out
+}
+
+pub fn cmd_pr_up_force(ps: &crate::process_store::ProcessStateStore, config: &crate::app_config::AppConfigStore, pr: u64) -> anyhow::Result<String> {
+    let state = ps.load()?;
+    let rec = state.records.get(&pr)
+        .ok_or_else(|| anyhow::anyhow!("PR #{} not found in process state — run `fp feature add` first", pr))?;
+    let wt = std::path::Path::new(&rec.worktree);
+    for cfg_name in &rec.app_config_names {
+        if let Ok(Some(cfg)) = config.load_app_config(cfg_name) {
+            crate::feature::teardown_pr(ps, &cfg, pr, wt, "", "")?;
+        }
+    }
+    drop(state);
+    cmd_pr_up(ps, config, pr)
 }
 
 pub fn cmd_pr_up(ps: &crate::process_store::ProcessStateStore, config: &crate::app_config::AppConfigStore, pr: u64) -> anyhow::Result<String> {

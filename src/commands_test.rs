@@ -127,7 +127,7 @@ mod tests {
         std::fs::create_dir_all(&git_dir).unwrap();
         let store = make_store_with_pr(&git_dir, 5, "feat/all-test");
         let fake = make_fake_with_pr(5);
-        let out = crate::commands::cmd_status_all(Some(&fake), &store, None, &git_dir, "alice", "repo", false).unwrap();
+        let out = crate::commands::cmd_status_all(Some(&fake), &store, None, None, &git_dir, "alice", "repo", false).unwrap();
         assert!(out.contains("PR #5") || out.contains("#5"), "must contain PR number, got: {}", out);
     }
 
@@ -179,7 +179,7 @@ mod tests {
             app_config_names: vec![],
         }).unwrap();
         let fake = make_fake_with_pr(5);
-        let out = crate::commands::cmd_status_all(Some(&fake), &store, Some(&ps), &git_dir, "alice", "repo", false).unwrap();
+        let out = crate::commands::cmd_status_all(Some(&fake), &store, Some(&ps), None, &git_dir, "alice", "repo", false).unwrap();
         assert!(out.contains("up") || out.contains("healthy") || out.contains("live") || out.contains("✓"),
             "cmd_status_all must show health indicator for live PR, got: {}", out);
     }
@@ -193,7 +193,7 @@ mod tests {
         let store = make_store_with_pr(&git_dir, 5, "feat/all-test");
         let fake = make_fake_with_pr(5);
         // No process state file — must not error
-        let result = crate::commands::cmd_status_all(Some(&fake), &store, None, &git_dir, "alice", "repo", false);
+        let result = crate::commands::cmd_status_all(Some(&fake), &store, None, None, &git_dir, "alice", "repo", false);
         assert!(result.is_ok(), "cmd_status_all must succeed without process state, got: {:?}", result);
     }
 
@@ -2394,6 +2394,56 @@ mod tests {
         let cmd = state.feature_configs.get("my-feat").and_then(|c| c.test_command.as_deref());
         assert_eq!(cmd, Some("echo e2e-ok"),
             "cmd_feature_set_test must persist test command, got: {:?}", cmd);
+    }
+
+    #[test]
+    fn cmd_status_all_governs_shows_unmanaged_hint_when_service_healthy_but_pid_dead() {
+        let tmp = tempfile::tempdir().unwrap();
+        let git_dir = tmp.path().join("git_dir");
+        std::fs::create_dir_all(&git_dir).unwrap();
+        let store = make_store_with_pr(&git_dir, 42, "feat/unmanaged");
+        let ps = crate::process_store::ProcessStateStore::open(&git_dir);
+        ps.activate(crate::process_store::ProcessRecord {
+            pr: 42, expected_branch: "feat/unmanaged".into(), pid: None,
+            feature_envelope: None, worktree: tmp.path().to_string_lossy().to_string(),
+            app_config_names: vec!["svc".into()],
+        }).unwrap();
+        let app_store = crate::app_config::AppConfigStore::open(tmp.path().join("config.toml"));
+        app_store.save_app_config(crate::app_config::AppConfig {
+            name: "svc".into(), bootstrap: "echo up".into(), teardown: "echo down".into(),
+            startup_timeout: "5s".into(), health_check: Some("true".into()),
+            ephemeral: false, main_worktree: None,
+        }).unwrap();
+        let fake = make_fake_with_pr(42);
+        let out = crate::commands::cmd_status_all(Some(&fake), &store, Some(&ps), Some(&app_store), &git_dir, "alice", "repo", false).unwrap();
+        assert!(out.contains("fp feature up --force"),
+            "cmd_status_all must show 'fp feature up --force' hint when service healthy but pid dead, got: {}", out);
+    }
+
+    #[test]
+    fn cmd_pr_up_force_governs_runs_teardown_before_bootstrap() {
+        let dir = tempfile::tempdir().unwrap();
+        let ps = crate::process_store::ProcessStateStore::open(dir.path());
+        let app_store = crate::app_config::AppConfigStore::open(dir.path().join("config.toml"));
+        let wt = tempfile::tempdir().unwrap();
+        let teardown_marker = dir.path().join("teardown_ran");
+        let teardown_cmd = format!("touch {}", teardown_marker.display());
+        app_store.save_app_config(crate::app_config::AppConfig {
+            name: "svc".into(), bootstrap: "echo up".into(), teardown: teardown_cmd,
+            startup_timeout: "5s".into(), health_check: None, ephemeral: false, main_worktree: None,
+        }).unwrap();
+        let mut state = ps.load().unwrap();
+        state.records.insert(99, crate::process_store::ProcessRecord {
+            pr: 99, expected_branch: String::new(), pid: None,
+            feature_envelope: None,
+            worktree: wt.path().to_string_lossy().to_string(),
+            app_config_names: vec!["svc".into()],
+        });
+        ps.save_state(state).unwrap();
+        let result = crate::commands::cmd_pr_up_force(&ps, &app_store, 99);
+        assert!(result.is_ok(), "cmd_pr_up_force must succeed: {:?}", result);
+        assert!(teardown_marker.exists(),
+            "cmd_pr_up_force must run teardown before bootstrap");
     }
 
 }
