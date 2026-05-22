@@ -2447,6 +2447,56 @@ mod tests {
     }
 
     #[test]
+    fn cmd_feature_up_governs_shows_foreground_note() {
+        let dir = tempfile::tempdir().unwrap();
+        let ps = crate::process_store::ProcessStateStore::open(dir.path());
+        let app_store = crate::app_config::AppConfigStore::open(dir.path().join("config.toml"));
+        app_store.save_app_config(crate::app_config::AppConfig {
+            name: "svc".into(), bootstrap: "true".into(), teardown: "true".into(),
+            startup_timeout: "1s".into(), health_check: None, ephemeral: false,
+            main_worktree: None,
+        }).unwrap();
+        let live_pid = std::process::id();
+        let rec = crate::process_store::ProcessRecord {
+            pr: 11, expected_branch: "".into(), pid: Some(live_pid),
+            feature_envelope: Some("my-feat".into()),
+            worktree: dir.path().to_string_lossy().to_string(),
+            app_config_names: vec!["svc".into()],
+        };
+        ps.activate(rec).unwrap();
+        let mut state = ps.load().unwrap();
+        state.feature_envelopes.insert("my-feat".to_string());
+        ps.save_state(state).unwrap();
+        let result = crate::commands::cmd_feature_up(&ps, &app_store, "my-feat", dir.path());
+        assert!(result.is_ok(), "cmd_feature_up must succeed: {:?}", result);
+        let output = result.unwrap();
+        assert!(output.contains("foreground"),
+            "cmd_feature_up must mention foreground requirement, got: {}", output);
+    }
+
+    #[test]
+    fn cmd_feature_status_governs_shows_daemonize_hint_when_stopped() {
+        let dir = tempfile::tempdir().unwrap();
+        let ps = crate::process_store::ProcessStateStore::open(dir.path());
+        let app_store = crate::app_config::AppConfigStore::open(dir.path().join("config.toml"));
+        let rec = crate::process_store::ProcessRecord {
+            pr: 22, expected_branch: "".into(), pid: None,
+            feature_envelope: Some("my-feat".into()),
+            worktree: dir.path().to_string_lossy().to_string(),
+            app_config_names: vec![],
+        };
+        ps.activate(rec).unwrap();
+        let mut state = ps.load().unwrap();
+        state.feature_envelopes.insert("my-feat".to_string());
+        ps.save_state(state).unwrap();
+        let result = crate::commands::cmd_feature_status(&ps, &app_store, "my-feat", false, dir.path());
+        assert!(result.is_ok(), "cmd_feature_status must succeed: {:?}", result);
+        let output = result.unwrap();
+        assert!(output.contains("daemonize") || output.contains("foreground"),
+            "cmd_feature_status must hint about daemonizing when PR is stopped, got: {}", output);
+    }
+
+    #[test]
     fn cmd_feature_status_governs_shows_recovery_hint_when_stopped_but_healthy() {
         let dir = tempfile::tempdir().unwrap();
         let ps = crate::process_store::ProcessStateStore::open(dir.path());

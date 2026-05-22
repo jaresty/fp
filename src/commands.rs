@@ -884,7 +884,9 @@ pub fn cmd_feature_up(ps: &crate::process_store::ProcessStateStore, config: &cra
     if msgs.is_empty() {
         Ok(format!("Feature '{}' has no member PRs with app configs.", name))
     } else {
-        Ok(msgs.join("\n"))
+        let mut out = msgs.join("\n");
+        out.push_str("\nNote: fp tracks processes by PID — your bootstrap script must stay in the foreground (do not daemonize).");
+        Ok(out)
     }
 }
 
@@ -958,6 +960,8 @@ pub fn cmd_feature_status(
             .unwrap_or_default();
         let recovery = if !s.pid_alive && s.service_healthy == Some(true) {
             "\n    → run: fp feature up --force to restart as managed"
+        } else if !s.pid_alive {
+            "\n    (if your app daemonizes, fp cannot track it — keep the process in the foreground)"
         } else {
             ""
         };

@@ -61,8 +61,11 @@ fp merge <pr> --rebase                  # force rebase merge
 fp merge <pr> --merge                   # force merge commit
 
 # App lifecycle configs (define how to start/stop/health-check an app)
+# IMPORTANT: fp tracks processes by PID. Your bootstrap command must stay in the
+# foreground — do not daemonize (e.g. avoid `docker compose up -d` without a
+# foreground wrapper). If the process exits immediately, fp will show it as stopped.
 fp app define-config <name> \
-  --bootstrap "<cmd>" \                 # command to start the app in its worktree
+  --bootstrap "<cmd>" \                 # command to start the app in its worktree (must stay in foreground)
   --teardown "<cmd>" \                  # command to stop the app
   --startup-timeout <dur> \             # how long to wait for startup (default: 60s)
   [--health-check "<cmd>"] \            # optional: exit 0 = healthy
