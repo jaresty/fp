@@ -932,8 +932,13 @@ pub fn cmd_feature_status(
         .filter(|k| k.starts_with(&format!("{}:", name)))
         .cloned()
         .collect();
+    let test_command = state.feature_configs.get(name).and_then(|c| c.test_command.as_deref()).map(str::to_string);
     if statuses.is_empty() && dep_keys.is_empty() {
-        return Ok(format!("Feature '{}' has no member PRs.", name));
+        let mut out = format!("Feature '{}' has no member PRs.", name);
+        if let Some(cmd) = &test_command {
+            out.push_str(&format!("\n  Test: {}\n  Run: fp feature test {}", cmd, name));
+        }
+        return Ok(out);
     }
     if json {
         return Ok(serde_json::to_string_pretty(&statuses)?);
@@ -962,6 +967,9 @@ pub fn cmd_feature_status(
             None => "",
         };
         out.push_str(&format!("  dep {}  (shared){}\n", dep_cfg_name, health_str));
+    }
+    if let Some(cmd) = &test_command {
+        out.push_str(&format!("  Test: {}\n  Run: fp feature test {}\n", cmd, name));
     }
     Ok(out.trim_end().to_string())
 }
@@ -1055,7 +1063,7 @@ pub fn cmd_feature_test(ps: &crate::process_store::ProcessStateStore, name: &str
     let stdout = String::from_utf8_lossy(&output.stdout);
     let stderr = String::from_utf8_lossy(&output.stderr);
     let status = if output.status.success() { "passed" } else { "FAILED" };
-    let mut out = format!("Feature '{}' test {}:\n", name, status);
+    let mut out = format!("Feature '{}' test {} (cmd: {}):\n", name, status, cmd);
     if !stdout.is_empty() { out.push_str(&stdout); }
     if !stderr.is_empty() { out.push_str(&stderr); }
     if !output.status.success() {

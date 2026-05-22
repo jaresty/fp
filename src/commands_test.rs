@@ -2446,4 +2446,47 @@ mod tests {
             "cmd_pr_up_force must run teardown before bootstrap");
     }
 
+    #[test]
+    fn cmd_feature_status_governs_shows_test_command_when_set() {
+        let dir = tempfile::tempdir().unwrap();
+        let ps = crate::process_store::ProcessStateStore::open(dir.path());
+        let app_store = crate::app_config::AppConfigStore::open(dir.path().join("config.toml"));
+        crate::feature::feature_new(&ps, "my-feat").unwrap();
+        crate::commands::cmd_feature_set_test(&ps, "my-feat", "pytest tests/e2e/test_feature.py").unwrap();
+        let result = crate::commands::cmd_feature_status(&ps, &app_store, "my-feat", false, std::path::Path::new("."));
+        assert!(result.is_ok(), "cmd_feature_status must succeed: {:?}", result);
+        let output = result.unwrap();
+        assert!(output.contains("pytest tests/e2e/test_feature.py"),
+            "cmd_feature_status must show test command when set, got: {}", output);
+    }
+
+    #[test]
+    fn cmd_feature_status_governs_shows_run_hint_when_test_set() {
+        let dir = tempfile::tempdir().unwrap();
+        let ps = crate::process_store::ProcessStateStore::open(dir.path());
+        let app_store = crate::app_config::AppConfigStore::open(dir.path().join("config.toml"));
+        crate::feature::feature_new(&ps, "my-feat").unwrap();
+        crate::commands::cmd_feature_set_test(&ps, "my-feat", "pytest tests/e2e").unwrap();
+        let result = crate::commands::cmd_feature_status(&ps, &app_store, "my-feat", false, std::path::Path::new("."));
+        assert!(result.is_ok(), "cmd_feature_status must succeed: {:?}", result);
+        let output = result.unwrap();
+        assert!(output.contains("fp feature test my-feat"),
+            "cmd_feature_status must show run hint when test command is set, got: {}", output);
+    }
+
+    #[test]
+    fn cmd_feature_test_governs_shows_command_before_running() {
+        let tmp = tempfile::tempdir().unwrap();
+        let git_dir = tmp.path().join(".git");
+        std::fs::create_dir_all(&git_dir).unwrap();
+        let ps = crate::process_store::ProcessStateStore::open(&git_dir);
+        crate::feature::feature_new(&ps, "my-feat").unwrap();
+        crate::commands::cmd_feature_set_test(&ps, "my-feat", "echo e2e-ran").unwrap();
+        let result = crate::commands::cmd_feature_test(&ps, "my-feat", tmp.path());
+        assert!(result.is_ok(), "cmd_feature_test must succeed: {:?}", result);
+        let out = result.unwrap();
+        assert!(out.contains("echo e2e-ran"),
+            "cmd_feature_test must show the test command before running, got: {}", out);
+    }
+
 }
