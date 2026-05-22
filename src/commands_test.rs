@@ -2447,6 +2447,37 @@ mod tests {
     }
 
     #[test]
+    fn cmd_feature_status_governs_shows_recovery_hint_when_stopped_but_healthy() {
+        let dir = tempfile::tempdir().unwrap();
+        let ps = crate::process_store::ProcessStateStore::open(dir.path());
+        let app_store = crate::app_config::AppConfigStore::open(dir.path().join("config.toml"));
+        // Save an app config with a health check that always passes
+        app_store.save_app_config(crate::app_config::AppConfig {
+            name: "svc".into(), bootstrap: "true".into(), teardown: "true".into(),
+            startup_timeout: "1s".into(), health_check: Some("true".into()), ephemeral: false,
+            main_worktree: None,
+        }).unwrap();
+        // PR with no live pid (stopped) but app config has health_check=true (healthy)
+        let rec = crate::process_store::ProcessRecord {
+            pr: 55,
+            expected_branch: "".into(),
+            pid: None,
+            feature_envelope: Some("my-feat".into()),
+            worktree: dir.path().to_string_lossy().to_string(),
+            app_config_names: vec!["svc".into()],
+        };
+        ps.activate(rec).unwrap();
+        let mut state = ps.load().unwrap();
+        state.feature_envelopes.insert("my-feat".to_string());
+        ps.save_state(state).unwrap();
+        let result = crate::commands::cmd_feature_status(&ps, &app_store, "my-feat", false, dir.path());
+        assert!(result.is_ok(), "cmd_feature_status must succeed: {:?}", result);
+        let output = result.unwrap();
+        assert!(output.contains("fp feature up --force"),
+            "cmd_feature_status must show recovery hint when PR is stopped but healthy, got: {}", output);
+    }
+
+    #[test]
     fn cmd_feature_status_governs_shows_app_config_names_per_pr() {
         let dir = tempfile::tempdir().unwrap();
         let ps = crate::process_store::ProcessStateStore::open(dir.path());

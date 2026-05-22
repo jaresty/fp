@@ -956,7 +956,12 @@ pub fn cmd_feature_status(
             .filter(|r| !r.app_config_names.is_empty())
             .map(|r| format!(" [{}]", r.app_config_names.join(", ")))
             .unwrap_or_default();
-        out.push_str(&format!("  PR #{}{}  {}{}{}\n", s.pr, apps, pid, health, branch));
+        let recovery = if !s.pid_alive && s.service_healthy == Some(true) {
+            "\n    → run: fp feature up --force to restart as managed"
+        } else {
+            ""
+        };
+        out.push_str(&format!("  PR #{}{}  {}{}{}{}\n", s.pr, apps, pid, health, branch, recovery));
     }
     for key in &dep_keys {
         let dep_cfg_name = key.split_once(':').map(|x| x.1).unwrap_or(key.as_str());
