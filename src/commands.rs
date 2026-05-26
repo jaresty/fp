@@ -378,6 +378,9 @@ pub fn cmd_ls(store: &crate::store::Store, owner: &str, repo: &str, json: bool) 
 }
 
 pub fn cmd_track(client: &dyn crate::github::GithubClientTrait, owner: &str, repo: &str, pr: u64, title: Option<String>, _branch: Option<String>) -> anyhow::Result<(String, String, String)> {
+    if let Ok((true, _)) = client.fetch_pr_is_merged(owner, repo, pr) {
+        anyhow::bail!("PR #{} is already merged and cannot be tracked", pr);
+    }
     let (fetched_title, fetched_branch) = client.fetch_pr_metadata(owner, repo, pr).unwrap_or_default();
     let base = client.fetch_pr_base(owner, repo, pr).unwrap_or_default();
     let resolved_title = title.unwrap_or_else(|| if fetched_title.is_empty() { format!("PR #{}", pr) } else { fetched_title });

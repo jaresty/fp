@@ -492,6 +492,16 @@ mod tests {
     }
 
     #[test]
+    fn track_merged_pr_returns_error() {
+        let mut fake = crate::github::FakeGithubClient::new_with_pr(42, "feat/done", "Done PR", "main");
+        fake.set_pr_merged(42, true);
+        let result = crate::commands::cmd_track(&fake, "owner", "repo", 42, None, None);
+        assert!(result.is_err(), "cmd_track must error for merged PR");
+        let msg = result.unwrap_err().to_string();
+        assert!(msg.contains("42") && msg.contains("merged"), "error must mention PR number and 'merged', got: {}", msg);
+    }
+
+    #[test]
     fn cmd_edit_returns_success_message() {
         let fake = crate::github::FakeGithubClient::new_with_pr(7, "feat/edit-me", "Old Title", "main");
         let result = crate::commands::cmd_edit(&fake, "owner", "repo", 7, Some("New Title".to_string()), None, vec![]);
