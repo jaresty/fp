@@ -51,6 +51,7 @@ pub struct PrHealthStatus {
     pub pid_alive: bool,
     pub service_healthy: Option<bool>,
     pub branch_ok: Option<bool>,
+    pub ephemeral: bool,
 }
 
 pub fn feature_list_running(ps: &ProcessStateStore) -> Result<Vec<FeatureInfo>> {
@@ -69,7 +70,7 @@ pub fn feature_list_running(ps: &ProcessStateStore) -> Result<Vec<FeatureInfo>> 
     Ok(running)
 }
 
-pub fn feature_list_running_with_config(ps: &ProcessStateStore, config: &crate::app_config::AppConfigStore, repo_root: &std::path::Path) -> Result<Vec<FeatureInfo>> {
+pub fn feature_list_running_with_config(ps: &ProcessStateStore, config: &crate::app_config::AppConfigStore, _repo_root: &std::path::Path) -> Result<Vec<FeatureInfo>> {
     let state = ps.load()?;
     let running: Vec<FeatureInfo> = state.feature_envelopes.iter().filter(|name| {
         state.records.values().any(|r| {
@@ -78,10 +79,7 @@ pub fn feature_list_running_with_config(ps: &ProcessStateStore, config: &crate::
                 .and_then(|n| config.load_app_config(n).ok().flatten());
             let is_ephemeral = app_cfg.as_ref().map(|c| c.ephemeral).unwrap_or(false);
             if is_ephemeral {
-                let worktree = resolve_worktree(repo_root, &r.expected_branch);
-                app_cfg.and_then(|c| c.health_check)
-                    .map(|cmd| health_check_service(&cmd, &worktree, r.pr, &worktree))
-                    .unwrap_or(false)
+                true
             } else {
                 r.pid.map(health_check_pid).unwrap_or(false)
             }
@@ -109,12 +107,12 @@ pub fn feature_status(ps: &ProcessStateStore, config: &crate::app_config::AppCon
             if is_ephemeral {
                 let service_healthy = app_cfg.and_then(|c| c.health_check)
                     .map(|cmd| health_check_service(&cmd, &worktree, r.pr, &worktree));
-                PrHealthStatus { pr: r.pr, pid_alive: false, service_healthy, branch_ok }
+                PrHealthStatus { pr: r.pr, pid_alive: false, service_healthy, branch_ok, ephemeral: true }
             } else {
                 let pid_alive = r.pid.map(health_check_pid).unwrap_or(false);
                 let service_healthy = app_cfg.and_then(|c| c.health_check)
                     .map(|cmd| health_check_service(&cmd, &worktree, r.pr, &worktree));
-                PrHealthStatus { pr: r.pr, pid_alive, service_healthy, branch_ok }
+                PrHealthStatus { pr: r.pr, pid_alive, service_healthy, branch_ok, ephemeral: false }
             }
         })
         .collect();

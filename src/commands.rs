@@ -953,25 +953,37 @@ pub fn cmd_feature_status(
     }
     let mut out = String::new();
     for s in &statuses {
-        let pid = if s.pid_alive { "✓ running" } else { "✗ stopped" };
-        let branch = match s.branch_ok { Some(true) => " ✓ branch ok", Some(false) => " ✗ wrong branch", None => "" };
-        let health = match s.service_healthy {
-            Some(true) => " ✓ healthy",
-            Some(false) => " ✗ unhealthy",
-            None => "",
-        };
         let apps = state.records.get(&s.pr)
             .filter(|r| !r.app_config_names.is_empty())
             .map(|r| format!(" [{}]", r.app_config_names.join(", ")))
             .unwrap_or_default();
-        let recovery = if !s.pid_alive && s.service_healthy == Some(true) {
-            "\n    ⚠ healthy but untracked — another process may be listening"
-        } else if !s.pid_alive {
-            "\n    (if your app daemonizes, fp cannot track it — keep the process in the foreground)"
+        let branch = match s.branch_ok { Some(true) => " ✓ branch ok", Some(false) => " ✗ wrong branch", None => "" };
+        if s.ephemeral {
+            out.push_str(&format!("  PR #{}{}  ✓ built{}\n", s.pr, apps, branch));
         } else {
-            ""
-        };
-        out.push_str(&format!("  PR #{}{}  {}{}{}{}\n", s.pr, apps, pid, health, branch, recovery));
+            let pid = if s.pid_alive { "✓ running" } else { "✗ stopped" };
+            let health = match s.service_healthy {
+                Some(true) => " ✓ healthy",
+                Some(false) => " ✗ unhealthy",
+                None => "",
+            };
+            let recovery = if !s.pid_alive && s.service_healthy == Some(true) {
+                let owning = state.records.values()
+                    .find(|r| r.feature_envelope.as_deref() != Some(name)
+                        && r.pid.map(crate::feature::health_check_pid).unwrap_or(false))
+                    .and_then(|r| r.feature_envelope.clone());
+                if let Some(owner) = owning {
+                    format!("\n    ⚠ healthy but untracked — running under feature: {}", owner)
+                } else {
+                    "\n    ⚠ healthy but untracked — another process may be listening".to_string()
+                }
+            } else if !s.pid_alive {
+                "\n    (if your app daemonizes, fp cannot track it — keep the process in the foreground)".to_string()
+            } else {
+                String::new()
+            };
+            out.push_str(&format!("  PR #{}{}  {}{}{}{}\n", s.pr, apps, pid, health, branch, recovery));
+        }
     }
     for key in &dep_keys {
         let dep_cfg_name = key.split_once(':').map(|x| x.1).unwrap_or(key.as_str());

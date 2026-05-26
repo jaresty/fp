@@ -2298,8 +2298,102 @@ mod tests {
         let result = crate::commands::cmd_feature_status_with_client(&ps, &app_store, "my-feat", None, "o", "r", &repo);
         assert!(result.is_ok(), "cmd_feature_status_with_client must succeed: {:?}", result);
         let out = result.unwrap();
-        assert!(out.contains("healthy") && !out.contains("unhealthy"),
-            "ephemeral with passing health-check must show healthy when repo_root is correct, got: {}", out);
+        assert!(out.contains("✓ built"),
+            "ephemeral app must show '✓ built' regardless of health_check, got: {}", out);
+    }
+
+    // Ephemeral: feature status shows "✓ built" not "✗ stopped" for ephemeral apps
+    #[test]
+    fn cmd_feature_status_governs_ephemeral_shows_built_not_stopped() {
+        let tmp = tempfile::tempdir().unwrap();
+        let repo = tmp.path().join("repo");
+        std::process::Command::new("git").args(["init", "-b", "main", repo.to_str().unwrap()]).output().unwrap();
+        for arg in &[["config","user.email","t@t.com"],["config","user.name","T"]] {
+            std::process::Command::new("git").args(["-C", repo.to_str().unwrap()]).args(arg).output().unwrap();
+        }
+        std::fs::write(repo.join("f"), "x").unwrap();
+        std::process::Command::new("git").args(["-C", repo.to_str().unwrap(), "add", "."]).output().unwrap();
+        std::process::Command::new("git").args(["-C", repo.to_str().unwrap(), "commit", "--allow-empty", "-m", "init"]).output().unwrap();
+        std::process::Command::new("git").args(["-C", repo.to_str().unwrap(), "checkout", "-b", "feat/ext"]).output().unwrap();
+        std::process::Command::new("git").args(["-C", repo.to_str().unwrap(), "checkout", "main"]).output().unwrap();
+        let wt = crate::worktree::worktree_path(&repo, "feat/ext");
+        std::fs::create_dir_all(wt.parent().unwrap()).unwrap();
+        std::process::Command::new("git").args(["-C", repo.to_str().unwrap(), "worktree", "add", wt.to_str().unwrap(), "feat/ext"]).output().unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        let ps = crate::process_store::ProcessStateStore::open(dir.path());
+        let app_store = crate::app_config::AppConfigStore::open(dir.path().join("config.toml"));
+        app_store.save_app_config(crate::app_config::AppConfig {
+            name: "ext".into(),
+            bootstrap: "true".into(),
+            teardown: "true".into(),
+            startup_timeout: "1s".into(),
+            health_check: None,
+            ephemeral: true,
+            main_worktree: None,
+        }).unwrap();
+        crate::feature::feature_new(&ps, "my-feat").unwrap();
+        let mut state = ps.load().unwrap();
+        state.records.insert(42, crate::process_store::ProcessRecord {
+            pr: 42,
+            expected_branch: "feat/ext".into(),
+            pid: None,
+            feature_envelope: Some("my-feat".into()),
+            worktree: String::new(),
+            app_config_names: vec!["ext".into()],
+        });
+        ps.save_state(state).unwrap();
+        let result = crate::commands::cmd_feature_status_with_client(&ps, &app_store, "my-feat", None, "o", "r", &repo);
+        assert!(result.is_ok(), "cmd_feature_status_with_client must succeed: {:?}", result);
+        let out = result.unwrap();
+        assert!(out.contains("✓ built"), "ephemeral app must show '✓ built', got: {}", out);
+        assert!(!out.contains("✗ stopped"), "ephemeral app must not show '✗ stopped', got: {}", out);
+    }
+
+    // healthy-but-untracked: when another feature envelope has a live PID, name it in the warning
+    #[test]
+    fn cmd_feature_status_governs_healthy_untracked_names_owning_feature() {
+        let dir = tempfile::tempdir().unwrap();
+        let ps = crate::process_store::ProcessStateStore::open(dir.path());
+        let app_store = crate::app_config::AppConfigStore::open(dir.path().join("config.toml"));
+        app_store.save_app_config(crate::app_config::AppConfig {
+            name: "svc".into(),
+            bootstrap: "true".into(),
+            teardown: "true".into(),
+            startup_timeout: "1s".into(),
+            health_check: Some("true".into()),
+            ephemeral: false,
+            main_worktree: None,
+        }).unwrap();
+        crate::feature::feature_new(&ps, "auth-refactor").unwrap();
+        crate::feature::feature_new(&ps, "payment-v2").unwrap();
+        // PR #42 in auth-refactor: no live PID, service healthy (health_check="true")
+        let mut state = ps.load().unwrap();
+        // empty branch resolves to repo_root so health_check_service can run "true" successfully
+        state.records.insert(42, crate::process_store::ProcessRecord {
+            pr: 42,
+            expected_branch: "".into(),
+            pid: None,
+            feature_envelope: Some("auth-refactor".into()),
+            worktree: String::new(),
+            app_config_names: vec!["svc".into()],
+        });
+        // PR #99 in payment-v2: live PID (current process — guaranteed alive)
+        state.records.insert(99, crate::process_store::ProcessRecord {
+            pr: 99,
+            expected_branch: "".into(),
+            pid: Some(std::process::id()),
+            feature_envelope: Some("payment-v2".into()),
+            worktree: String::new(),
+            app_config_names: vec!["svc".into()],
+        });
+        ps.save_state(state).unwrap();
+        let result = crate::commands::cmd_feature_status(
+            &ps, &app_store, "auth-refactor", false, std::path::Path::new(".")
+        );
+        assert!(result.is_ok(), "cmd_feature_status must succeed: {:?}", result);
+        let out = result.unwrap();
+        assert!(out.contains("running under feature: payment-v2"),
+            "healthy-but-untracked warning must name the owning feature envelope, got: {}", out);
     }
 
     #[test]

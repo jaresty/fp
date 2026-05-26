@@ -395,6 +395,59 @@ mod tests {
             running.iter().map(|f| &f.name).collect::<Vec<_>>());
     }
 
+    // Ephemeral: PrHealthStatus.ephemeral is true when app config is ephemeral
+    #[test]
+    fn feature_governs_status_ephemeral_sets_ephemeral_true() {
+        let (ps, _dir) = ps_store();
+        let (app_store, _app_dir) = app_store();
+        let tmp = tempdir().unwrap();
+        let repo = tmp.path().join("repo");
+        std::fs::create_dir_all(&repo).unwrap();
+        setup_git_worktree(&repo, "feat/ext");
+        app_store.save_app_config(ephemeral_config("my-ext")).unwrap();
+        let mut rec = record(789, "feat/ext", "");
+        rec.feature_envelope = Some("ext-feature".into());
+        rec.app_config_names = vec!["my-ext".into()];
+        ps.activate(rec).unwrap();
+        let mut state = ps.load().unwrap();
+        state.feature_envelopes.insert("ext-feature".to_string());
+        ps.save_state(state).unwrap();
+        let statuses = feature_status(&ps, &app_store, "ext-feature", &repo).unwrap();
+        assert_eq!(statuses.len(), 1);
+        assert!(statuses[0].ephemeral, "PrHealthStatus.ephemeral must be true for ephemeral app");
+    }
+
+    // Ephemeral: feature_list_running includes envelope even when no health_check configured
+    #[test]
+    fn feature_governs_list_running_includes_ephemeral_without_health_check() {
+        let (ps, _dir) = ps_store();
+        let (app_store, _app_dir) = app_store();
+        let tmp = tempdir().unwrap();
+        let repo = tmp.path().join("repo");
+        std::fs::create_dir_all(&repo).unwrap();
+        setup_git_worktree(&repo, "feat/ext");
+        app_store.save_app_config(crate::app_config::AppConfig {
+            name: "my-ext".into(),
+            bootstrap: "echo install".into(),
+            teardown: "echo uninstall".into(),
+            startup_timeout: "5s".into(),
+            health_check: None,
+            ephemeral: true,
+            main_worktree: None,
+        }).unwrap();
+        let mut rec = record(789, "feat/ext", "");
+        rec.feature_envelope = Some("ext-feature".into());
+        rec.app_config_names = vec!["my-ext".into()];
+        ps.activate(rec).unwrap();
+        let mut state = ps.load().unwrap();
+        state.feature_envelopes.insert("ext-feature".to_string());
+        ps.save_state(state).unwrap();
+        let running = feature_list_running_with_config(&ps, &app_store, &repo).unwrap();
+        assert!(running.iter().any(|f| f.name == "ext-feature"),
+            "feature_list_running must include ephemeral envelope even without health_check, got: {:?}",
+            running.iter().map(|f| &f.name).collect::<Vec<_>>());
+    }
+
     // envelope_deps: feature_add_dep stores app config name in envelope_deps
     #[test]
     fn feature_governs_add_dep_stores_config_in_envelope_deps() {
@@ -696,13 +749,12 @@ mod tests {
             app_config_names: vec!["ephem".into()],
         });
         ps.save_state(state).unwrap();
-        // With derived path absent, health_check_service must fail → feature must NOT appear running
-        // (stub uses rec.worktree="" → runs from CWD → health check passes → feature appears running)
+        // Ephemeral apps always appear running (no health check or PID required)
         let result = crate::feature::feature_list_running_with_config(&ps, &app_cfg_store, tmp.path());
         assert!(result.is_ok(), "feature_list_running_with_config must not error: {:?}", result);
         let running = result.unwrap();
-        assert!(running.is_empty(),
-            "feature must not appear running when derived worktree absent (must not fall back to rec.worktree): {:?}", running);
+        assert!(running.iter().any(|f| f.name == "feat"),
+            "ephemeral feature must always appear running regardless of worktree: {:?}", running);
     }
 
     #[test]
