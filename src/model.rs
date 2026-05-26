@@ -68,6 +68,8 @@ pub struct PrState {
     pub codeowners_eligibility: CownershipEligibility,
     #[serde(default)]
     pub created_at: Option<String>,
+    #[serde(default)]
+    pub is_stacked: bool,
 }
 
 #[derive(Debug, Clone)]

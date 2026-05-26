@@ -22,6 +22,7 @@ mod tests {
             head_sha: "".into(),
             needs_parent_rebase: false,
             has_merge_conflict: false, codeowners_eligibility: Default::default(), created_at: None,
+            is_stacked: false,
         }
     }
 
@@ -256,6 +257,7 @@ mod tests {
             checks: vec![Check { name: "ci".into(), status: CheckStatus::Pass, required: true, details_url: None, log_snippet: None }],
             threads: vec![],
             head_sha: "".into(), needs_parent_rebase: false, has_merge_conflict: false, codeowners_eligibility: Default::default(), created_at: None,
+            is_stacked: false,
         };
         let tasks = generate_tasks(&pr);
         assert!(
@@ -279,11 +281,35 @@ mod tests {
             threads: vec![],
             head_sha: "".into(), needs_parent_rebase: false,
             has_merge_conflict: false, codeowners_eligibility: Default::default(), created_at: None,
+            is_stacked: false,
         };
         let tasks = generate_tasks(&pr);
         assert!(
             !tasks.iter().any(|t| t.task_type == TaskType::MarkReady),
             "expected no MarkReady task for non-draft PR"
+        );
+    }
+
+    // MR3: stacked (child) draft PR does not generate MarkReady task
+    #[test]
+    fn stacked_pr_has_no_markready_task() {
+        let pr = PrState {
+            number: 12,
+            title: "Stacked feature".into(),
+            branch: "feat/child".into(),
+            base: "feat/parent".into(),
+            draft: true,
+            approved: false,
+            checks: vec![Check { name: "ci".into(), status: CheckStatus::Pass, required: true, details_url: None, log_snippet: None }],
+            threads: vec![],
+            head_sha: "".into(), needs_parent_rebase: false, has_merge_conflict: false, codeowners_eligibility: Default::default(), created_at: None,
+            is_stacked: true,
+        };
+        let tasks = generate_tasks(&pr);
+        assert!(
+            !tasks.iter().any(|t| t.task_type == TaskType::MarkReady),
+            "expected no MarkReady task for stacked draft PR, got: {:?}",
+            tasks.iter().map(|t| &t.task_type).collect::<Vec<_>>()
         );
     }
 

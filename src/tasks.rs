@@ -153,6 +153,7 @@ pub fn generate_tasks(pr: &PrState) -> Vec<Task> {
     if pr.draft
         && pr.checks.iter().all(|c| c.status == CheckStatus::Pass)
         && !pr.threads.iter().any(|t| matches!(t.state, ThreadState::Open | ThreadState::Stale))
+        && !pr.is_stacked
     {
         tasks.push(Task {
             pr: pr.number,

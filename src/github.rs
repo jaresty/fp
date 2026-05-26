@@ -184,6 +184,7 @@ impl GithubClient {
             checks: vec![],
             threads: vec![],
             needs_parent_rebase: false, has_merge_conflict: false, codeowners_eligibility: Default::default(), created_at: None,
+            is_stacked: false,
         })
     }
 
@@ -584,7 +585,7 @@ impl GithubClient {
 
         let has_merge_conflict = pr_json["mergeable"].as_bool() == Some(false);
         let created_at = pr_json["created_at"].as_str().map(|s| s.to_string());
-        Ok(PrState { number: pr_number, title, branch, base: base_branch, head_sha, needs_parent_rebase: false, draft, approved, checks, threads, has_merge_conflict, codeowners_eligibility: Default::default(), created_at })
+        Ok(PrState { number: pr_number, title, branch, base: base_branch, head_sha, needs_parent_rebase: false, draft, approved, checks, threads, has_merge_conflict, codeowners_eligibility: Default::default(), created_at, is_stacked: false })
     }
 }
 
@@ -654,7 +655,7 @@ impl FakeGithubClient {
     pub fn set_pr_merged(&mut self, number: u64, is_merged: bool) { self.merged.insert(number, is_merged); }
     pub fn new_with_pr(number: u64, branch: &str, title: &str, base: &str) -> Self {
         let mut client = Self::new();
-        client.set_pr(number, PrState { number, title: title.into(), branch: branch.into(), base: base.into(), head_sha: String::new(), draft: false, approved: false, checks: vec![], threads: vec![], needs_parent_rebase: false, has_merge_conflict: false, codeowners_eligibility: Default::default(), created_at: None });
+        client.set_pr(number, PrState { number, title: title.into(), branch: branch.into(), base: base.into(), head_sha: String::new(), draft: false, approved: false, checks: vec![], threads: vec![], needs_parent_rebase: false, has_merge_conflict: false, codeowners_eligibility: Default::default(), created_at: None, is_stacked: false });
         client
     }
     pub fn set_pr(&mut self, number: u64, pr: PrState) { self.prs.insert(number, pr); }
@@ -698,7 +699,7 @@ impl GithubClientTrait for FakeGithubClient {
     fn post_pr_comment(&self, _o: &str, _r: &str, _n: u64, _b: &str) -> Result<String> { Ok("https://github.com/fake/comment/1".into()) }
     #[allow(clippy::too_many_arguments)]
     fn create_pr_with_body(&self, _o: &str, _r: &str, title: &str, head: &str, base: &str, draft: bool, _body: Option<&str>) -> Result<PrState> {
-        Ok(PrState { number: 0, title: title.into(), branch: head.into(), base: base.into(), head_sha: String::new(), draft, approved: false, checks: vec![], threads: vec![], needs_parent_rebase: false, has_merge_conflict: false, codeowners_eligibility: Default::default(), created_at: None })
+        Ok(PrState { number: 0, title: title.into(), branch: head.into(), base: base.into(), head_sha: String::new(), draft, approved: false, checks: vec![], threads: vec![], needs_parent_rebase: false, has_merge_conflict: false, codeowners_eligibility: Default::default(), created_at: None, is_stacked: false })
     }
     fn mark_pr_ready(&self, _o: &str, _r: &str, _n: u64) -> Result<()> { Ok(()) }
     fn is_head_behind_base(&self, _o: &str, _r: &str, _base: &str, _head: &str) -> bool { self.head_behind }

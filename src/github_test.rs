@@ -27,6 +27,7 @@ mod trait_tests {
             needs_parent_rebase: false,
             has_merge_conflict: false,
             codeowners_eligibility: Default::default(), created_at: None,
+            is_stacked: false,
         });
         let pr = fake.fetch_pr("owner", "repo", 7).unwrap();
         assert_eq!(pr.title, "test pr");

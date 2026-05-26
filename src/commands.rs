@@ -46,7 +46,7 @@ pub fn cmd_status_one(
             number: cached.number, title: cached.title.clone(), branch: cached.branch.clone(),
             base: cached.base.clone(), head_sha: String::new(), draft: false, approved: false,
             checks: vec![], threads: vec![], needs_parent_rebase: false, has_merge_conflict: false,
-            codeowners_eligibility: Default::default(), created_at: None,
+            codeowners_eligibility: Default::default(), created_at: None, is_stacked: false,
         });
 
     if let Some(c) = client
@@ -54,6 +54,7 @@ pub fn cmd_status_one(
             .and_then(|p| c.fetch_pr(owner, repo, p.number).ok())
         && !parent.head_sha.is_empty() && !pr_state.head_sha.is_empty() {
         pr_state.needs_parent_rebase = c.is_head_behind_base(owner, repo, &parent.head_sha, &pr_state.head_sha);
+        pr_state.is_stacked = true;
     }
 
     let tasks = crate::tasks::generate_tasks(&pr_state);
@@ -134,13 +135,14 @@ pub fn cmd_status_all(
             number: cached.number, title: cached.title.clone(), branch: cached.branch.clone(),
             base: cached.base.clone(), head_sha: String::new(), draft: false, approved: false,
             checks: vec![], threads: vec![], needs_parent_rebase: false, has_merge_conflict: false,
-            codeowners_eligibility: Default::default(), created_at: None,
+            codeowners_eligibility: Default::default(), created_at: None, is_stacked: false,
         });
 
         if let Some(c) = client
             && let Some(parent) = prs.iter().find(|p| p.branch == cached.base).and_then(|p| fetched.get(&p.number))
             && !parent.head_sha.is_empty() && !pr_state.head_sha.is_empty() {
             pr_state.needs_parent_rebase = c.is_head_behind_base(owner, repo, &parent.head_sha, &pr_state.head_sha);
+            pr_state.is_stacked = true;
         }
 
         let tasks = crate::tasks::generate_tasks(&pr_state);
@@ -349,7 +351,7 @@ pub fn cmd_threads(
             number: tracked.number, title: tracked.title.clone(), branch: tracked.branch.clone(),
             base: "".into(), head_sha: "".into(), draft: false, approved: false,
             checks: vec![], threads: vec![], needs_parent_rebase: false, has_merge_conflict: false,
-            codeowners_eligibility: Default::default(), created_at: None,
+            codeowners_eligibility: Default::default(), created_at: None, is_stacked: false,
         });
     let threads = crate::display::fetch_open_threads(&pr_state.threads);
     Ok(crate::display::format_open_threads(pr, &threads, json))
@@ -761,12 +763,13 @@ pub fn cmd_watch(
                     branch: cached.branch.clone(),
                     base: cached.base.clone(), head_sha: "".into(), draft: false, approved: false,
                     checks: vec![], threads: vec![], needs_parent_rebase: false, has_merge_conflict: false,
-                    codeowners_eligibility: Default::default(), created_at: None,
+                    codeowners_eligibility: Default::default(), created_at: None, is_stacked: false,
                 });
             if let Some(c) = client
                 && let Some(parent) = prs.iter().find(|p| p.branch == pr_state.base).and_then(|p| fetched.get(&p.number))
                 && !parent.head_sha.is_empty() && !pr_state.head_sha.is_empty() {
                 pr_state.needs_parent_rebase = c.is_head_behind_base(owner, repo_name, &parent.head_sha, &pr_state.head_sha);
+                pr_state.is_stacked = true;
             }
             let curr = generate_tasks(&pr_state);
             all_tasks.extend(curr.clone());
