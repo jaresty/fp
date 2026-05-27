@@ -70,7 +70,8 @@ fp app define-config <name> \
   --startup-timeout <dur> \             # how long to wait for startup (default: 60s)
   [--health-check "<cmd>"] \            # optional: exit 0 = healthy
   [--ephemeral] \                       # app exits immediately after install (health-check required)
-  [--main-worktree <path>]              # path to use when no PR owns this config slot
+  [--main-worktree <path>] \            # path to use when no PR owns this config slot
+  [--setup "<cmd>"]                     # one-time setup command run per worktree before bootstrapping (e.g. npm install)
 fp app set-config <owner/repo> <name>   # assign a named app config to all PRs in a repo
 fp app list                             # list all defined app configs
 
@@ -83,6 +84,8 @@ fp feature new <name>                   # create a named feature envelope
 fp feature add <name> <pr>              # add PR to envelope; auto-tracks if not yet tracked
 fp feature add <name> <pr> --config <app>           # bind one app config to this PR
 fp feature add <name> <pr> --config <a> --config <b>  # bind multiple app configs (repeatable)
+fp feature app-setup <name> <app>       # run the one-time setup command for an app in this feature's worktree
+                                        # auto-run on add-dep when worktree is known; warn on feature up if skipped
 fp feature add-dep <name> <app>         # declare a baseline service dependency with no PR
                                         # bootstraps from the main repo root when no live PR
                                         # covers that app config (dep slot: pr=0, branch="")
