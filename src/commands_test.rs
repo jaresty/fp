@@ -2441,6 +2441,31 @@ mod tests {
     }
 
     #[test]
+    fn cmd_app_show_governs_displays_all_fields() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = crate::app_config::AppConfigStore::open(dir.path().join("config.toml"));
+        store.save_app_config(crate::app_config::AppConfig {
+            name: "payments-api".into(),
+            bootstrap: "docker compose up".into(),
+            teardown: "docker compose down".into(),
+            startup_timeout: "30s".into(),
+            health_check: Some("curl -f http://localhost:8080/health".into()),
+            ephemeral: false,
+            main_worktree: Some("/repos/main".into()),
+            setup: Some("npm install".into()),
+        }).unwrap();
+        let result = crate::commands::cmd_app_show(&store, "payments-api");
+        assert!(result.is_ok(), "cmd_app_show must succeed: {:?}", result);
+        let out = result.unwrap();
+        assert!(out.contains("docker compose up"), "cmd_app_show must show bootstrap, got: {}", out);
+        assert!(out.contains("docker compose down"), "cmd_app_show must show teardown, got: {}", out);
+        assert!(out.contains("30s"), "cmd_app_show must show startup_timeout, got: {}", out);
+        assert!(out.contains("curl -f http://localhost:8080/health"), "cmd_app_show must show health_check, got: {}", out);
+        assert!(out.contains("/repos/main"), "cmd_app_show must show main_worktree, got: {}", out);
+        assert!(out.contains("npm install"), "cmd_app_show must show setup, got: {}", out);
+    }
+
+    #[test]
     fn cmd_feature_remove_dep_governs_removes_from_envelope_deps() {
         let tmp = tempfile::tempdir().unwrap();
         let git_dir = tmp.path().join(".git");

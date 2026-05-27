@@ -91,6 +91,18 @@ fn cli_switch_updates_process_record_worktree_path() {
         "process record worktree must match fp switch output path after switch");
 }
 
+/// fp app show must be a recognized subcommand
+#[test]
+fn cli_app_show_is_recognized() {
+    let dir = setup_repo();
+    let out = fp(dir.path(), &["app", "show", "nonexistent"]);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(!stderr.contains("unrecognized subcommand"),
+        "app show must be a recognized subcommand, got: {}", stderr);
+    assert!(!stderr.contains("unexpected argument"),
+        "app show must be a recognized subcommand, got: {}", stderr);
+}
+
 /// fp app list must be a recognized subcommand
 #[test]
 fn cli_app_list_is_recognized() {

@@ -429,6 +429,11 @@ enum AppCommands {
     },
     /// List all defined app configs
     List,
+    /// Show all fields of a named app config
+    Show {
+        /// Name of the app config to display
+        name: String,
+    },
 }
 
 #[derive(Subcommand)]
@@ -736,6 +741,10 @@ fn main() -> Result<()> {
                 }
                 AppCommands::List => {
                     let out = commands::cmd_app_list(&store)?;
+                    println!("{}", out);
+                }
+                AppCommands::Show { name } => {
+                    let out = commands::cmd_app_show(&store, &name)?;
                     println!("{}", out);
                 }
             }

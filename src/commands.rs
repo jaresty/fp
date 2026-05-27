@@ -1019,6 +1019,20 @@ pub fn cmd_app_list(config: &crate::app_config::AppConfigStore) -> anyhow::Resul
     Ok(out.trim_end().to_string())
 }
 
+pub fn cmd_app_show(config: &crate::app_config::AppConfigStore, name: &str) -> anyhow::Result<String> {
+    let cfg = config.load_app_config(name)?
+        .ok_or_else(|| anyhow::anyhow!("app config '{}' not found", name))?;
+    let mut out = format!("name:             {}\n", cfg.name);
+    out.push_str(&format!("bootstrap:        {}\n", cfg.bootstrap));
+    out.push_str(&format!("teardown:         {}\n", cfg.teardown));
+    out.push_str(&format!("startup_timeout:  {}\n", cfg.startup_timeout));
+    out.push_str(&format!("health_check:     {}\n", cfg.health_check.as_deref().unwrap_or("(none)")));
+    out.push_str(&format!("ephemeral:        {}\n", cfg.ephemeral));
+    out.push_str(&format!("main_worktree:    {}\n", cfg.main_worktree.as_deref().unwrap_or("(none)")));
+    out.push_str(&format!("setup:            {}\n", cfg.setup.as_deref().unwrap_or("(none)")));
+    Ok(out.trim_end().to_string())
+}
+
 pub fn cmd_feature_remove_dep(ps: &crate::process_store::ProcessStateStore, envelope: &str, app_config_name: &str) -> anyhow::Result<String> {
     let mut state = ps.load()?;
     anyhow::ensure!(state.feature_envelopes.contains(envelope), "Feature envelope '{}' not found", envelope);
