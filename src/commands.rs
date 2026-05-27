@@ -1218,25 +1218,34 @@ pub fn cmd_feature_app_setup(
     let cfg = config.load_app_config(app_config_name)?
         .ok_or_else(|| anyhow::anyhow!("app config '{}' not found", app_config_name))?;
     let setup_cmd = cfg.setup.as_deref()
-        .ok_or_else(|| anyhow::anyhow!("app config '{}' has no setup command defined", app_config_name))?;
+        .ok_or_else(|| anyhow::anyhow!("app config '{}' has no setup command defined", app_config_name))?
+        .to_string();
     let state = ps.load()?;
-    let worktree = state.records.values()
-        .find(|r| r.feature_envelope.as_deref() == Some(feature))
+    let worktrees: Vec<String> = state.records.values()
+        .filter(|r| r.feature_envelope.as_deref() == Some(feature)
+            && !r.worktree.is_empty()
+            && !state.setup_completed.contains(&(app_config_name.to_string(), r.worktree.clone())))
         .map(|r| r.worktree.clone())
-        .ok_or_else(|| anyhow::anyhow!("no PR record found for feature '{}'", feature))?;
-    let worktree_path = std::path::Path::new(&worktree);
-    let status = std::process::Command::new("sh")
-        .arg("-c")
-        .arg(setup_cmd)
-        .current_dir(worktree_path)
-        .status()?;
-    if !status.success() {
-        anyhow::bail!("setup command failed with exit code: {:?}", status.code());
+        .collect();
+    if worktrees.is_empty() {
+        return Ok(format!("No worktrees pending setup for '{}' in feature '{}'", app_config_name, feature));
     }
-    let mut state = ps.load()?;
-    state.setup_completed.insert((app_config_name.to_string(), worktree.clone()));
-    ps.save_state(state)?;
-    Ok(format!("Setup complete for '{}' in {}", app_config_name, worktree))
+    let mut messages = Vec::new();
+    for worktree in &worktrees {
+        let status = std::process::Command::new("sh")
+            .arg("-c")
+            .arg(&setup_cmd)
+            .current_dir(worktree)
+            .status()?;
+        if !status.success() {
+            anyhow::bail!("setup command failed in {} with exit code: {:?}", worktree, status.code());
+        }
+        let mut state = ps.load()?;
+        state.setup_completed.insert((app_config_name.to_string(), worktree.clone()));
+        ps.save_state(state)?;
+        messages.push(format!("Setup complete for '{}' in {}", app_config_name, worktree));
+    }
+    Ok(messages.join("\n"))
 }
 
 pub fn cmd_feature_add_dep(

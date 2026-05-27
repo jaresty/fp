@@ -2751,6 +2751,55 @@ mod tests {
     }
 
     #[test]
+    fn cmd_feature_app_setup_governs_runs_setup_in_all_pr_worktrees() {
+        let tmp1 = tempfile::tempdir().unwrap();
+        let tmp2 = tempfile::tempdir().unwrap();
+        let git_dir = tmp1.path().join(".git");
+        std::fs::create_dir_all(&git_dir).unwrap();
+        let ps = crate::process_store::ProcessStateStore::open(&git_dir);
+        let app_store_dir = tempfile::tempdir().unwrap();
+        let app_store = crate::app_config::AppConfigStore::open(app_store_dir.path().join("config.toml"));
+        app_store.save_app_config(crate::app_config::AppConfig {
+            name: "payments-api".into(),
+            bootstrap: "true".into(),
+            teardown: "true".into(),
+            startup_timeout: "60s".into(),
+            health_check: None,
+            ephemeral: false,
+            main_worktree: None,
+            setup: Some("true".into()),
+        }).unwrap();
+        let mut state = ps.load().unwrap();
+        state.feature_envelopes.insert("my-feat".into());
+        state.records.insert(10, crate::process_store::ProcessRecord {
+            pr: 10,
+            expected_branch: "".into(),
+            pid: None,
+            feature_envelope: Some("my-feat".into()),
+            worktree: tmp1.path().to_string_lossy().to_string(),
+            app_config_names: vec!["payments-api".into()],
+        });
+        state.records.insert(20, crate::process_store::ProcessRecord {
+            pr: 20,
+            expected_branch: "".into(),
+            pid: None,
+            feature_envelope: Some("my-feat".into()),
+            worktree: tmp2.path().to_string_lossy().to_string(),
+            app_config_names: vec!["payments-api".into()],
+        });
+        ps.save_state(state).unwrap();
+        let result = crate::commands::cmd_feature_app_setup(&ps, &app_store, "my-feat", "payments-api");
+        assert!(result.is_ok(), "cmd_feature_app_setup must succeed for multi-worktree: {:?}", result);
+        let loaded = ps.load().unwrap();
+        let wt1 = tmp1.path().to_string_lossy().to_string();
+        let wt2 = tmp2.path().to_string_lossy().to_string();
+        assert!(loaded.setup_completed.contains(&("payments-api".into(), wt1.clone())),
+            "cmd_feature_app_setup must mark setup complete for PR 10 worktree, got: {:?}", loaded.setup_completed);
+        assert!(loaded.setup_completed.contains(&("payments-api".into(), wt2.clone())),
+            "cmd_feature_app_setup must mark setup complete for PR 20 worktree, got: {:?}", loaded.setup_completed);
+    }
+
+    #[test]
     fn cmd_feature_up_governs_warns_when_setup_not_run() {
         let tmp = tempfile::tempdir().unwrap();
         let git_dir = tmp.path().join(".git");
