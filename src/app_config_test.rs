@@ -17,7 +17,7 @@ mod tests {
             startup_timeout: "60s".into(),
             health_check: None,
             ephemeral: false,
-            main_worktree: None,
+            main_worktree: None, setup: None,
         }
     }
 
@@ -145,6 +145,26 @@ mod tests {
         let names: Vec<&str> = list.iter().map(|c| c.name.as_str()).collect();
         assert_eq!(names, vec!["alpha", "mango", "zebra"],
             "list_app_configs must return configs sorted by name, got: {:?}", names);
+    }
+
+    #[test]
+    fn app_config_store_governs_setup_field_defaults_none() {
+        let (store, _dir) = make_store();
+        store.save_app_config(sample_config("svc")).unwrap();
+        let cfg = store.load_app_config("svc").unwrap().unwrap();
+        assert!(cfg.setup.is_none(),
+            "setup must default to None, got: {:?}", cfg.setup);
+    }
+
+    #[test]
+    fn app_config_store_governs_setup_field_persists() {
+        let (store, _dir) = make_store();
+        let mut cfg = sample_config("svc");
+        cfg.setup = Some("npm install".into());
+        store.save_app_config(cfg).unwrap();
+        let loaded = store.load_app_config("svc").unwrap().unwrap();
+        assert_eq!(loaded.setup, Some("npm install".into()),
+            "setup must persist, got: {:?}", loaded.setup);
     }
 
     // overwrite: second save replaces first for same config name

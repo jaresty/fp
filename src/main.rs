@@ -409,6 +409,9 @@ enum AppCommands {
         /// Path to the main worktree to use when no PR owns this app config slot
         #[arg(long)]
         main_worktree: Option<String>,
+        /// One-time setup command to run per worktree before bootstrapping (e.g. npm install)
+        #[arg(long)]
+        setup: Option<String>,
     },
     /// Assign a named app config to all PRs on a repo
     SetConfig {
@@ -680,7 +683,8 @@ fn main() -> Result<()> {
                     println!("{}", out);
                 }
                 FeatureCommands::AddDep { name, app_config } => {
-                    let out = commands::cmd_feature_add_dep(&ps, &name, &app_config)?;
+                    let app_store = app_config::AppConfigStore::open(app_config::AppConfigStore::default_path()?);
+                    let out = commands::cmd_feature_add_dep(&ps, &app_store, &name, &app_config)?;
                     println!("{}", out);
                 }
                 FeatureCommands::Remove { name, pr } => {
@@ -710,8 +714,8 @@ fn main() -> Result<()> {
         Commands::App { subcommand } => {
             let store = app_config::AppConfigStore::open(app_config::AppConfigStore::default_path()?);
             match subcommand {
-                AppCommands::DefineConfig { name, bootstrap, teardown, startup_timeout, health_check, ephemeral, main_worktree } => {
-                    let out = commands::cmd_app_define_config(&store, &name, &bootstrap, &teardown, &startup_timeout, health_check.as_deref(), ephemeral, main_worktree.as_deref())?;
+                AppCommands::DefineConfig { name, bootstrap, teardown, startup_timeout, health_check, ephemeral, main_worktree, setup } => {
+                    let out = commands::cmd_app_define_config(&store, &name, &bootstrap, &teardown, &startup_timeout, health_check.as_deref(), ephemeral, main_worktree.as_deref(), setup.as_deref())?;
                     println!("{}", out);
                 }
                 AppCommands::SetConfig { repo, config_name } => {

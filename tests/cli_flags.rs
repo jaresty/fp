@@ -139,6 +139,23 @@ fn cli_feature_remove_dep_is_recognized() {
         "feature remove-dep must be a recognized subcommand, got: {}", stderr);
 }
 
+/// fp app define-config --setup must be a recognized flag
+#[test]
+fn cli_define_config_setup_flag_is_recognized() {
+    let dir = setup_repo();
+    let out = fp(dir.path(), &[
+        "app", "define-config", "my-svc",
+        "--bootstrap", "echo up",
+        "--teardown", "echo down",
+        "--setup", "npm install",
+    ]);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(!stderr.contains("unrecognized argument"),
+        "--setup must be a recognized flag, got: {}", stderr);
+    assert!(!stderr.contains("unexpected argument"),
+        "--setup must be a recognized flag, got: {}", stderr);
+}
+
 /// fp feature logs must be a recognized subcommand
 #[test]
 fn cli_feature_logs_is_recognized() {

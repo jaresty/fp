@@ -1209,9 +1209,60 @@ pub fn cmd_feature_up_checked(ps: &crate::process_store::ProcessStateStore, conf
     cmd_feature_up(ps, config, name, repo_root)
 }
 
-pub fn cmd_feature_add_dep(ps: &crate::process_store::ProcessStateStore, name: &str, app_config: &str) -> anyhow::Result<String> {
+pub fn cmd_feature_app_setup(
+    ps: &crate::process_store::ProcessStateStore,
+    config: &crate::app_config::AppConfigStore,
+    feature: &str,
+    app_config_name: &str,
+) -> anyhow::Result<String> {
+    let cfg = config.load_app_config(app_config_name)?
+        .ok_or_else(|| anyhow::anyhow!("app config '{}' not found", app_config_name))?;
+    let setup_cmd = cfg.setup.as_deref()
+        .ok_or_else(|| anyhow::anyhow!("app config '{}' has no setup command defined", app_config_name))?;
+    let state = ps.load()?;
+    let worktree = state.records.values()
+        .find(|r| r.feature_envelope.as_deref() == Some(feature))
+        .map(|r| r.worktree.clone())
+        .ok_or_else(|| anyhow::anyhow!("no PR record found for feature '{}'", feature))?;
+    let worktree_path = std::path::Path::new(&worktree);
+    let status = std::process::Command::new("sh")
+        .arg("-c")
+        .arg(setup_cmd)
+        .current_dir(worktree_path)
+        .status()?;
+    if !status.success() {
+        anyhow::bail!("setup command failed with exit code: {:?}", status.code());
+    }
+    let mut state = ps.load()?;
+    state.setup_completed.insert((app_config_name.to_string(), worktree.clone()));
+    ps.save_state(state)?;
+    Ok(format!("Setup complete for '{}' in {}", app_config_name, worktree))
+}
+
+pub fn cmd_feature_add_dep(
+    ps: &crate::process_store::ProcessStateStore,
+    config: &crate::app_config::AppConfigStore,
+    name: &str,
+    app_config: &str,
+) -> anyhow::Result<String> {
     crate::feature::feature_add_dep(ps, name, app_config)?;
-    Ok(format!("Added dep '{}' to feature '{}'", app_config, name))
+    let mut out = format!("Added dep '{}' to feature '{}'", app_config, name);
+    // Auto-run setup if the app has a setup command and a worktree is known
+    if let Ok(Some(cfg)) = config.load_app_config(app_config) && cfg.setup.is_some() {
+        let state = ps.load()?;
+        let has_worktree = state.records.values()
+            .find(|r| r.feature_envelope.as_deref() == Some(name))
+            .map(|r| !r.worktree.is_empty())
+            .unwrap_or(false);
+        drop(state);
+        if has_worktree {
+            match cmd_feature_app_setup(ps, config, name, app_config) {
+                Ok(msg) => { out.push('\n'); out.push_str(&msg); }
+                Err(e) => { out.push_str(&format!("\nWarning: setup failed: {}", e)); }
+            }
+        }
+    }
+    Ok(out)
 }
 
 pub fn cmd_feature_add(ps: &crate::process_store::ProcessStateStore, store: &crate::store::Store, name: &str, pr: u64, configs: Vec<String>) -> anyhow::Result<String> {
@@ -1229,6 +1280,7 @@ pub fn cmd_app_define_config(
     health_check: Option<&str>,
     ephemeral: bool,
     main_worktree: Option<&str>,
+    setup: Option<&str>,
 ) -> anyhow::Result<String> {
     store.save_app_config(crate::app_config::AppConfig {
         name: name.to_string(),
@@ -1238,6 +1290,7 @@ pub fn cmd_app_define_config(
         health_check: health_check.map(str::to_string),
         ephemeral,
         main_worktree: main_worktree.map(str::to_string),
+        setup: setup.map(str::to_string),
     })?;
     Ok(format!("Defined app config '{}'", name))
 }

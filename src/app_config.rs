@@ -15,6 +15,8 @@ pub struct AppConfig {
     pub ephemeral: bool,
     #[serde(default)]
     pub main_worktree: Option<String>,
+    #[serde(default)]
+    pub setup: Option<String>,
 }
 
 #[derive(Debug, Default, Serialize, Deserialize)]

@@ -201,6 +201,9 @@ pub fn feature_up(ps: &ProcessStateStore, config: &crate::app_config::AppConfigS
                 Some(c) => c,
                 None => { messages.push(format!("PR #{}: app config '{}' not found — skipped", rec.pr, cfg_name)); continue; }
             };
+            if cfg.setup.is_some() && !state.setup_completed.contains(&(cfg_name.clone(), rec.worktree.clone())) {
+                messages.push(format!("Warning: setup not run for '{}' in this worktree — run: fp feature {} app setup {}", cfg.name, name, cfg_name));
+            }
             let pid_alive = rec.pid.map(health_check_pid).unwrap_or(false);
             if !pid_alive {
                 let svc_healthy = cfg.health_check.as_deref()

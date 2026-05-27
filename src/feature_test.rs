@@ -31,7 +31,7 @@ mod tests {
         AppConfig {
             name: name.into(),
             bootstrap: "echo bootstrap-ok".into(),
-            main_worktree: None,
+            main_worktree: None, setup: None,
             teardown: "echo teardown-ok".into(),
             startup_timeout: "5s".into(),
             health_check: None,
@@ -77,7 +77,7 @@ mod tests {
             startup_timeout: "5s".into(),
             health_check: Some("true".into()),
             ephemeral: true,
-            main_worktree: None,
+            main_worktree: None, setup: None,
         }
     }
 
@@ -433,7 +433,7 @@ mod tests {
             startup_timeout: "5s".into(),
             health_check: None,
             ephemeral: true,
-            main_worktree: None,
+            main_worktree: None, setup: None,
         }).unwrap();
         let mut rec = record(789, "feat/ext", "");
         rec.feature_envelope = Some("ext-feature".into());
@@ -554,7 +554,7 @@ mod tests {
             startup_timeout: "5s".into(),
             health_check: None,
             ephemeral: false,
-            main_worktree: None,
+            main_worktree: None, setup: None,
         };
         bootstrap_pr(&ps, &cfg, 1, wt.path(), "org", "repo").unwrap();
         let state = ps.load().unwrap();
@@ -594,7 +594,7 @@ mod tests {
             startup_timeout: "1s".into(),
             health_check: None,
             ephemeral: false,
-            main_worktree: None,
+            main_worktree: None, setup: None,
         };
         app_cfg_store.save_app_config(cfg.clone()).unwrap();
         feature_new(&ps, "feat").unwrap();
@@ -642,7 +642,7 @@ mod tests {
             startup_timeout: "1s".into(),
             health_check: None,
             ephemeral: false,
-            main_worktree: None,
+            main_worktree: None, setup: None,
         };
         app_cfg_store.save_app_config(cfg.clone()).unwrap();
         feature_new(&ps, "feat").unwrap();
@@ -732,7 +732,7 @@ mod tests {
             startup_timeout: "1s".into(),
             health_check: Some("true".into()),
             ephemeral: true,
-            main_worktree: None,
+            main_worktree: None, setup: None,
         };
         app_cfg_store.save_app_config(cfg.clone()).unwrap();
         feature_new(&ps, "feat").unwrap();
@@ -778,7 +778,7 @@ mod tests {
             startup_timeout: "1s".into(),
             health_check: None,
             ephemeral: false,
-            main_worktree: None,
+            main_worktree: None, setup: None,
         };
         bootstrap_pr(&ps, &cfg, 55, wt.path(), "org", "repo").unwrap();
         let state = ps.load().unwrap();
@@ -893,7 +893,7 @@ mod tests {
             startup_timeout: "1s".into(),
             health_check: Some("true".into()),
             ephemeral: true,
-            main_worktree: None,
+            main_worktree: None, setup: None,
         };
         app_cfg_store.save_app_config(cfg).unwrap();
         feature_new(&ps, "feat").unwrap();
@@ -923,7 +923,7 @@ mod tests {
         let wt = tempdir().unwrap();
         let cfg = AppConfig {
             name: "svc".into(), bootstrap: "sleep 30".into(), teardown: "true".into(),
-            startup_timeout: "1s".into(), health_check: None, ephemeral: false, main_worktree: None,
+            startup_timeout: "1s".into(), health_check: None, ephemeral: false, main_worktree: None, setup: None,
         };
         bootstrap_pr(&ps, &cfg, 55, wt.path(), "org", "repo").unwrap();
         let state = ps.load().unwrap();
@@ -941,7 +941,7 @@ mod tests {
         let wt = tempdir().unwrap();
         let cfg = AppConfig {
             name: "svc".into(), bootstrap: "true".into(), teardown: "true".into(),
-            startup_timeout: "1s".into(), health_check: None, ephemeral: false, main_worktree: None,
+            startup_timeout: "1s".into(), health_check: None, ephemeral: false, main_worktree: None, setup: None,
         };
         ps.activate(ProcessRecord {
             pr: 88, expected_branch: "feat/x".into(), pid: Some(99999),
@@ -980,7 +980,7 @@ mod tests {
         let (app_store, _app_dir) = app_store();
         let cfg = AppConfig {
             name: "svc".into(), bootstrap: "true".into(), teardown: "true".into(),
-            startup_timeout: "1s".into(), health_check: None, ephemeral: false, main_worktree: None,
+            startup_timeout: "1s".into(), health_check: None, ephemeral: false, main_worktree: None, setup: None,
         };
         app_store.save_app_config(cfg).unwrap();
         feature_new(&ps, "my-feat").unwrap();
@@ -1006,7 +1006,7 @@ mod tests {
         app_store.save_app_config(AppConfig {
             name: "backend".into(), bootstrap: "true".into(), teardown: "true".into(),
             startup_timeout: "1s".into(), health_check: Some("true".into()), ephemeral: true,
-            main_worktree: None,
+            main_worktree: None, setup: None,
         }).unwrap();
         feature_new(&ps, "my-feat").unwrap();
         let mut state = ps.load().unwrap();
@@ -1034,7 +1034,7 @@ mod tests {
             startup_timeout: "1s".into(),
             health_check: Some("true".into()),
             ephemeral: false,
-            main_worktree: None,
+            main_worktree: None, setup: None,
         };
         app_cfg_store.save_app_config(cfg).unwrap();
         crate::feature::feature_new(&ps, "my-feat").unwrap();

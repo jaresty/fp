@@ -39,6 +39,8 @@ pub struct ProcessState {
     pub dep_records: HashMap<String, DepRecord>,
     #[serde(default)]
     pub feature_configs: HashMap<String, FeatureConfig>,
+    #[serde(default)]
+    pub setup_completed: HashSet<(String, String)>,
 }
 
 pub struct ProcessStateStore {

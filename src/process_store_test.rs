@@ -107,6 +107,25 @@ mod tests {
             "second activate must overwrite pid, got: {:?}", state.records[&42].pid);
     }
 
+    #[test]
+    fn process_store_governs_setup_completed_defaults_empty() {
+        let (store, _dir) = make_store();
+        let state = store.load().unwrap();
+        assert!(state.setup_completed.is_empty(),
+            "setup_completed must default to empty, got: {:?}", state.setup_completed);
+    }
+
+    #[test]
+    fn process_store_governs_setup_completed_tracks_app_and_worktree() {
+        let (store, _dir) = make_store();
+        let mut state = store.load().unwrap();
+        state.setup_completed.insert(("payments-api".into(), "/wt/main".into()));
+        store.save_state(state).unwrap();
+        let loaded = store.load().unwrap();
+        assert!(loaded.setup_completed.contains(&("payments-api".into(), "/wt/main".into())),
+            "setup_completed must persist (app, worktree) pair");
+    }
+
     // multiple PRs coexist
     #[test]
     fn process_store_governs_multiple_prs_coexist() {

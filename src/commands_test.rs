@@ -273,7 +273,7 @@ mod tests {
         let wt = tempfile::tempdir().unwrap();
         app_store.save_app_config(crate::app_config::AppConfig {
             name: "svc".into(), bootstrap: "echo up".into(), teardown: "echo down".into(),
-            startup_timeout: "5s".into(), health_check: None, ephemeral: false, main_worktree: None,
+            startup_timeout: "5s".into(), health_check: None, ephemeral: false, main_worktree: None, setup: None,
         }).unwrap();
         crate::feature::feature_new(&ps, "my-feature").unwrap();
         ps.activate(crate::process_store::ProcessRecord {
@@ -1614,7 +1614,7 @@ mod tests {
         let wt = tempfile::tempdir().unwrap();
         app_store.save_app_config(crate::app_config::AppConfig {
             name: "svc".into(), bootstrap: "echo up".into(), teardown: "echo down".into(),
-            startup_timeout: "5s".into(), health_check: None, ephemeral: false, main_worktree: None,
+            startup_timeout: "5s".into(), health_check: None, ephemeral: false, main_worktree: None, setup: None,
         }).unwrap();
         // assign config via ProcessRecord (not set_pr_config)
         let mut state = ps.load().unwrap();
@@ -1669,6 +1669,7 @@ mod tests {
             None,
             false,
             None,
+            None,
         );
         assert!(result.is_ok(), "cmd_app_define_config must succeed: {:?}", result);
         let cfg = store.load_app_config("payments-api").unwrap().unwrap();
@@ -1680,6 +1681,26 @@ mod tests {
             "cmd_app_define_config must store startup_timeout, got: {:?}", cfg.startup_timeout);
         assert_eq!(cfg.health_check, None,
             "cmd_app_define_config must store None health_check, got: {:?}", cfg.health_check);
+    }
+
+    #[test]
+    fn cmd_app_define_config_governs_setup_flag_persists() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = crate::app_config::AppConfigStore::open(dir.path().join("config.toml"));
+        let result = crate::commands::cmd_app_define_config(
+            &store, "payments-api",
+            "docker-compose up -d",
+            "docker-compose down",
+            "60s",
+            None,
+            false,
+            None,
+            Some("npm install"),
+        );
+        assert!(result.is_ok(), "cmd_app_define_config must succeed: {:?}", result);
+        let cfg = store.load_app_config("payments-api").unwrap().unwrap();
+        assert_eq!(cfg.setup, Some("npm install".into()),
+            "cmd_app_define_config must store setup command, got: {:?}", cfg.setup);
     }
 
     // cmd_app_define_config stores main_worktree when provided
@@ -1695,6 +1716,7 @@ mod tests {
             None,
             false,
             Some("/path/to/main"),
+            None,
         );
         assert!(result.is_ok(), "cmd_app_define_config must succeed: {:?}", result);
         let cfg = store.load_app_config("payments-api").unwrap().unwrap();
@@ -1752,6 +1774,7 @@ mod tests {
             Some("curl -f http://localhost:3000/health"),
             false,
             None,
+            None,
         ).unwrap();
         let cfg = store.load_app_config("svc").unwrap().unwrap();
         assert_eq!(cfg.health_check, Some("curl -f http://localhost:3000/health".into()),
@@ -1783,7 +1806,7 @@ mod tests {
         let app_store = crate::app_config::AppConfigStore::open(dir.path().join("config.toml"));
         app_store.save_app_config(crate::app_config::AppConfig {
             name: "svc".into(), bootstrap: "echo up".into(), teardown: "echo down".into(),
-            startup_timeout: "5s".into(), health_check: None, ephemeral: false, main_worktree: None,
+            startup_timeout: "5s".into(), health_check: None, ephemeral: false, main_worktree: None, setup: None,
         }).unwrap();
         crate::feature::feature_new(&ps, "my-feature").unwrap();
         let rec1 = crate::process_store::ProcessRecord {
@@ -1819,7 +1842,7 @@ mod tests {
         let wt = tempfile::tempdir().unwrap();
         app_store.save_app_config(crate::app_config::AppConfig {
             name: "svc".into(), bootstrap: "echo up".into(), teardown: "echo down".into(),
-            startup_timeout: "5s".into(), health_check: None, ephemeral: false, main_worktree: None,
+            startup_timeout: "5s".into(), health_check: None, ephemeral: false, main_worktree: None, setup: None,
         }).unwrap();
         crate::feature::feature_new(&ps, "my-feature").unwrap();
         ps.activate(crate::process_store::ProcessRecord {
@@ -1863,7 +1886,7 @@ mod tests {
         let app_store = crate::app_config::AppConfigStore::open(dir.path().join("config.toml"));
         app_store.save_app_config(crate::app_config::AppConfig {
             name: "ext".into(), bootstrap: "echo rebuild-ok".into(), teardown: "echo down".into(),
-            startup_timeout: "5s".into(), health_check: Some("true".into()), ephemeral: true, main_worktree: None,
+            startup_timeout: "5s".into(), health_check: Some("true".into()), ephemeral: true, main_worktree: None, setup: None,
         }).unwrap();
         crate::feature::feature_new(&ps, "ext-feature").unwrap();
         ps.activate(crate::process_store::ProcessRecord {
@@ -1891,7 +1914,7 @@ mod tests {
         let wt = tempfile::tempdir().unwrap();
         app_store.save_app_config(crate::app_config::AppConfig {
             name: "svc".into(), bootstrap: "echo up".into(), teardown: "echo down".into(),
-            startup_timeout: "5s".into(), health_check: None, ephemeral: false, main_worktree: None,
+            startup_timeout: "5s".into(), health_check: None, ephemeral: false, main_worktree: None, setup: None,
         }).unwrap();
         crate::feature::feature_new(&ps, "my-feature").unwrap();
         ps.activate(crate::process_store::ProcessRecord {
@@ -1913,7 +1936,9 @@ mod tests {
     fn cmd_feature_add_dep_governs_stores_dep_in_envelope_deps() {
         let dir = tempfile::tempdir().unwrap();
         let ps = crate::process_store::ProcessStateStore::open(dir.path());
-        let result = crate::commands::cmd_feature_add_dep(&ps, "my-feature", "notifications-svc");
+        let app_store_dir = tempfile::tempdir().unwrap();
+        let app_store = crate::app_config::AppConfigStore::open(app_store_dir.path().join("config.toml"));
+        let result = crate::commands::cmd_feature_add_dep(&ps, &app_store, "my-feature", "notifications-svc");
         assert!(result.is_ok(), "cmd_feature_add_dep must succeed: {:?}", result);
         let msg = result.unwrap();
         assert!(msg.contains("notifications-svc"),
@@ -2007,7 +2032,7 @@ mod tests {
         let app_store = crate::app_config::AppConfigStore::open(tmp.path().join("config.toml"));
         let worktree = tmp.path().to_string_lossy().to_string();
         // Define an app config
-        crate::commands::cmd_app_define_config(&app_store, "payments-api", "echo start", "echo stop", "5s", None, false, None).unwrap();
+        crate::commands::cmd_app_define_config(&app_store, "payments-api", "echo start", "echo stop", "5s", None, false, None, None).unwrap();
         // Create process record with NO bound configs
         let mut state = ps.load().unwrap();
         state.records.insert(10, crate::process_store::ProcessRecord {
@@ -2282,7 +2307,7 @@ mod tests {
             startup_timeout: "1s".into(),
             health_check: Some("test -d dist".into()),
             ephemeral: true,
-            main_worktree: None,
+            main_worktree: None, setup: None,
         }).unwrap();
         crate::feature::feature_new(&ps, "my-feat").unwrap();
         let mut state = ps.load().unwrap();
@@ -2329,7 +2354,7 @@ mod tests {
             startup_timeout: "1s".into(),
             health_check: None,
             ephemeral: true,
-            main_worktree: None,
+            main_worktree: None, setup: None,
         }).unwrap();
         crate::feature::feature_new(&ps, "my-feat").unwrap();
         let mut state = ps.load().unwrap();
@@ -2362,7 +2387,7 @@ mod tests {
             startup_timeout: "1s".into(),
             health_check: Some("true".into()),
             ephemeral: false,
-            main_worktree: None,
+            main_worktree: None, setup: None,
         }).unwrap();
         crate::feature::feature_new(&ps, "auth-refactor").unwrap();
         crate::feature::feature_new(&ps, "payment-v2").unwrap();
@@ -2402,11 +2427,11 @@ mod tests {
         let store = crate::app_config::AppConfigStore::open(tmp.path().join("config.toml"));
         store.save_app_config(crate::app_config::AppConfig {
             name: "backend".into(), bootstrap: "echo up".into(), teardown: "echo down".into(),
-            startup_timeout: "5s".into(), health_check: None, ephemeral: false, main_worktree: None,
+            startup_timeout: "5s".into(), health_check: None, ephemeral: false, main_worktree: None, setup: None,
         }).unwrap();
         store.save_app_config(crate::app_config::AppConfig {
             name: "frontend".into(), bootstrap: "echo up".into(), teardown: "echo down".into(),
-            startup_timeout: "5s".into(), health_check: None, ephemeral: false, main_worktree: None,
+            startup_timeout: "5s".into(), health_check: None, ephemeral: false, main_worktree: None, setup: None,
         }).unwrap();
         let result = crate::commands::cmd_app_list(&store);
         assert!(result.is_ok(), "cmd_app_list must succeed: {:?}", result);
@@ -2421,8 +2446,10 @@ mod tests {
         let git_dir = tmp.path().join(".git");
         std::fs::create_dir_all(&git_dir).unwrap();
         let ps = crate::process_store::ProcessStateStore::open(&git_dir);
+        let app_store_dir2 = tempfile::tempdir().unwrap();
+        let app_store2 = crate::app_config::AppConfigStore::open(app_store_dir2.path().join("config.toml"));
         crate::feature::feature_new(&ps, "my-feat").unwrap();
-        crate::commands::cmd_feature_add_dep(&ps, "my-feat", "backend").unwrap();
+        crate::commands::cmd_feature_add_dep(&ps, &app_store2, "my-feat", "backend").unwrap();
         let result = crate::commands::cmd_feature_remove_dep(&ps, "my-feat", "backend");
         assert!(result.is_ok(), "cmd_feature_remove_dep must succeed: {:?}", result);
         let state = ps.load().unwrap();
@@ -2516,7 +2543,7 @@ mod tests {
         app_store.save_app_config(crate::app_config::AppConfig {
             name: "svc".into(), bootstrap: "echo up".into(), teardown: "echo down".into(),
             startup_timeout: "5s".into(), health_check: Some("true".into()),
-            ephemeral: false, main_worktree: None,
+            ephemeral: false, main_worktree: None, setup: None,
         }).unwrap();
         let fake = make_fake_with_pr(42);
         let out = crate::commands::cmd_status_all(Some(&fake), &store, Some(&ps), Some(&app_store), &git_dir, "alice", "repo", false).unwrap();
@@ -2534,7 +2561,7 @@ mod tests {
         let teardown_cmd = format!("touch {}", teardown_marker.display());
         app_store.save_app_config(crate::app_config::AppConfig {
             name: "svc".into(), bootstrap: "echo up".into(), teardown: teardown_cmd,
-            startup_timeout: "5s".into(), health_check: None, ephemeral: false, main_worktree: None,
+            startup_timeout: "5s".into(), health_check: None, ephemeral: false, main_worktree: None, setup: None,
         }).unwrap();
         let mut state = ps.load().unwrap();
         state.records.insert(99, crate::process_store::ProcessRecord {
@@ -2558,7 +2585,7 @@ mod tests {
         app_store.save_app_config(crate::app_config::AppConfig {
             name: "svc".into(), bootstrap: "true".into(), teardown: "true".into(),
             startup_timeout: "1s".into(), health_check: None, ephemeral: false,
-            main_worktree: None,
+            main_worktree: None, setup: None,
         }).unwrap();
         let live_pid = std::process::id();
         let rec = crate::process_store::ProcessRecord {
@@ -2609,7 +2636,7 @@ mod tests {
         app_store.save_app_config(crate::app_config::AppConfig {
             name: "svc".into(), bootstrap: "true".into(), teardown: "true".into(),
             startup_timeout: "1s".into(), health_check: Some("true".into()), ephemeral: false,
-            main_worktree: None,
+            main_worktree: None, setup: None,
         }).unwrap();
         // PR with no live pid (stopped) but app config has health_check=true (healthy)
         let rec = crate::process_store::ProcessRecord {
@@ -2682,6 +2709,118 @@ mod tests {
         let output = result.unwrap();
         assert!(output.contains("fp feature test my-feat"),
             "cmd_feature_status must show run hint when test command is set, got: {}", output);
+    }
+
+    #[test]
+    fn cmd_feature_app_setup_governs_runs_setup_and_marks_complete() {
+        let tmp = tempfile::tempdir().unwrap();
+        let git_dir = tmp.path().join(".git");
+        std::fs::create_dir_all(&git_dir).unwrap();
+        let ps = crate::process_store::ProcessStateStore::open(&git_dir);
+        let app_store_dir = tempfile::tempdir().unwrap();
+        let app_store = crate::app_config::AppConfigStore::open(app_store_dir.path().join("config.toml"));
+        let mut cfg = crate::app_config::AppConfig {
+            name: "payments-api".into(),
+            bootstrap: "true".into(),
+            teardown: "true".into(),
+            startup_timeout: "60s".into(),
+            health_check: None,
+            ephemeral: false,
+            main_worktree: None,
+            setup: Some("true".into()),
+        };
+        app_store.save_app_config(cfg).unwrap();
+        // Feature with a PR record pointing to the tmp worktree
+        let mut state = ps.load().unwrap();
+        state.feature_envelopes.insert("my-feat".into());
+        state.records.insert(10, crate::process_store::ProcessRecord {
+            pr: 10,
+            expected_branch: "feat/x".into(),
+            pid: None,
+            feature_envelope: Some("my-feat".into()),
+            worktree: tmp.path().to_string_lossy().to_string(),
+            app_config_names: vec!["payments-api".into()],
+        });
+        ps.save_state(state).unwrap();
+        let result = crate::commands::cmd_feature_app_setup(&ps, &app_store, "my-feat", "payments-api");
+        assert!(result.is_ok(), "cmd_feature_app_setup must succeed: {:?}", result);
+        let loaded = ps.load().unwrap();
+        let worktree = tmp.path().to_string_lossy().to_string();
+        assert!(loaded.setup_completed.contains(&("payments-api".into(), worktree.clone())),
+            "cmd_feature_app_setup must mark setup complete for (app, worktree), got: {:?}", loaded.setup_completed);
+    }
+
+    #[test]
+    fn cmd_feature_up_governs_warns_when_setup_not_run() {
+        let tmp = tempfile::tempdir().unwrap();
+        let git_dir = tmp.path().join(".git");
+        std::fs::create_dir_all(&git_dir).unwrap();
+        let ps = crate::process_store::ProcessStateStore::open(&git_dir);
+        let app_store_dir = tempfile::tempdir().unwrap();
+        let app_store = crate::app_config::AppConfigStore::open(app_store_dir.path().join("config.toml"));
+        app_store.save_app_config(crate::app_config::AppConfig {
+            name: "payments-api".into(),
+            bootstrap: "true".into(),
+            teardown: "true".into(),
+            startup_timeout: "60s".into(),
+            health_check: None,
+            ephemeral: false,
+            main_worktree: None,
+            setup: Some("npm install".into()),
+        }).unwrap();
+        let mut state = ps.load().unwrap();
+        state.feature_envelopes.insert("my-feat".into());
+        state.records.insert(10, crate::process_store::ProcessRecord {
+            pr: 10,
+            expected_branch: "".into(),
+            pid: None,
+            feature_envelope: Some("my-feat".into()),
+            worktree: tmp.path().to_string_lossy().to_string(),
+            app_config_names: vec!["payments-api".into()],
+        });
+        ps.save_state(state).unwrap();
+        let result = crate::commands::cmd_feature_up(&ps, &app_store, "my-feat", tmp.path());
+        assert!(result.is_ok(), "cmd_feature_up must succeed even when setup unrun: {:?}", result);
+        let out = result.unwrap();
+        assert!(out.contains("setup") && out.contains("payments-api"),
+            "cmd_feature_up must warn about unrun setup for payments-api, got: {}", out);
+    }
+
+    #[test]
+    fn cmd_feature_add_dep_governs_auto_runs_setup_when_worktree_known() {
+        let tmp = tempfile::tempdir().unwrap();
+        let git_dir = tmp.path().join(".git");
+        std::fs::create_dir_all(&git_dir).unwrap();
+        let ps = crate::process_store::ProcessStateStore::open(&git_dir);
+        let app_store_dir = tempfile::tempdir().unwrap();
+        let app_store = crate::app_config::AppConfigStore::open(app_store_dir.path().join("config.toml"));
+        app_store.save_app_config(crate::app_config::AppConfig {
+            name: "notifications-svc".into(),
+            bootstrap: "true".into(),
+            teardown: "true".into(),
+            startup_timeout: "60s".into(),
+            health_check: None,
+            ephemeral: false,
+            main_worktree: None,
+            setup: Some("true".into()),
+        }).unwrap();
+        let mut state = ps.load().unwrap();
+        state.feature_envelopes.insert("my-feat".into());
+        state.records.insert(10, crate::process_store::ProcessRecord {
+            pr: 10,
+            expected_branch: "feat/x".into(),
+            pid: None,
+            feature_envelope: Some("my-feat".into()),
+            worktree: tmp.path().to_string_lossy().to_string(),
+            app_config_names: vec![],
+        });
+        ps.save_state(state).unwrap();
+        let result = crate::commands::cmd_feature_add_dep(&ps, &app_store, "my-feat", "notifications-svc");
+        assert!(result.is_ok(), "cmd_feature_add_dep must succeed: {:?}", result);
+        let loaded = ps.load().unwrap();
+        let worktree = tmp.path().to_string_lossy().to_string();
+        assert!(loaded.setup_completed.contains(&("notifications-svc".into(), worktree)),
+            "cmd_feature_add_dep must auto-run setup and mark complete when worktree known, got: {:?}", loaded.setup_completed);
     }
 
     #[test]
