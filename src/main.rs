@@ -383,6 +383,13 @@ enum FeatureCommands {
         #[arg(long, short)]
         follow: bool,
     },
+    /// Run the one-time setup command for an app in this feature's worktree
+    AppSetup {
+        /// Feature envelope name
+        name: String,
+        /// App config name to set up
+        app_config: String,
+    },
 }
 
 #[derive(Subcommand)]
@@ -707,6 +714,11 @@ fn main() -> Result<()> {
                 FeatureCommands::Logs { name, follow } => {
                     let out = commands::cmd_feature_logs(&ps, &name, follow)?;
                     if !out.is_empty() { println!("{}", out); }
+                }
+                FeatureCommands::AppSetup { name, app_config } => {
+                    let app_store = app_config::AppConfigStore::open(app_config::AppConfigStore::default_path()?);
+                    let out = commands::cmd_feature_app_setup(&ps, &app_store, &name, &app_config)?;
+                    println!("{}", out);
                 }
             }
         }

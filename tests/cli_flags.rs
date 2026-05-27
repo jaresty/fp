@@ -156,6 +156,18 @@ fn cli_define_config_setup_flag_is_recognized() {
         "--setup must be a recognized flag, got: {}", stderr);
 }
 
+/// fp feature app setup must be a recognized subcommand
+#[test]
+fn cli_feature_app_setup_is_recognized() {
+    let dir = setup_repo();
+    let out = fp(dir.path(), &["feature", "app-setup", "my-feat", "my-app"]);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(!stderr.contains("unrecognized subcommand"),
+        "feature app-setup must be a recognized subcommand, got: {}", stderr);
+    assert!(!stderr.contains("unexpected argument"),
+        "feature app-setup must be a recognized subcommand, got: {}", stderr);
+}
+
 /// fp feature logs must be a recognized subcommand
 #[test]
 fn cli_feature_logs_is_recognized() {
