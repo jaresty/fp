@@ -74,6 +74,7 @@ fp app define-config <name> \
   [--setup "<cmd>"]                     # one-time setup command run per worktree before bootstrapping (e.g. npm install)
 fp app set-config <owner/repo> <name>   # assign a named app config to all PRs in a repo
 fp app list                             # list all defined app configs
+fp app show <name>                      # show all fields of a named app config
 
 # Single-PR app lifecycle
 fp pr up <pr>                           # bootstrap the app for a single PR (uses its bound app config)
