@@ -837,12 +837,10 @@ fn main() -> Result<()> {
                     home.join(".local").join("share").join("fp").join("plugins").join("fp-hooks")
                 }
             };
-            commands::cmd_install_hooks(&plugin_dir)?;
+            commands::cmd_install_hooks(&plugin_dir, "claude")?;
             println!("fp-hooks installed to {}", plugin_dir.display());
-            println!("Add the plugin directory to Claude Code:");
-            println!("  claude plugin marketplace add {}", plugin_dir.parent().unwrap_or(&plugin_dir).display());
-            println!("  claude plugin install fp-hooks@fp-marketplace --scope project");
-            println!("Or restart Claude Code if the plugin directory is already registered.");
+            println!("Plugin registration attempted via claude plugin marketplace add + install.");
+            println!("Restart Claude Code to activate the hooks.");
         }
 
         Commands::UninstallHooks { path } => {

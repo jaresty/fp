@@ -15,7 +15,7 @@ pub fn cmd_uninstall_hooks(plugin_dir: &std::path::Path) -> anyhow::Result<()> {
     Ok(())
 }
 
-pub fn cmd_install_hooks(plugin_dir: &std::path::Path) -> anyhow::Result<()> {
+pub fn cmd_install_hooks(plugin_dir: &std::path::Path, claude_bin: &str) -> anyhow::Result<()> {
     let hooks_dir = plugin_dir.join("hooks");
     std::fs::create_dir_all(&hooks_dir)?;
     std::fs::write(hooks_dir.join("hooks.json"), FP_HOOKS_JSON)?;
@@ -33,6 +33,34 @@ pub fn cmd_install_hooks(plugin_dir: &std::path::Path) -> anyhow::Result<()> {
         use std::os::unix::fs::PermissionsExt;
         std::fs::set_permissions(&guard, std::fs::Permissions::from_mode(0o755))?;
     }
+
+    // Register the plugin marketplace directory (best-effort).
+    let marketplace_dir = plugin_dir.parent().unwrap_or(plugin_dir);
+    let add_out = std::process::Command::new(claude_bin)
+        .args(["plugin", "marketplace", "add", marketplace_dir.to_str().unwrap_or("")])
+        .output();
+    if let Ok(ref out) = add_out {
+        let stdout = String::from_utf8_lossy(&out.stdout);
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        let combined = format!("{}{}", stdout, stderr);
+        if !out.status.success() && !combined.contains("already") {
+            // Non-fatal: claude may not be installed or plugin system unavailable.
+        }
+    }
+
+    // Install the plugin (best-effort).
+    let install_out = std::process::Command::new(claude_bin)
+        .args(["plugin", "install", "fp-hooks@fp-marketplace", "--scope", "project"])
+        .output();
+    if let Ok(ref out) = install_out {
+        let stdout = String::from_utf8_lossy(&out.stdout);
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        let combined = format!("{}{}", stdout, stderr);
+        if !out.status.success() && !combined.contains("already") {
+            // Non-fatal.
+        }
+    }
+
     Ok(())
 }
 

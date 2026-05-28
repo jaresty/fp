@@ -3041,10 +3041,30 @@ mod tests {
     }
 
     #[test]
+    fn cmd_install_hooks_governs_runs_claude_plugin_registration() {
+        let tmp = tempfile::tempdir().unwrap();
+        let flag_file = tmp.path().join("claude-was-called");
+        let fake_claude = tmp.path().join("claude");
+        let flag_path = flag_file.to_str().unwrap().to_string();
+        std::fs::write(&fake_claude, format!("#!/bin/sh\necho \"$@\" >> {}\n", flag_path)).unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&fake_claude, std::fs::Permissions::from_mode(0o755)).unwrap();
+        }
+        let plugin_dir = tmp.path().join("fp-hooks");
+        crate::commands::cmd_install_hooks(&plugin_dir, fake_claude.to_str().unwrap()).unwrap();
+        assert!(flag_file.exists(), "cmd_install_hooks must invoke the claude binary for plugin registration");
+        let calls = std::fs::read_to_string(&flag_file).unwrap();
+        assert!(calls.contains("marketplace") || calls.contains("plugin"),
+            "cmd_install_hooks must call claude with plugin/marketplace args, got: {}", calls);
+    }
+
+    #[test]
     fn cmd_install_hooks_governs_writes_hooks_json() {
         let dir = tempfile::tempdir().unwrap();
         let plugin_dir = dir.path().join("fp-hooks");
-        crate::commands::cmd_install_hooks(&plugin_dir).unwrap();
+        crate::commands::cmd_install_hooks(&plugin_dir, "false").unwrap();
         let hooks_json = plugin_dir.join("hooks").join("hooks.json");
         assert!(hooks_json.exists(), "cmd_install_hooks must write hooks/hooks.json, path: {}", hooks_json.display());
         let content = std::fs::read_to_string(&hooks_json).unwrap();
@@ -3056,7 +3076,7 @@ mod tests {
     fn cmd_install_hooks_governs_writes_session_start_script() {
         let dir = tempfile::tempdir().unwrap();
         let plugin_dir = dir.path().join("fp-hooks");
-        crate::commands::cmd_install_hooks(&plugin_dir).unwrap();
+        crate::commands::cmd_install_hooks(&plugin_dir, "false").unwrap();
         let script = plugin_dir.join("hooks").join("session-start.sh");
         assert!(script.exists(), "cmd_install_hooks must write hooks/session-start.sh");
         let content = std::fs::read_to_string(&script).unwrap();
@@ -3068,7 +3088,7 @@ mod tests {
     fn cmd_install_hooks_governs_writes_pre_tool_use_guard_script() {
         let dir = tempfile::tempdir().unwrap();
         let plugin_dir = dir.path().join("fp-hooks");
-        crate::commands::cmd_install_hooks(&plugin_dir).unwrap();
+        crate::commands::cmd_install_hooks(&plugin_dir, "false").unwrap();
         let script = plugin_dir.join("hooks").join("pre-tool-use-guard.sh");
         assert!(script.exists(), "cmd_install_hooks must write hooks/pre-tool-use-guard.sh");
         let content = std::fs::read_to_string(&script).unwrap();
