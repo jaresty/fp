@@ -1,0 +1,17 @@
+{
+  "hooks": {
+    "SessionStart": [
+      {
+        "type": "command",
+        "command": "fp-worktree-context"
+      }
+    ],
+    "PreToolUse": [
+      {
+        "matcher": "Edit|Write|NotebookEdit",
+        "type": "command",
+        "command": "fp-worktree-guard"
+      }
+    ]
+  }
+}

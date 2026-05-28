@@ -298,6 +298,18 @@ enum Commands {
         #[arg(long)]
         path: Option<std::path::PathBuf>,
     },
+    /// Install the fp Claude Code hooks (SessionStart + PreToolUse worktree guards)
+    InstallHooks {
+        /// Alternative plugin directory (overrides default ~/.local/share/fp/plugins/fp-hooks)
+        #[arg(long)]
+        path: Option<std::path::PathBuf>,
+    },
+    /// Remove the fp Claude Code hooks plugin directory
+    UninstallHooks {
+        /// Alternative plugin directory (overrides default ~/.local/share/fp/plugins/fp-hooks)
+        #[arg(long)]
+        path: Option<std::path::PathBuf>,
+    },
 }
 
 #[derive(Subcommand)]
@@ -815,6 +827,35 @@ fn main() -> Result<()> {
             };
             commands::install_skills(&skill_path)?;
             println!("Installed fp skill to {}", skill_path.display());
+        }
+
+        Commands::InstallHooks { path } => {
+            let plugin_dir = match path {
+                Some(p) => p,
+                None => {
+                    let home = dirs::home_dir().context("could not determine home directory")?;
+                    home.join(".local").join("share").join("fp").join("plugins").join("fp-hooks")
+                }
+            };
+            commands::cmd_install_hooks(&plugin_dir)?;
+            println!("fp-hooks installed to {}", plugin_dir.display());
+            println!("Add the plugin directory to Claude Code:");
+            println!("  claude plugin marketplace add {}", plugin_dir.parent().unwrap_or(&plugin_dir).display());
+            println!("  claude plugin install fp-hooks@fp-marketplace --scope project");
+            println!("Or restart Claude Code if the plugin directory is already registered.");
+        }
+
+        Commands::UninstallHooks { path } => {
+            let plugin_dir = match path {
+                Some(p) => p,
+                None => {
+                    let home = dirs::home_dir().context("could not determine home directory")?;
+                    home.join(".local").join("share").join("fp").join("plugins").join("fp-hooks")
+                }
+            };
+            commands::cmd_uninstall_hooks(&plugin_dir)?;
+            println!("fp-hooks removed from {}", plugin_dir.display());
+            println!("Run: claude plugin uninstall fp-hooks@fp-marketplace");
         }
 
         Commands::Merge { pr, squash, rebase, merge_commit } => {

@@ -4,6 +4,38 @@ pub fn unlock_message(branch: &str) -> String {
 
 const FP_SKILL: &str = include_str!("../assets/fp-skill.md");
 
+const FP_HOOKS_JSON: &str = include_str!("../assets/fp-hooks/hooks/hooks.json");
+const FP_SESSION_START_SH: &str = include_str!("../assets/fp-hooks/hooks/session-start.sh");
+const FP_PRE_TOOL_USE_GUARD_SH: &str = include_str!("../assets/fp-hooks/hooks/pre-tool-use-guard.sh");
+
+pub fn cmd_uninstall_hooks(plugin_dir: &std::path::Path) -> anyhow::Result<()> {
+    if plugin_dir.exists() {
+        std::fs::remove_dir_all(plugin_dir)?;
+    }
+    Ok(())
+}
+
+pub fn cmd_install_hooks(plugin_dir: &std::path::Path) -> anyhow::Result<()> {
+    let hooks_dir = plugin_dir.join("hooks");
+    std::fs::create_dir_all(&hooks_dir)?;
+    std::fs::write(hooks_dir.join("hooks.json"), FP_HOOKS_JSON)?;
+    let session_start = hooks_dir.join("session-start.sh");
+    std::fs::write(&session_start, FP_SESSION_START_SH)?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&session_start, std::fs::Permissions::from_mode(0o755))?;
+    }
+    let guard = hooks_dir.join("pre-tool-use-guard.sh");
+    std::fs::write(&guard, FP_PRE_TOOL_USE_GUARD_SH)?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&guard, std::fs::Permissions::from_mode(0o755))?;
+    }
+    Ok(())
+}
+
 pub fn install_skills(path: &std::path::Path) -> anyhow::Result<()> {
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)?;

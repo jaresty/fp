@@ -151,6 +151,33 @@ fn cli_feature_remove_dep_is_recognized() {
         "feature remove-dep must be a recognized subcommand, got: {}", stderr);
 }
 
+/// fp install-hooks must be a recognized subcommand
+#[test]
+fn cli_install_hooks_is_recognized() {
+    let dir = setup_repo();
+    let tmp_plugin = tempfile::tempdir().unwrap();
+    let out = fp(dir.path(), &["install-hooks", "--path", tmp_plugin.path().to_str().unwrap()]);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(!stderr.contains("unrecognized subcommand"),
+        "install-hooks must be a recognized subcommand, got: {}", stderr);
+    assert!(!stderr.contains("unexpected argument"),
+        "install-hooks must be a recognized subcommand, got: {}", stderr);
+    assert!(out.status.success(), "install-hooks must succeed, got stderr: {}", stderr);
+}
+
+/// fp uninstall-hooks must be a recognized subcommand
+#[test]
+fn cli_uninstall_hooks_is_recognized() {
+    let dir = setup_repo();
+    let tmp_plugin = tempfile::tempdir().unwrap();
+    let out = fp(dir.path(), &["uninstall-hooks", "--path", tmp_plugin.path().to_str().unwrap()]);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(!stderr.contains("unrecognized subcommand"),
+        "uninstall-hooks must be a recognized subcommand, got: {}", stderr);
+    assert!(!stderr.contains("unexpected argument"),
+        "uninstall-hooks must accept --path, got: {}", stderr);
+}
+
 /// fp app define-config --setup must be a recognized flag
 #[test]
 fn cli_define_config_setup_flag_is_recognized() {

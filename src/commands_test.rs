@@ -3040,4 +3040,40 @@ mod tests {
             "cmd_feature_status must show dirty indicator for PR with uncommitted changes, got: {}", out);
     }
 
+    #[test]
+    fn cmd_install_hooks_governs_writes_hooks_json() {
+        let dir = tempfile::tempdir().unwrap();
+        let plugin_dir = dir.path().join("fp-hooks");
+        crate::commands::cmd_install_hooks(&plugin_dir).unwrap();
+        let hooks_json = plugin_dir.join("hooks").join("hooks.json");
+        assert!(hooks_json.exists(), "cmd_install_hooks must write hooks/hooks.json, path: {}", hooks_json.display());
+        let content = std::fs::read_to_string(&hooks_json).unwrap();
+        assert!(content.contains("SessionStart"), "hooks.json must reference SessionStart, got: {}", content);
+        assert!(content.contains("PreToolUse"), "hooks.json must reference PreToolUse, got: {}", content);
+    }
+
+    #[test]
+    fn cmd_install_hooks_governs_writes_session_start_script() {
+        let dir = tempfile::tempdir().unwrap();
+        let plugin_dir = dir.path().join("fp-hooks");
+        crate::commands::cmd_install_hooks(&plugin_dir).unwrap();
+        let script = plugin_dir.join("hooks").join("session-start.sh");
+        assert!(script.exists(), "cmd_install_hooks must write hooks/session-start.sh");
+        let content = std::fs::read_to_string(&script).unwrap();
+        assert!(content.contains("fp") || content.contains("worktree"),
+            "session-start.sh must reference fp or worktree, got: {}", content);
+    }
+
+    #[test]
+    fn cmd_install_hooks_governs_writes_pre_tool_use_guard_script() {
+        let dir = tempfile::tempdir().unwrap();
+        let plugin_dir = dir.path().join("fp-hooks");
+        crate::commands::cmd_install_hooks(&plugin_dir).unwrap();
+        let script = plugin_dir.join("hooks").join("pre-tool-use-guard.sh");
+        assert!(script.exists(), "cmd_install_hooks must write hooks/pre-tool-use-guard.sh");
+        let content = std::fs::read_to_string(&script).unwrap();
+        assert!(content.contains("fp") || content.contains("worktree"),
+            "pre-tool-use-guard.sh must reference fp or worktree, got: {}", content);
+    }
+
 }
