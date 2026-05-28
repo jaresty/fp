@@ -4,7 +4,6 @@ pub fn unlock_message(branch: &str) -> String {
 
 const FP_SKILL: &str = include_str!("../assets/fp-skill.md");
 
-const FP_HOOKS_JSON: &str = include_str!("../assets/fp-hooks/hooks/hooks.json");
 const FP_SESSION_START_SH: &str = include_str!("../assets/fp-hooks/hooks/session-start.sh");
 const FP_PRE_TOOL_USE_GUARD_SH: &str = include_str!("../assets/fp-hooks/hooks/pre-tool-use-guard.sh");
 
@@ -18,7 +17,6 @@ pub fn cmd_uninstall_hooks(plugin_dir: &std::path::Path) -> anyhow::Result<()> {
 pub fn cmd_install_hooks(plugin_dir: &std::path::Path, claude_bin: &str) -> anyhow::Result<()> {
     let hooks_dir = plugin_dir.join("hooks");
     std::fs::create_dir_all(&hooks_dir)?;
-    std::fs::write(hooks_dir.join("hooks.json"), FP_HOOKS_JSON)?;
     let session_start = hooks_dir.join("session-start.sh");
     std::fs::write(&session_start, FP_SESSION_START_SH)?;
     #[cfg(unix)]
@@ -33,6 +31,31 @@ pub fn cmd_install_hooks(plugin_dir: &std::path::Path, claude_bin: &str) -> anyh
         use std::os::unix::fs::PermissionsExt;
         std::fs::set_permissions(&guard, std::fs::Permissions::from_mode(0o755))?;
     }
+
+    // Generate hooks.json with absolute paths to the installed scripts.
+    let hooks_json = format!(
+        r#"{{
+  "hooks": {{
+    "SessionStart": [
+      {{
+        "type": "command",
+        "command": "{}"
+      }}
+    ],
+    "PreToolUse": [
+      {{
+        "matcher": "Edit|Write|NotebookEdit",
+        "type": "command",
+        "command": "{}"
+      }}
+    ]
+  }}
+}}
+"#,
+        session_start.display(),
+        guard.display(),
+    );
+    std::fs::write(hooks_dir.join("hooks.json"), &hooks_json)?;
 
     // Register the plugin marketplace directory (best-effort).
     let marketplace_dir = plugin_dir.parent().unwrap_or(plugin_dir);

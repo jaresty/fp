@@ -3070,6 +3070,13 @@ mod tests {
         let content = std::fs::read_to_string(&hooks_json).unwrap();
         assert!(content.contains("SessionStart"), "hooks.json must reference SessionStart, got: {}", content);
         assert!(content.contains("PreToolUse"), "hooks.json must reference PreToolUse, got: {}", content);
+        // Commands must be absolute paths to installed scripts, not phantom binary names.
+        let session_start_abs = plugin_dir.join("hooks").join("session-start.sh");
+        assert!(content.contains(session_start_abs.to_str().unwrap()),
+            "hooks.json SessionStart command must be absolute path to session-start.sh, got: {}", content);
+        let guard_abs = plugin_dir.join("hooks").join("pre-tool-use-guard.sh");
+        assert!(content.contains(guard_abs.to_str().unwrap()),
+            "hooks.json PreToolUse command must be absolute path to pre-tool-use-guard.sh, got: {}", content);
     }
 
     #[test]
