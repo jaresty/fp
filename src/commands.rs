@@ -617,16 +617,18 @@ pub fn cmd_merge(
     store.untrack(pr)?;
     out.push_str(&format!("✓ untracked PR #{}\n", pr));
     if let Ok(mut ps_state) = ps.load()
-        && let Some(rec) = ps_state.records.remove(&pr)
-        && let Some(envelope) = rec.feature_envelope {
-            let remaining = ps_state.records.values()
-                .filter(|r| r.feature_envelope.as_deref() == Some(&envelope))
-                .count();
-            if remaining == 0 {
-                ps_state.feature_envelopes.remove(&envelope);
-                out.push_str(&format!("Removed PR #{} from feature envelope '{}' (envelope deleted)\n", pr, envelope));
-            } else {
-                out.push_str(&format!("Removed PR #{} from feature envelope '{}' ({} members remaining)\n", pr, envelope, remaining));
+        && let Some(rec) = ps_state.records.remove(&pr) {
+            for envelope in rec.envelopes() {
+                let envelope = envelope.to_string();
+                let remaining = ps_state.records.values()
+                    .filter(|r| r.in_envelope(&envelope))
+                    .count();
+                if remaining == 0 {
+                    ps_state.feature_envelopes.remove(&envelope);
+                    out.push_str(&format!("Removed PR #{} from feature envelope '{}' (envelope deleted)\n", pr, envelope));
+                } else {
+                    out.push_str(&format!("Removed PR #{} from feature envelope '{}' ({} members remaining)\n", pr, envelope, remaining));
+                }
             }
             let _ = ps.save_state(ps_state);
     }
@@ -950,10 +952,15 @@ pub fn cmd_feature_list(ps: &crate::process_store::ProcessStateStore) -> anyhow:
 pub fn cmd_feature_remove(ps: &crate::process_store::ProcessStateStore, name: &str, pr: u64) -> anyhow::Result<String> {
     let mut state = ps.load()?;
     anyhow::ensure!(state.feature_envelopes.contains(name), "Feature envelope '{}' not found", name);
-    anyhow::ensure!(state.records.get(&pr).and_then(|r| r.feature_envelope.as_deref()) == Some(name),
+    anyhow::ensure!(state.records.get(&pr).map(|r| r.in_envelope(name)).unwrap_or(false),
         "PR #{} is not a member of feature envelope '{}'", pr, name);
-    state.records.remove(&pr);
-    let remaining = state.records.values().filter(|r| r.feature_envelope.as_deref() == Some(name)).count();
+    if let Some(rec) = state.records.get_mut(&pr) {
+        rec.remove_envelope(name);
+        if rec.envelopes().is_empty() {
+            state.records.remove(&pr);
+        }
+    }
+    let remaining = state.records.values().filter(|r| r.in_envelope(name)).count();
     if remaining == 0 {
         state.feature_envelopes.remove(name);
         ps.save_state(state)?;
@@ -977,7 +984,7 @@ pub fn cmd_feature_status_with_client(
     if let Some(client) = client {
         let state = ps.load()?;
         for (&pr, rec) in &state.records {
-            if rec.feature_envelope.as_deref() != Some(name) { continue; }
+            if !rec.in_envelope(name) { continue; }
             if let Ok((true, _)) = client.fetch_pr_is_merged(owner, repo, pr) {
                 out.push_str(&format!("  PR #{} (merged — remove with: fp feature remove {} {})\n", pr, name, pr));
             }
@@ -1075,9 +1082,9 @@ pub fn cmd_feature_status(
             };
             let recovery = if !s.pid_alive && s.service_healthy == Some(true) {
                 let owning = state.records.values()
-                    .find(|r| r.feature_envelope.as_deref() != Some(name)
+                    .find(|r| !r.in_envelope(name)
                         && r.pid.map(crate::feature::health_check_pid).unwrap_or(false))
-                    .and_then(|r| r.feature_envelope.clone());
+                    .and_then(|r| r.envelopes().first().map(|s| s.to_string()));
                 if let Some(owner) = owning {
                     format!("\n    ⚠ healthy but untracked — running under feature: {}", owner)
                 } else {
@@ -1161,7 +1168,7 @@ pub fn cmd_feature_logs(ps: &crate::process_store::ProcessStateStore, name: &str
         entries.push((format!("dep {}", cfg_name), log_dir.join(format!("{}.log", instance))));
     }
     for (pr, rec) in &state.records {
-        if rec.feature_envelope.as_deref() != Some(name) { continue; }
+        if !rec.in_envelope(name) { continue; }
         if log_dir.exists() && let Ok(rd) = std::fs::read_dir(&log_dir) {
             for entry in rd.flatten() {
                 let fname = entry.file_name().to_string_lossy().to_string();
@@ -1233,8 +1240,8 @@ pub fn cmd_feature_set_test(ps: &crate::process_store::ProcessStateStore, name: 
 
 pub fn cmd_switch_feature_summary(ps: &crate::process_store::ProcessStateStore, config: &crate::app_config::AppConfigStore, pr: u64) -> String {
     let state = match ps.load() { Ok(s) => s, Err(_) => return String::new() };
-    let envelope = match state.records.get(&pr).and_then(|r| r.feature_envelope.as_deref()) {
-        Some(e) => e.to_string(),
+    let envelope = match state.records.get(&pr).and_then(|r| r.envelopes().into_iter().next().map(|s| s.to_string())) {
+        Some(e) => e,
         None => return String::new(),
     };
     let statuses = match crate::feature::feature_status(ps, config, &envelope, std::path::Path::new(".")) {
@@ -1306,7 +1313,7 @@ pub fn cmd_feature_up_checked(ps: &crate::process_store::ProcessStateStore, conf
         .filter(|e| e.as_str() != name)
         .filter(|e| {
             state.records.values()
-                .any(|r| r.feature_envelope.as_deref() == Some(e.as_str())
+                .any(|r| r.in_envelope(e.as_str())
                     && r.pid.map(crate::feature::health_check_pid).unwrap_or(false))
         })
         .cloned()
@@ -1342,7 +1349,7 @@ pub fn cmd_feature_app_setup(
         .to_string();
     let state = ps.load()?;
     let worktrees: Vec<String> = state.records.values()
-        .filter(|r| r.feature_envelope.as_deref() == Some(feature)
+        .filter(|r| r.in_envelope(feature)
             && !r.worktree.is_empty()
             && !state.setup_completed.contains(&(app_config_name.to_string(), r.worktree.clone())))
         .map(|r| r.worktree.clone())
@@ -1380,7 +1387,7 @@ pub fn cmd_feature_add_dep(
     if let Ok(Some(cfg)) = config.load_app_config(app_config) && cfg.setup.is_some() {
         let state = ps.load()?;
         let has_worktree = state.records.values()
-            .find(|r| r.feature_envelope.as_deref() == Some(name))
+            .find(|r| r.in_envelope(name))
             .map(|r| !r.worktree.is_empty())
             .unwrap_or(false);
         drop(state);

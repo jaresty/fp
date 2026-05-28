@@ -58,11 +58,11 @@ pub fn feature_list_running(ps: &ProcessStateStore) -> Result<Vec<FeatureInfo>> 
     let state = ps.load()?;
     let running: Vec<FeatureInfo> = state.feature_envelopes.iter().filter(|name| {
         state.records.values().any(|r| {
-            r.feature_envelope.as_deref() == Some(name) && r.pid.map(health_check_pid).unwrap_or(false)
+            r.in_envelope(name) && r.pid.map(health_check_pid).unwrap_or(false)
         })
     }).map(|name| {
         let prs = state.records.values()
-            .filter(|r| r.feature_envelope.as_deref() == Some(name))
+            .filter(|r| r.in_envelope(name))
             .map(|r| r.pr)
             .collect();
         FeatureInfo { name: name.clone(), prs }
@@ -74,7 +74,7 @@ pub fn feature_list_running_with_config(ps: &ProcessStateStore, config: &crate::
     let state = ps.load()?;
     let running: Vec<FeatureInfo> = state.feature_envelopes.iter().filter(|name| {
         state.records.values().any(|r| {
-            if r.feature_envelope.as_deref() != Some(name) { return false; }
+            if !r.in_envelope(name) { return false; }
             let app_cfg = r.app_config_names.first().map(|n| n.as_str())
                 .and_then(|n| config.load_app_config(n).ok().flatten());
             let is_ephemeral = app_cfg.as_ref().map(|c| c.ephemeral).unwrap_or(false);
@@ -86,7 +86,7 @@ pub fn feature_list_running_with_config(ps: &ProcessStateStore, config: &crate::
         })
     }).map(|name| {
         let prs = state.records.values()
-            .filter(|r| r.feature_envelope.as_deref() == Some(name))
+            .filter(|r| r.in_envelope(name))
             .map(|r| r.pr)
             .collect();
         FeatureInfo { name: name.clone(), prs }
@@ -97,7 +97,7 @@ pub fn feature_list_running_with_config(ps: &ProcessStateStore, config: &crate::
 pub fn feature_status(ps: &ProcessStateStore, config: &crate::app_config::AppConfigStore, name: &str, repo_root: &std::path::Path) -> Result<Vec<PrHealthStatus>> {
     let state = ps.load()?;
     let mut statuses: Vec<PrHealthStatus> = state.records.values()
-        .filter(|r| r.feature_envelope.as_deref() == Some(name))
+        .filter(|r| r.in_envelope(name))
         .map(|r| {
             let worktree = resolve_worktree(repo_root, &r.expected_branch);
             let branch_ok = health_check_branch(&worktree, &r.expected_branch);
@@ -143,15 +143,8 @@ pub fn feature_add(ps: &ProcessStateStore, store: &Store, name: &str, pr: u64, c
             })
             .unwrap_or_default()
     } else { String::new() };
-    let rec = state.records.entry(pr).or_insert_with(|| crate::process_store::ProcessRecord {
-        pr,
-        expected_branch: branch.clone(),
-        pid: None,
-        feature_envelope: None,
-        worktree: worktree_path,
-        app_config_names: vec![],
-    });
-    rec.feature_envelope = Some(name.to_string());
+    let rec = state.records.entry(pr).or_insert_with(|| crate::process_store::ProcessRecord::new(pr, branch.clone(), worktree_path));
+    rec.add_envelope(name);
     for cfg in configs {
         if !rec.app_config_names.contains(cfg) {
             rec.app_config_names.push(cfg.clone());
@@ -164,7 +157,7 @@ pub fn feature_list(ps: &ProcessStateStore) -> Result<Vec<FeatureInfo>> {
     let state = ps.load()?;
     let mut infos: Vec<FeatureInfo> = state.feature_envelopes.iter().map(|name| {
         let prs: Vec<u64> = state.records.values()
-            .filter(|r| r.feature_envelope.as_deref() == Some(name))
+            .filter(|r| r.in_envelope(name))
             .map(|r| r.pr)
             .collect();
         FeatureInfo { name: name.clone(), prs }
@@ -183,7 +176,7 @@ pub fn feature_add_dep(ps: &ProcessStateStore, envelope: &str, app_config_name: 
 pub fn feature_up(ps: &ProcessStateStore, config: &crate::app_config::AppConfigStore, name: &str, repo_root: &std::path::Path) -> Result<Vec<String>> {
     let state = ps.load()?;
     let records: Vec<_> = state.records.values()
-        .filter(|r| r.feature_envelope.as_deref() == Some(name))
+        .filter(|r| r.in_envelope(name))
         .cloned()
         .collect();
     let deps = state.envelope_deps.get(name).cloned().unwrap_or_default();
@@ -263,7 +256,7 @@ pub fn feature_up(ps: &ProcessStateStore, config: &crate::app_config::AppConfigS
 pub fn feature_down(ps: &ProcessStateStore, config: &crate::app_config::AppConfigStore, name: &str, repo_root: &std::path::Path) -> Result<Vec<String>> {
     let state = ps.load()?;
     let records: Vec<_> = state.records.values()
-        .filter(|r| r.feature_envelope.as_deref() == Some(name))
+        .filter(|r| r.in_envelope(name))
         .cloned()
         .collect();
     let mut messages = Vec::new();
@@ -357,7 +350,7 @@ pub fn feature_rebuild(ps: &ProcessStateStore, config: &crate::app_config::AppCo
     }
     let state = ps.load()?;
     let records: Vec<_> = state.records.values()
-        .filter(|r| r.feature_envelope.as_deref() == Some(name))
+        .filter(|r| r.in_envelope(name))
         .filter(|r| pr_filter.map(|p| r.pr == p).unwrap_or(true))
         .cloned()
         .collect();
@@ -407,14 +400,7 @@ pub fn bootstrap_pr(ps: &ProcessStateStore, config: &AppConfig, pr: u64, worktre
     let child = spawn_daemon(&config.bootstrap, worktree, envs, &log_path)?;
     let pid = child.id();
     let mut state = ps.load()?;
-    let rec = state.records.entry(pr).or_insert_with(|| ProcessRecord {
-        pr,
-        expected_branch: String::new(),
-        pid: None,
-        feature_envelope: None,
-        worktree: String::new(),
-        app_config_names: vec![],
-    });
+    let rec = state.records.entry(pr).or_insert_with(|| ProcessRecord::new(pr, String::new(), String::new()));
     rec.pid = Some(pid);
     rec.worktree = worktree.to_string_lossy().to_string();
     ps.save_state(state)
@@ -473,14 +459,14 @@ pub fn check_conflicts(ps: &ProcessStateStore, envelope_name: &str) -> Result<Co
     let mut blocking_prs: Vec<u64> = Vec::new();
     let mut blocking_feature = String::new();
     for record in state.records.values() {
-        let env = match &record.feature_envelope {
-            Some(e) if e != envelope_name => e.clone(),
-            _ => continue,
-        };
+        let other_envs: Vec<&str> = record.envelopes().into_iter()
+            .filter(|e| *e != envelope_name)
+            .collect();
+        if other_envs.is_empty() { continue; }
         let alive = record.pid.map(health_check_pid).unwrap_or(false);
         if alive {
             blocking_prs.push(record.pr);
-            blocking_feature = env;
+            blocking_feature = other_envs[0].to_string();
         }
     }
     if blocking_prs.is_empty() {

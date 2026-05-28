@@ -175,7 +175,7 @@ mod tests {
         let live_pid = std::process::id();
         ps.activate(crate::process_store::ProcessRecord {
             pr: 5, expected_branch: "feat/all-test".into(), pid: Some(live_pid),
-            feature_envelope: None, worktree: tmp.path().to_string_lossy().to_string(),
+            feature_envelopes: vec![], feature_envelope: None, worktree: tmp.path().to_string_lossy().to_string(),
             app_config_names: vec![],
         }).unwrap();
         let fake = make_fake_with_pr(5);
@@ -278,7 +278,7 @@ mod tests {
         crate::feature::feature_new(&ps, "my-feature").unwrap();
         ps.activate(crate::process_store::ProcessRecord {
             pr: 42, expected_branch: "feat/x".into(), pid: Some(std::process::id()),
-            feature_envelope: Some("my-feature".into()),
+            feature_envelopes: vec!["my-feature".into()], feature_envelope: None,
             worktree: wt.path().to_string_lossy().to_string(),
             app_config_names: vec!["svc".into()],
         }).unwrap();
@@ -680,13 +680,13 @@ mod tests {
         ps_state.feature_envelopes.insert("auth-refactor".into());
         ps_state.records.insert(10, crate::process_store::ProcessRecord {
             pr: 10, expected_branch: "feat/x".into(), pid: None,
-            feature_envelope: Some("auth-refactor".into()),
+            feature_envelopes: vec!["auth-refactor".into()], feature_envelope: None,
             worktree: tmp.path().to_string_lossy().to_string(),
             app_config_names: vec![],
         });
         ps_state.records.insert(20, crate::process_store::ProcessRecord {
             pr: 20, expected_branch: "feat/y".into(), pid: None,
-            feature_envelope: Some("auth-refactor".into()),
+            feature_envelopes: vec!["auth-refactor".into()], feature_envelope: None,
             worktree: tmp.path().to_string_lossy().to_string(),
             app_config_names: vec![],
         });
@@ -715,7 +715,7 @@ mod tests {
         ps_state.feature_envelopes.insert("solo-feature".into());
         ps_state.records.insert(10, crate::process_store::ProcessRecord {
             pr: 10, expected_branch: "feat/x".into(), pid: None,
-            feature_envelope: Some("solo-feature".into()),
+            feature_envelopes: vec!["solo-feature".into()], feature_envelope: None,
             worktree: tmp.path().to_string_lossy().to_string(),
             app_config_names: vec![],
         });
@@ -1620,7 +1620,7 @@ mod tests {
         let mut state = ps.load().unwrap();
         state.records.insert(42, crate::process_store::ProcessRecord {
             pr: 42, expected_branch: String::new(), pid: None,
-            feature_envelope: None,
+            feature_envelopes: vec![], feature_envelope: None,
             worktree: wt.path().to_string_lossy().to_string(),
             app_config_names: vec!["svc".into()],
         });
@@ -1748,7 +1748,7 @@ mod tests {
             pr: 123,
             expected_branch: "feat/pay".into(),
             pid: Some(live_pid),
-            feature_envelope: Some("auth-refactor".into()),
+            feature_envelopes: vec!["auth-refactor".into()], feature_envelope: None,
             worktree: dir.path().to_string_lossy().to_string(),
             app_config_names: vec![],
         };
@@ -1811,13 +1811,13 @@ mod tests {
         crate::feature::feature_new(&ps, "my-feature").unwrap();
         let rec1 = crate::process_store::ProcessRecord {
             pr: 10, expected_branch: "feat/a".into(), pid: None,
-            feature_envelope: Some("my-feature".into()),
+            feature_envelopes: vec!["my-feature".into()], feature_envelope: None,
             worktree: String::new(),
             app_config_names: vec!["svc".into()],
         };
         let rec2 = crate::process_store::ProcessRecord {
             pr: 20, expected_branch: "feat/b".into(), pid: None,
-            feature_envelope: Some("my-feature".into()),
+            feature_envelopes: vec!["my-feature".into()], feature_envelope: None,
             worktree: String::new(),
             app_config_names: vec!["svc".into()],
         };
@@ -1847,7 +1847,7 @@ mod tests {
         crate::feature::feature_new(&ps, "my-feature").unwrap();
         ps.activate(crate::process_store::ProcessRecord {
             pr: 10, expected_branch: "feat/a".into(), pid: Some(std::process::id()),
-            feature_envelope: Some("my-feature".into()),
+            feature_envelopes: vec!["my-feature".into()], feature_envelope: None,
             worktree: wt.path().to_string_lossy().to_string(),
             app_config_names: vec!["svc".into()],
         }).unwrap();
@@ -1891,7 +1891,7 @@ mod tests {
         crate::feature::feature_new(&ps, "ext-feature").unwrap();
         ps.activate(crate::process_store::ProcessRecord {
             pr: 77, expected_branch: "feat/ext".into(), pid: None,
-            feature_envelope: Some("ext-feature".into()),
+            feature_envelopes: vec!["ext-feature".into()], feature_envelope: None,
             worktree: String::new(),
             app_config_names: vec!["ext".into()],
         }).unwrap();
@@ -1919,7 +1919,7 @@ mod tests {
         crate::feature::feature_new(&ps, "my-feature").unwrap();
         ps.activate(crate::process_store::ProcessRecord {
             pr: 10, expected_branch: "feat/a".into(), pid: None,
-            feature_envelope: Some("my-feature".into()),
+            feature_envelopes: vec!["my-feature".into()], feature_envelope: None,
             worktree: wt.path().to_string_lossy().to_string(),
             app_config_names: vec!["svc".into()],
         }).unwrap();
@@ -1957,13 +1957,13 @@ mod tests {
         state.feature_envelopes.insert("auth-refactor".into());
         state.records.insert(10, crate::process_store::ProcessRecord {
             pr: 10, expected_branch: "feat/x".into(), pid: None,
-            feature_envelope: Some("auth-refactor".into()),
+            feature_envelopes: vec!["auth-refactor".into()], feature_envelope: None,
             worktree: dir.path().to_string_lossy().to_string(),
             app_config_names: vec![],
         });
         state.records.insert(20, crate::process_store::ProcessRecord {
             pr: 20, expected_branch: "feat/y".into(), pid: None,
-            feature_envelope: Some("auth-refactor".into()),
+            feature_envelopes: vec!["auth-refactor".into()], feature_envelope: None,
             worktree: dir.path().to_string_lossy().to_string(),
             app_config_names: vec![],
         });
@@ -1987,7 +1987,7 @@ mod tests {
         state.feature_envelopes.insert("solo".into());
         state.records.insert(10, crate::process_store::ProcessRecord {
             pr: 10, expected_branch: "feat/x".into(), pid: None,
-            feature_envelope: Some("solo".into()),
+            feature_envelopes: vec!["solo".into()], feature_envelope: None,
             worktree: dir.path().to_string_lossy().to_string(),
             app_config_names: vec![],
         });
@@ -2008,7 +2008,7 @@ mod tests {
         state.feature_envelopes.insert("auth-refactor".into());
         state.records.insert(99, crate::process_store::ProcessRecord {
             pr: 99, expected_branch: "feat/z".into(), pid: None,
-            feature_envelope: Some("auth-refactor".into()),
+            feature_envelopes: vec!["auth-refactor".into()], feature_envelope: None,
             worktree: dir.path().to_string_lossy().to_string(),
             app_config_names: vec![],
         });
@@ -2037,7 +2037,7 @@ mod tests {
         let mut state = ps.load().unwrap();
         state.records.insert(10, crate::process_store::ProcessRecord {
             pr: 10, expected_branch: "feat/x".into(), pid: None,
-            feature_envelope: None,
+            feature_envelopes: vec![], feature_envelope: None,
             worktree: worktree.clone(),
             app_config_names: vec![],
         });
@@ -2063,13 +2063,13 @@ mod tests {
         // feature-b has a live process (pid = current process, always alive)
         state.records.insert(20, crate::process_store::ProcessRecord {
             pr: 20, expected_branch: "feat/y".into(), pid: Some(std::process::id()),
-            feature_envelope: Some("feature-b".into()),
+            feature_envelopes: vec!["feature-b".into()], feature_envelope: None,
             worktree: tmp.path().to_string_lossy().to_string(),
             app_config_names: vec![],
         });
         state.records.insert(10, crate::process_store::ProcessRecord {
             pr: 10, expected_branch: "feat/x".into(), pid: None,
-            feature_envelope: Some("feature-a".into()),
+            feature_envelopes: vec!["feature-a".into()], feature_envelope: None,
             worktree: tmp.path().to_string_lossy().to_string(),
             app_config_names: vec![],
         });
@@ -2099,13 +2099,13 @@ mod tests {
         state.feature_envelopes.insert("feature-b".into());
         state.records.insert(20, crate::process_store::ProcessRecord {
             pr: 20, expected_branch: "feat/y".into(), pid: Some(std::process::id()),
-            feature_envelope: Some("feature-b".into()),
+            feature_envelopes: vec!["feature-b".into()], feature_envelope: None,
             worktree: tmp.path().to_string_lossy().to_string(),
             app_config_names: vec![],
         });
         state.records.insert(10, crate::process_store::ProcessRecord {
             pr: 10, expected_branch: "feat/x".into(), pid: None,
-            feature_envelope: Some("feature-a".into()),
+            feature_envelopes: vec!["feature-a".into()], feature_envelope: None,
             worktree: tmp.path().to_string_lossy().to_string(),
             app_config_names: vec![],
         });
@@ -2151,7 +2151,7 @@ mod tests {
         let mut state = ps.load().unwrap();
         state.records.insert(10, crate::process_store::ProcessRecord {
             pr: 10, expected_branch: "feat/x".into(), pid: None,
-            feature_envelope: Some("my-feat".into()),
+            feature_envelopes: vec!["my-feat".into()], feature_envelope: None,
             worktree: tmp.path().to_string_lossy().to_string(),
             app_config_names: vec![],
         });
@@ -2175,7 +2175,7 @@ mod tests {
         let mut state = ps.load().unwrap();
         state.records.insert(10, crate::process_store::ProcessRecord {
             pr: 10, expected_branch: "feat/x".into(), pid: None,
-            feature_envelope: Some("my-feat".into()),
+            feature_envelopes: vec!["my-feat".into()], feature_envelope: None,
             worktree: tmp.path().join("no-such-worktree").to_string_lossy().to_string(),
             app_config_names: vec![],
         });
@@ -2264,7 +2264,7 @@ mod tests {
         let mut state = ps.load().unwrap();
         state.records.insert(10, crate::process_store::ProcessRecord {
             pr: 10, expected_branch: "feat/x".into(), pid: None,
-            feature_envelope: Some("my-feat".into()),
+            feature_envelopes: vec!["my-feat".into()], feature_envelope: None,
             worktree: String::new(), // empty — must not be used for branch check
             app_config_names: vec![],
         });
@@ -2315,7 +2315,7 @@ mod tests {
             pr: 42,
             expected_branch: "feat/ext".into(),
             pid: None,
-            feature_envelope: Some("my-feat".into()),
+            feature_envelopes: vec!["my-feat".into()], feature_envelope: None,
             worktree: String::new(),
             app_config_names: vec!["ext".into()],
         });
@@ -2362,7 +2362,7 @@ mod tests {
             pr: 42,
             expected_branch: "feat/ext".into(),
             pid: None,
-            feature_envelope: Some("my-feat".into()),
+            feature_envelopes: vec!["my-feat".into()], feature_envelope: None,
             worktree: String::new(),
             app_config_names: vec!["ext".into()],
         });
@@ -2398,7 +2398,7 @@ mod tests {
             pr: 42,
             expected_branch: "".into(),
             pid: None,
-            feature_envelope: Some("auth-refactor".into()),
+            feature_envelopes: vec!["auth-refactor".into()], feature_envelope: None,
             worktree: String::new(),
             app_config_names: vec!["svc".into()],
         });
@@ -2407,7 +2407,7 @@ mod tests {
             pr: 99,
             expected_branch: "".into(),
             pid: Some(std::process::id()),
-            feature_envelope: Some("payment-v2".into()),
+            feature_envelopes: vec!["payment-v2".into()], feature_envelope: None,
             worktree: String::new(),
             app_config_names: vec!["svc".into()],
         });
@@ -2561,7 +2561,7 @@ mod tests {
         let ps = crate::process_store::ProcessStateStore::open(&git_dir);
         ps.activate(crate::process_store::ProcessRecord {
             pr: 42, expected_branch: "feat/unmanaged".into(), pid: None,
-            feature_envelope: None, worktree: tmp.path().to_string_lossy().to_string(),
+            feature_envelopes: vec![], feature_envelope: None, worktree: tmp.path().to_string_lossy().to_string(),
             app_config_names: vec!["svc".into()],
         }).unwrap();
         let app_store = crate::app_config::AppConfigStore::open(tmp.path().join("config.toml"));
@@ -2591,7 +2591,7 @@ mod tests {
         let mut state = ps.load().unwrap();
         state.records.insert(99, crate::process_store::ProcessRecord {
             pr: 99, expected_branch: String::new(), pid: None,
-            feature_envelope: None,
+            feature_envelopes: vec![], feature_envelope: None,
             worktree: wt.path().to_string_lossy().to_string(),
             app_config_names: vec!["svc".into()],
         });
@@ -2615,7 +2615,7 @@ mod tests {
         let live_pid = std::process::id();
         let rec = crate::process_store::ProcessRecord {
             pr: 11, expected_branch: "".into(), pid: Some(live_pid),
-            feature_envelope: Some("my-feat".into()),
+            feature_envelopes: vec!["my-feat".into()], feature_envelope: None,
             worktree: dir.path().to_string_lossy().to_string(),
             app_config_names: vec!["svc".into()],
         };
@@ -2637,7 +2637,7 @@ mod tests {
         let app_store = crate::app_config::AppConfigStore::open(dir.path().join("config.toml"));
         let rec = crate::process_store::ProcessRecord {
             pr: 22, expected_branch: "".into(), pid: None,
-            feature_envelope: Some("my-feat".into()),
+            feature_envelopes: vec!["my-feat".into()], feature_envelope: None,
             worktree: dir.path().to_string_lossy().to_string(),
             app_config_names: vec![],
         };
@@ -2668,7 +2668,7 @@ mod tests {
             pr: 55,
             expected_branch: "".into(),
             pid: None,
-            feature_envelope: Some("my-feat".into()),
+            feature_envelopes: vec!["my-feat".into()], feature_envelope: None,
             worktree: dir.path().to_string_lossy().to_string(),
             app_config_names: vec!["svc".into()],
         };
@@ -2693,7 +2693,7 @@ mod tests {
             pr: 77,
             expected_branch: "feat/foo".into(),
             pid: Some(live_pid),
-            feature_envelope: Some("my-feat".into()),
+            feature_envelopes: vec!["my-feat".into()], feature_envelope: None,
             worktree: dir.path().to_string_lossy().to_string(),
             app_config_names: vec!["frontend".into(), "backend".into()],
         };
@@ -2762,7 +2762,7 @@ mod tests {
             pr: 10,
             expected_branch: "feat/x".into(),
             pid: None,
-            feature_envelope: Some("my-feat".into()),
+            feature_envelopes: vec!["my-feat".into()], feature_envelope: None,
             worktree: tmp.path().to_string_lossy().to_string(),
             app_config_names: vec!["payments-api".into()],
         });
@@ -2800,7 +2800,7 @@ mod tests {
             pr: 10,
             expected_branch: "".into(),
             pid: None,
-            feature_envelope: Some("my-feat".into()),
+            feature_envelopes: vec!["my-feat".into()], feature_envelope: None,
             worktree: tmp1.path().to_string_lossy().to_string(),
             app_config_names: vec!["payments-api".into()],
         });
@@ -2808,7 +2808,7 @@ mod tests {
             pr: 20,
             expected_branch: "".into(),
             pid: None,
-            feature_envelope: Some("my-feat".into()),
+            feature_envelopes: vec!["my-feat".into()], feature_envelope: None,
             worktree: tmp2.path().to_string_lossy().to_string(),
             app_config_names: vec!["payments-api".into()],
         });
@@ -2848,7 +2848,7 @@ mod tests {
             pr: 10,
             expected_branch: "".into(),
             pid: None,
-            feature_envelope: Some("my-feat".into()),
+            feature_envelopes: vec!["my-feat".into()], feature_envelope: None,
             worktree: tmp.path().to_string_lossy().to_string(),
             app_config_names: vec!["payments-api".into()],
         });
@@ -2884,7 +2884,7 @@ mod tests {
             pr: 10,
             expected_branch: "feat/x".into(),
             pid: None,
-            feature_envelope: Some("my-feat".into()),
+            feature_envelopes: vec!["my-feat".into()], feature_envelope: None,
             worktree: tmp.path().to_string_lossy().to_string(),
             app_config_names: vec![],
         });
@@ -3024,7 +3024,7 @@ mod tests {
             pr: 42,
             expected_branch: "feat/dirty".into(),
             pid: Some(std::process::id()),
-            feature_envelope: Some("my-feat".into()),
+            feature_envelopes: vec!["my-feat".into()], feature_envelope: None,
             worktree: wt_path.to_string_lossy().to_string(),
             app_config_names: vec![],
         };

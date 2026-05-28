@@ -44,7 +44,7 @@ mod tests {
             pr,
             expected_branch: branch.into(),
             pid: None,
-            feature_envelope: None,
+            feature_envelopes: vec![], feature_envelope: None,
             worktree: worktree.into(),
             app_config_names: vec![],
         }
@@ -603,7 +603,8 @@ mod tests {
             pr: 42,
             expected_branch: "feat/up".into(),
             pid: None,
-            feature_envelope: Some("feat".into()),
+            feature_envelopes: vec!["feat".into()],
+            feature_envelope: None,
             worktree: String::new(), // empty — must NOT be used
             app_config_names: vec!["svc".into()],
         });
@@ -651,7 +652,8 @@ mod tests {
             pr: 43,
             expected_branch: "feat/down".into(),
             pid: None,
-            feature_envelope: Some("feat".into()),
+            feature_envelopes: vec!["feat".into()],
+            feature_envelope: None,
             worktree: String::new(), // empty — must NOT be used
             app_config_names: vec!["svc".into()],
         });
@@ -699,7 +701,8 @@ mod tests {
             pr: 44,
             expected_branch: "feat/status".into(),
             pid: None,
-            feature_envelope: Some("feat".into()),
+            feature_envelopes: vec!["feat".into()],
+            feature_envelope: None,
             worktree: wrong_wt.to_str().unwrap().to_string(), // must NOT be used — wrong branch
             app_config_names: vec![],
         });
@@ -744,7 +747,8 @@ mod tests {
             pr: 45,
             expected_branch: "feat/ephem".into(),
             pid: None,
-            feature_envelope: Some("feat".into()),
+            feature_envelopes: vec!["feat".into()],
+            feature_envelope: None,
             worktree: real_existing_dir, // real dir — must NOT be used; derived path must be used instead
             app_config_names: vec!["ephem".into()],
         });
@@ -766,7 +770,7 @@ mod tests {
             pr: 55,
             expected_branch: "feat/x".into(),
             pid: None,
-            feature_envelope: Some("my-feat".into()),
+            feature_envelopes: vec!["my-feat".into()], feature_envelope: None,
             worktree: wt.path().to_string_lossy().to_string(),
             app_config_names: vec!["svc".into()],
         };
@@ -783,8 +787,8 @@ mod tests {
         bootstrap_pr(&ps, &cfg, 55, wt.path(), "org", "repo").unwrap();
         let state = ps.load().unwrap();
         let rec = &state.records[&55];
-        assert_eq!(rec.feature_envelope.as_deref(), Some("my-feat"),
-            "bootstrap_pr must not overwrite feature_envelope on existing record, got: {:?}", rec.feature_envelope);
+        assert!(rec.in_envelope("my-feat"),
+            "bootstrap_pr must not overwrite feature envelope on existing record");
         assert_eq!(rec.app_config_names, vec!["svc"],
             "bootstrap_pr must not overwrite app_config_names on existing record, got: {:?}", rec.app_config_names);
         assert_eq!(rec.expected_branch, "feat/x",
@@ -864,7 +868,8 @@ mod tests {
             pr: 0,
             expected_branch: String::new(),
             pid: None,
-            feature_envelope: Some("feat".into()),
+            feature_envelopes: vec!["feat".into()],
+            feature_envelope: None,
             worktree: String::new(),
             app_config_names: vec!["svc".into()],
         });
@@ -902,7 +907,8 @@ mod tests {
             pr: 0,
             expected_branch: String::new(),
             pid: None,
-            feature_envelope: Some("feat".into()),
+            feature_envelopes: vec!["feat".into()],
+            feature_envelope: None,
             worktree: String::new(),
             app_config_names: vec!["svc".into()],
         });
@@ -945,7 +951,7 @@ mod tests {
         };
         ps.activate(ProcessRecord {
             pr: 88, expected_branch: "feat/x".into(), pid: Some(99999),
-            feature_envelope: Some("my-feat".into()),
+            feature_envelopes: vec!["my-feat".into()], feature_envelope: None,
             worktree: wt.path().to_string_lossy().to_string(),
             app_config_names: vec!["svc".into()],
         }).unwrap();
@@ -955,8 +961,8 @@ mod tests {
             "teardown_pr must preserve record (keep feature_envelope) after teardown");
         let rec = &state.records[&88];
         assert!(rec.pid.is_none(), "teardown_pr must clear pid after teardown");
-        assert_eq!(rec.feature_envelope.as_deref(), Some("my-feat"),
-            "teardown_pr must preserve feature_envelope after teardown");
+        assert!(rec.in_envelope("my-feat"),
+            "teardown_pr must preserve feature envelope after teardown");
     }
 
     #[test]
@@ -986,7 +992,7 @@ mod tests {
         feature_new(&ps, "my-feat").unwrap();
         ps.activate(ProcessRecord {
             pr: 78280, expected_branch: "feat/x".into(), pid: None,
-            feature_envelope: Some("my-feat".into()),
+            feature_envelopes: vec!["my-feat".into()], feature_envelope: None,
             worktree: String::new(),
             app_config_names: vec!["svc".into()],
         }).unwrap();
@@ -1043,7 +1049,7 @@ mod tests {
             pr: 99,
             expected_branch: "".into(), // empty so resolve_worktree returns repo_root (tmp.path())
             pid: None,
-            feature_envelope: Some("my-feat".into()),
+            feature_envelopes: vec!["my-feat".into()], feature_envelope: None,
             worktree: tmp.path().to_string_lossy().to_string(),
             app_config_names: vec!["svc".into()],
         });
@@ -1053,5 +1059,42 @@ mod tests {
         let err = result.unwrap_err().to_string();
         assert!(err.contains("healthy but untracked"),
             "feature_up error must mention 'healthy but untracked', got: {}", err);
+    }
+
+    // D_multi1: feature_add keeps PR in first envelope when added to a second
+    #[test]
+    fn feature_governs_add_pr_stays_in_first_envelope_after_add_to_second() {
+        let (ps, _dir) = ps_store();
+        let git_dir = tempdir().unwrap();
+        let store = git_store(git_dir.path());
+        store.track(42).unwrap();
+        store.update_cache(PrCache { number: 42, title: "T".into(), branch: "feat/x".into(), base: "main".into() }).unwrap();
+        feature_new(&ps, "envelope-a").unwrap();
+        feature_new(&ps, "envelope-b").unwrap();
+        feature_add(&ps, &store, "envelope-a", 42, &[]).unwrap();
+        feature_add(&ps, &store, "envelope-b", 42, &[]).unwrap();
+        let list = feature_list(&ps).unwrap();
+        let a = list.iter().find(|f| f.name == "envelope-a").unwrap();
+        assert!(a.prs.contains(&42),
+            "PR 42 must remain in envelope-a after being added to envelope-b, got: {:?}", a.prs);
+    }
+
+    // D_multi2: feature_add PR appears in both envelopes simultaneously
+    #[test]
+    fn feature_governs_add_pr_appears_in_both_envelopes() {
+        let (ps, _dir) = ps_store();
+        let git_dir = tempdir().unwrap();
+        let store = git_store(git_dir.path());
+        store.track(42).unwrap();
+        store.update_cache(PrCache { number: 42, title: "T".into(), branch: "feat/x".into(), base: "main".into() }).unwrap();
+        feature_new(&ps, "envelope-a").unwrap();
+        feature_new(&ps, "envelope-b").unwrap();
+        feature_add(&ps, &store, "envelope-a", 42, &[]).unwrap();
+        feature_add(&ps, &store, "envelope-b", 42, &[]).unwrap();
+        let list = feature_list(&ps).unwrap();
+        let a = list.iter().find(|f| f.name == "envelope-a").unwrap();
+        let b = list.iter().find(|f| f.name == "envelope-b").unwrap();
+        assert!(a.prs.contains(&42) && b.prs.contains(&42),
+            "PR 42 must appear in both envelope-a and envelope-b, got a.prs={:?}, b.prs={:?}", a.prs, b.prs);
     }
 }

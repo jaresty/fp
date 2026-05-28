@@ -17,10 +17,57 @@ pub struct ProcessRecord {
     pub pr: u64,
     pub expected_branch: String,
     pub pid: Option<u32>,
-    pub feature_envelope: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) feature_envelope: Option<String>,
+    #[serde(default)]
+    pub feature_envelopes: Vec<String>,
     pub worktree: String,
     #[serde(default)]
     pub app_config_names: Vec<String>,
+}
+
+impl ProcessRecord {
+    pub fn new(pr: u64, expected_branch: String, worktree: String) -> Self {
+        ProcessRecord {
+            pr,
+            expected_branch,
+            pid: None,
+            feature_envelope: None,
+            feature_envelopes: vec![],
+            worktree,
+            app_config_names: vec![],
+        }
+    }
+
+    pub fn in_envelope(&self, name: &str) -> bool {
+        self.feature_envelopes.contains(&name.to_string())
+            || self.feature_envelope.as_deref() == Some(name)
+    }
+
+    pub fn add_envelope(&mut self, name: &str) {
+        let s = name.to_string();
+        if !self.feature_envelopes.contains(&s) {
+            self.feature_envelopes.push(s);
+        }
+        self.feature_envelope = None;
+    }
+
+    pub fn remove_envelope(&mut self, name: &str) {
+        self.feature_envelopes.retain(|e| e != name);
+        if self.feature_envelope.as_deref() == Some(name) {
+            self.feature_envelope = None;
+        }
+    }
+
+    pub fn envelopes(&self) -> Vec<&str> {
+        if !self.feature_envelopes.is_empty() {
+            self.feature_envelopes.iter().map(|s| s.as_str()).collect()
+        } else if let Some(e) = &self.feature_envelope {
+            vec![e.as_str()]
+        } else {
+            vec![]
+        }
+    }
 }
 
 #[derive(Debug, Default, Clone, Serialize, Deserialize)]

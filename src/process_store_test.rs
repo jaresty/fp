@@ -14,7 +14,7 @@ mod tests {
             pr,
             expected_branch: branch.into(),
             pid: Some(12345),
-            feature_envelope: None,
+            feature_envelopes: vec![], feature_envelope: None,
             worktree: "/tmp/worktree".into(),
             app_config_names: vec![],
         }

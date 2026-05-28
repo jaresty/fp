@@ -682,7 +682,7 @@ fn main() -> Result<()> {
                     let repo_root = crate::worktree::main_repo_root(&std::env::current_dir()?)?;
                     if force {
                         let state = ps.load()?;
-                        for rec in state.records.values().filter(|r| r.feature_envelope.as_deref() == Some(&name)) {
+                        for rec in state.records.values().filter(|r| r.in_envelope(&name)) {
                             let wt = std::path::Path::new(&rec.worktree);
                             for cfg_name in &rec.app_config_names {
                                 if let Ok(Some(cfg)) = app_store.load_app_config(cfg_name) {
