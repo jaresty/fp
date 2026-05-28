@@ -202,9 +202,12 @@ pub fn feature_up(ps: &ProcessStateStore, config: &crate::app_config::AppConfigS
                 let svc_healthy = cfg.health_check.as_deref()
                     .map(|cmd| health_check_service(cmd, worktree, rec.pr, worktree))
                     .unwrap_or(false);
-                if svc_healthy && !cfg.ephemeral {
+                if svc_healthy && !cfg.ephemeral && rec.pid.is_none() {
+                    // pid was never set by fp — a foreign process may own the port
                     anyhow::bail!("PR #{}: app '{}' is healthy but untracked — another process may be listening; cannot start. Stop it first or use `fp feature down` then retry.", rec.pr, cfg.name);
                 }
+                // if pid was previously set by fp but the anchor died, fall through and re-run bootstrap
+                // (docker compose up -d is idempotent; this re-attaches the foreground anchor)
             }
             bootstrap_pr(ps, &cfg, rec.pr, worktree, "", "")?;
             messages.push(format!("PR #{}: started ({})", rec.pr, cfg.name));

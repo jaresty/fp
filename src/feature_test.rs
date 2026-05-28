@@ -1061,6 +1061,43 @@ mod tests {
             "feature_up error must mention 'healthy but untracked', got: {}", err);
     }
 
+    // D_detached: feature_up must re-run bootstrap (not bail) for persistent app whose pid was previously set but is now dead
+    #[test]
+    fn feature_up_governs_reruns_bootstrap_for_detached_persistent_app() {
+        let tmp = tempfile::tempdir().unwrap();
+        let (ps, _ps_dir) = ps_store();
+        let (app_cfg_store, _cfg_dir) = app_store();
+        let cfg = AppConfig {
+            name: "svc".into(),
+            bootstrap: "true".into(),
+            teardown: "true".into(),
+            startup_timeout: "1s".into(),
+            health_check: Some("true".into()),
+            ephemeral: false,
+            main_worktree: None, setup: None,
+        };
+        app_cfg_store.save_app_config(cfg).unwrap();
+        crate::feature::feature_new(&ps, "my-feat").unwrap();
+        let mut state = ps.load().unwrap();
+        state.records.insert(99, crate::process_store::ProcessRecord {
+            pr: 99,
+            expected_branch: "".into(),
+            // pid set to a dead PID (u32::MAX is guaranteed not alive)
+            pid: Some(u32::MAX),
+            feature_envelopes: vec!["my-feat".into()], feature_envelope: None,
+            worktree: tmp.path().to_string_lossy().to_string(),
+            app_config_names: vec!["svc".into()],
+        });
+        ps.save_state(state).unwrap();
+        let result = crate::feature::feature_up(&ps, &app_cfg_store, "my-feat", tmp.path());
+        assert!(result.is_ok(),
+            "feature_up must not bail for detached persistent app (pid set but dead, service healthy), got: {:?}",
+            result.err().map(|e| e.to_string()));
+        let msgs = result.unwrap();
+        assert!(msgs.iter().any(|m| m.contains("started")),
+            "feature_up must re-run bootstrap (restart anchor) for detached persistent app, got: {:?}", msgs);
+    }
+
     // D_ephemeral: feature_up must not bail for ephemeral app with passing health-check and dead pid
     #[test]
     fn feature_up_governs_does_not_bail_for_ephemeral_app_with_stale_health_check() {
