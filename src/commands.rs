@@ -146,9 +146,14 @@ pub fn cmd_status_all(
         }
 
         let tasks = crate::tasks::generate_tasks(&pr_state);
-        let lock = crate::worktree::lock_status(git_dir, &cached.branch)
+        let mut lock = crate::worktree::lock_status(git_dir, &cached.branch)
             .map(|s| format!("  {}", s))
             .unwrap_or_default();
+        if let Some(repo_root) = git_dir.parent()
+            && let Some(wt) = crate::worktree::find_worktree_path(&cached.branch, repo_root)
+            && crate::worktree::repo_is_dirty(&wt).unwrap_or(false) {
+            lock.push_str("  ⚠ dirty (uncommitted changes)");
+        }
         let health = health_map.get(&number).map(|s| s.as_str());
 
         if json {
@@ -561,6 +566,19 @@ pub fn cmd_rebase_stack(
         return Ok("No tracked PRs.\n".to_string());
     }
 
+    // Bail early if any tracked PR's worktree has uncommitted changes.
+    let dirty_branches: Vec<String> = state.tracked_prs().iter().filter_map(|pr| {
+        let wt = crate::worktree::find_worktree_path(&pr.branch, dir)?;
+        if crate::worktree::repo_is_dirty(&wt).unwrap_or(false) {
+            Some(pr.branch.clone())
+        } else {
+            None
+        }
+    }).collect();
+    if !dirty_branches.is_empty() {
+        anyhow::bail!("cannot rebase-stack: worktree(s) have uncommitted changes: {}", dirty_branches.join(", "));
+    }
+
     let mut out = String::new();
     let debug_fn: Box<dyn Fn(&str)> = Box::new(|s: &str| on_progress(&format!("[fp verbose] {}", s)));
 
@@ -958,8 +976,13 @@ pub fn cmd_feature_status(
             .map(|r| format!(" [{}]", r.app_config_names.join(", ")))
             .unwrap_or_default();
         let branch = match s.branch_ok { Some(true) => " ✓ branch ok", Some(false) => " ✗ wrong branch", None => "" };
+        let dirty = state.records.get(&s.pr)
+            .and_then(|r| crate::worktree::find_worktree_path(&r.expected_branch, repo_root))
+            .map(|wt| crate::worktree::repo_is_dirty(&wt).unwrap_or(false))
+            .unwrap_or(false);
+        let dirty_str = if dirty { " ⚠ dirty (uncommitted changes)" } else { "" };
         if s.ephemeral {
-            out.push_str(&format!("  PR #{}{}  ✓ built{}\n", s.pr, apps, branch));
+            out.push_str(&format!("  PR #{}{}  ✓ built{}{}\n", s.pr, apps, branch, dirty_str));
         } else {
             let pid = if s.pid_alive { "✓ running" } else { "✗ stopped" };
             let health = match s.service_healthy {
@@ -982,7 +1005,7 @@ pub fn cmd_feature_status(
             } else {
                 String::new()
             };
-            out.push_str(&format!("  PR #{}{}  {}{}{}{}\n", s.pr, apps, pid, health, branch, recovery));
+            out.push_str(&format!("  PR #{}{}  {}{}{}{}{}\n", s.pr, apps, pid, health, branch, dirty_str, recovery));
         }
     }
     for key in &dep_keys {

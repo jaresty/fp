@@ -2912,4 +2912,132 @@ mod tests {
             "cmd_feature_test must show the test command before running, got: {}", out);
     }
 
+    #[test]
+    fn cmd_status_all_shows_dirty_indicator_for_pr_with_uncommitted_changes() {
+        use std::process::Command;
+        let tmp = tempfile::tempdir().unwrap();
+        let repo = tmp.path().join("repo");
+        std::fs::create_dir_all(&repo).unwrap();
+        let git_dir = repo.join(".git");
+        Command::new("git").args(["init", "-b", "main"]).current_dir(&repo).output().unwrap();
+        Command::new("git").args(["config", "user.email", "t@t.com"]).current_dir(&repo).output().unwrap();
+        Command::new("git").args(["config", "user.name", "T"]).current_dir(&repo).output().unwrap();
+        std::fs::write(repo.join("a.txt"), "a").unwrap();
+        Command::new("git").args(["add", "."]).current_dir(&repo).output().unwrap();
+        Command::new("git").args(["commit", "-m", "init"]).current_dir(&repo).output().unwrap();
+        Command::new("git").args(["checkout", "-b", "feat/dirty"]).current_dir(&repo).output().unwrap();
+        std::fs::write(repo.join("b.txt"), "b").unwrap();
+        Command::new("git").args(["add", "."]).current_dir(&repo).output().unwrap();
+        Command::new("git").args(["commit", "-m", "feat"]).current_dir(&repo).output().unwrap();
+        Command::new("git").args(["checkout", "main"]).current_dir(&repo).output().unwrap();
+        // Create a worktree for feat/dirty
+        let wt_path = crate::worktree::worktree_path(&repo, "feat/dirty");
+        std::fs::create_dir_all(wt_path.parent().unwrap()).unwrap();
+        Command::new("git").args(["worktree", "add", wt_path.to_str().unwrap(), "feat/dirty"]).current_dir(&repo).output().unwrap();
+        // Leave an uncommitted file in the worktree
+        std::fs::write(wt_path.join("dirty.txt"), "dirty").unwrap();
+
+        let store = crate::store::Store::open(&git_dir);
+        store.track(1).unwrap();
+        store.update_cache(crate::store::PrCache { number: 1, title: "Dirty PR".into(), branch: "feat/dirty".into(), base: "main".into() }).unwrap();
+        let mut fake = crate::github::FakeGithubClient::new();
+        fake.set_pr(1, crate::model::PrState {
+            number: 1, title: "Dirty PR".into(), branch: "feat/dirty".into(), base: "main".into(),
+            head_sha: "abc".into(), draft: false, approved: true, checks: vec![], threads: vec![],
+            needs_parent_rebase: false, has_merge_conflict: false,
+            codeowners_eligibility: Default::default(), created_at: None, is_stacked: false,
+        });
+        let out = crate::commands::cmd_status_all(Some(&fake), &store, None, None, &git_dir, "alice", "repo", false).unwrap();
+        assert!(out.contains("dirty") || out.contains("uncommitted"),
+            "cmd_status_all must show dirty indicator for PR with uncommitted changes, got: {}", out);
+    }
+
+    #[test]
+    fn cmd_rebase_stack_bails_when_worktree_has_uncommitted_changes() {
+        use std::process::Command;
+        let tmp = tempfile::tempdir().unwrap();
+        let remote = tmp.path().join("remote");
+        let repo = tmp.path().join("repo");
+        std::fs::create_dir_all(&remote).unwrap();
+        std::fs::create_dir_all(&repo).unwrap();
+        let git_dir = repo.join(".git");
+        Command::new("git").args(["init", "--bare", "-b", "main"]).current_dir(&remote).output().unwrap();
+        Command::new("git").args(["init", "-b", "main"]).current_dir(&repo).output().unwrap();
+        Command::new("git").args(["config", "user.email", "t@t.com"]).current_dir(&repo).output().unwrap();
+        Command::new("git").args(["config", "user.name", "T"]).current_dir(&repo).output().unwrap();
+        Command::new("git").args(["remote", "add", "origin", remote.to_str().unwrap()]).current_dir(&repo).output().unwrap();
+        std::fs::write(repo.join("a.txt"), "a").unwrap();
+        Command::new("git").args(["add", "."]).current_dir(&repo).output().unwrap();
+        Command::new("git").args(["commit", "-m", "init"]).current_dir(&repo).output().unwrap();
+        Command::new("git").args(["push", "-u", "origin", "main"]).current_dir(&repo).output().unwrap();
+        Command::new("git").args(["checkout", "-b", "feat/x"]).current_dir(&repo).output().unwrap();
+        std::fs::write(repo.join("b.txt"), "b").unwrap();
+        Command::new("git").args(["add", "."]).current_dir(&repo).output().unwrap();
+        Command::new("git").args(["commit", "-m", "feat"]).current_dir(&repo).output().unwrap();
+        Command::new("git").args(["push", "-u", "origin", "feat/x"]).current_dir(&repo).output().unwrap();
+        Command::new("git").args(["checkout", "main"]).current_dir(&repo).output().unwrap();
+        // Create a worktree for feat/x
+        let wt_path = crate::worktree::worktree_path(&repo, "feat/x");
+        std::fs::create_dir_all(wt_path.parent().unwrap()).unwrap();
+        Command::new("git").args(["worktree", "add", wt_path.to_str().unwrap(), "feat/x"]).current_dir(&repo).output().unwrap();
+        // Leave an uncommitted file in the worktree
+        std::fs::write(wt_path.join("dirty.txt"), "dirty").unwrap();
+
+        let store = crate::store::Store::open(&git_dir);
+        store.track(1).unwrap();
+        store.update_cache(crate::store::PrCache { number: 1, title: "X".into(), branch: "feat/x".into(), base: "main".into() }).unwrap();
+        let fake = crate::github::FakeGithubClient::new_with_pr(1, "feat/x", "X", "main");
+        let result = crate::commands::cmd_rebase_stack(
+            Some(&fake), "o", "r", &store, &repo, &git_dir, None, &|_| {},
+        );
+        assert!(result.is_err(), "cmd_rebase_stack must fail when worktree has uncommitted changes");
+        let err = result.unwrap_err().to_string();
+        assert!(err.contains("uncommitted") || err.contains("dirty"),
+            "error must mention uncommitted changes, got: {}", err);
+    }
+
+    #[test]
+    fn cmd_feature_status_shows_dirty_indicator_for_pr_with_uncommitted_changes() {
+        use std::process::Command;
+        let tmp = tempfile::tempdir().unwrap();
+        let repo = tmp.path().join("repo");
+        std::fs::create_dir_all(&repo).unwrap();
+        let git_dir = repo.join(".git");
+        Command::new("git").args(["init", "-b", "main"]).current_dir(&repo).output().unwrap();
+        Command::new("git").args(["config", "user.email", "t@t.com"]).current_dir(&repo).output().unwrap();
+        Command::new("git").args(["config", "user.name", "T"]).current_dir(&repo).output().unwrap();
+        std::fs::write(repo.join("a.txt"), "a").unwrap();
+        Command::new("git").args(["add", "."]).current_dir(&repo).output().unwrap();
+        Command::new("git").args(["commit", "-m", "init"]).current_dir(&repo).output().unwrap();
+        Command::new("git").args(["checkout", "-b", "feat/dirty"]).current_dir(&repo).output().unwrap();
+        std::fs::write(repo.join("b.txt"), "b").unwrap();
+        Command::new("git").args(["add", "."]).current_dir(&repo).output().unwrap();
+        Command::new("git").args(["commit", "-m", "feat"]).current_dir(&repo).output().unwrap();
+        Command::new("git").args(["checkout", "main"]).current_dir(&repo).output().unwrap();
+        let wt_path = crate::worktree::worktree_path(&repo, "feat/dirty");
+        std::fs::create_dir_all(wt_path.parent().unwrap()).unwrap();
+        Command::new("git").args(["worktree", "add", wt_path.to_str().unwrap(), "feat/dirty"]).current_dir(&repo).output().unwrap();
+        std::fs::write(wt_path.join("dirty.txt"), "dirty").unwrap();
+
+        let ps = crate::process_store::ProcessStateStore::open(&git_dir);
+        let rec = crate::process_store::ProcessRecord {
+            pr: 42,
+            expected_branch: "feat/dirty".into(),
+            pid: Some(std::process::id()),
+            feature_envelope: Some("my-feat".into()),
+            worktree: wt_path.to_string_lossy().to_string(),
+            app_config_names: vec![],
+        };
+        ps.activate(rec).unwrap();
+        let mut state = ps.load().unwrap();
+        state.feature_envelopes.insert("my-feat".to_string());
+        ps.save_state(state).unwrap();
+        let app_store = crate::app_config::AppConfigStore::open(git_dir.join("config.toml"));
+        let result = crate::commands::cmd_feature_status(&ps, &app_store, "my-feat", false, &repo);
+        assert!(result.is_ok(), "cmd_feature_status must succeed: {:?}", result);
+        let out = result.unwrap();
+        assert!(out.contains("dirty") || out.contains("uncommitted"),
+            "cmd_feature_status must show dirty indicator for PR with uncommitted changes, got: {}", out);
+    }
+
 }
