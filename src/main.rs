@@ -368,6 +368,15 @@ enum FeatureCommands {
         /// PR number to remove
         pr: u64,
     },
+    /// Remove an app config from a PR in a feature envelope
+    RemoveConfig {
+        /// Feature envelope name
+        name: String,
+        /// PR number
+        pr: u64,
+        /// App config name to remove
+        app_config: String,
+    },
     /// Remove a baseline app config dependency from a feature envelope
     RemoveDep {
         /// Feature envelope name
@@ -709,6 +718,10 @@ fn main() -> Result<()> {
                 FeatureCommands::AddDep { name, app_config } => {
                     let app_store = app_config::AppConfigStore::open(app_config::AppConfigStore::default_path()?);
                     let out = commands::cmd_feature_add_dep(&ps, &app_store, &name, &app_config)?;
+                    println!("{}", out);
+                }
+                FeatureCommands::RemoveConfig { name, pr, app_config } => {
+                    let out = commands::cmd_feature_remove_config(&ps, &name, pr, &app_config)?;
                     println!("{}", out);
                 }
                 FeatureCommands::Remove { name, pr } => {

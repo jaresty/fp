@@ -1061,6 +1061,39 @@ mod tests {
             "feature_up error must mention 'healthy but untracked', got: {}", err);
     }
 
+    // D_ephemeral: feature_up must not bail for ephemeral app with passing health-check and dead pid
+    #[test]
+    fn feature_up_governs_does_not_bail_for_ephemeral_app_with_stale_health_check() {
+        let tmp = tempfile::tempdir().unwrap();
+        let (ps, _ps_dir) = ps_store();
+        let (app_cfg_store, _cfg_dir) = app_store();
+        let cfg = AppConfig {
+            name: "ext-build".into(),
+            bootstrap: "true".into(),
+            teardown: "true".into(),
+            startup_timeout: "1s".into(),
+            health_check: Some("true".into()),
+            ephemeral: true,
+            main_worktree: None, setup: None,
+        };
+        app_cfg_store.save_app_config(cfg).unwrap();
+        crate::feature::feature_new(&ps, "my-feat").unwrap();
+        let mut state = ps.load().unwrap();
+        state.records.insert(99, crate::process_store::ProcessRecord {
+            pr: 99,
+            expected_branch: "".into(),
+            pid: None,
+            feature_envelopes: vec!["my-feat".into()], feature_envelope: None,
+            worktree: tmp.path().to_string_lossy().to_string(),
+            app_config_names: vec!["ext-build".into()],
+        });
+        ps.save_state(state).unwrap();
+        let result = crate::feature::feature_up(&ps, &app_cfg_store, "my-feat", tmp.path());
+        assert!(result.is_ok(),
+            "feature_up must not bail for ephemeral app with passing health-check and dead pid, got: {:?}",
+            result.err().map(|e| e.to_string()));
+    }
+
     // D_multi1: feature_add keeps PR in first envelope when added to a second
     #[test]
     fn feature_governs_add_pr_stays_in_first_envelope_after_add_to_second() {

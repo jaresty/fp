@@ -2484,6 +2484,31 @@ mod tests {
     }
 
     #[test]
+    fn cmd_feature_remove_config_governs_removes_config_from_pr_record() {
+        let tmp = tempfile::tempdir().unwrap();
+        let git_dir = tmp.path().join(".git");
+        std::fs::create_dir_all(&git_dir).unwrap();
+        let ps = crate::process_store::ProcessStateStore::open(&git_dir);
+        crate::feature::feature_new(&ps, "my-feat").unwrap();
+        let mut state = ps.load().unwrap();
+        state.records.insert(42, crate::process_store::ProcessRecord {
+            pr: 42, expected_branch: "feat/x".into(), pid: None,
+            feature_envelopes: vec!["my-feat".into()], feature_envelope: None,
+            worktree: "".into(),
+            app_config_names: vec!["svc-a".into(), "svc-b".into()],
+        });
+        ps.save_state(state).unwrap();
+        let result = crate::commands::cmd_feature_remove_config(&ps, "my-feat", 42, "svc-a");
+        assert!(result.is_ok(), "cmd_feature_remove_config must succeed: {:?}", result);
+        let after = ps.load().unwrap();
+        let configs = &after.records[&42].app_config_names;
+        assert!(!configs.contains(&"svc-a".to_string()),
+            "cmd_feature_remove_config must remove svc-a from PR 42 configs, got: {:?}", configs);
+        assert!(configs.contains(&"svc-b".to_string()),
+            "cmd_feature_remove_config must preserve svc-b on PR 42 configs, got: {:?}", configs);
+    }
+
+    #[test]
     fn cmd_feature_logs_governs_shows_dep_log_content() {
         let tmp = tempfile::tempdir().unwrap();
         let git_dir = tmp.path().join(".git");

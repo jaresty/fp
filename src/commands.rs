@@ -971,6 +971,18 @@ pub fn cmd_feature_remove(ps: &crate::process_store::ProcessStateStore, name: &s
     }
 }
 
+pub fn cmd_feature_remove_config(ps: &crate::process_store::ProcessStateStore, name: &str, pr: u64, config: &str) -> anyhow::Result<String> {
+    let mut state = ps.load()?;
+    anyhow::ensure!(state.feature_envelopes.contains(name), "Feature envelope '{}' not found", name);
+    let rec = state.records.get_mut(&pr)
+        .ok_or_else(|| anyhow::anyhow!("PR #{} not found in feature envelope '{}'", pr, name))?;
+    anyhow::ensure!(rec.app_config_names.contains(&config.to_string()),
+        "Config '{}' not assigned to PR #{}", config, pr);
+    rec.app_config_names.retain(|c| c != config);
+    ps.save_state(state)?;
+    Ok(format!("Removed config '{}' from PR #{} in feature '{}'\n", config, pr, name))
+}
+
 pub fn cmd_feature_status_with_client(
     ps: &crate::process_store::ProcessStateStore,
     config: &crate::app_config::AppConfigStore,
