@@ -806,6 +806,9 @@ pub fn cmd_rebase_stack(
         let hint = crate::display::format_conflict_hint(branch, &state.cache);
         if !hint.is_empty() { out.push_str(&format!("{}\n", hint)); }
     }
+    if let Some(wt) = &result.conflict_worktree_path {
+        out.push_str(&format!("  worktree: {}\n  after resolving: fp unlock <branch> && fp rebase-stack\n", wt));
+    }
     if let Some(status) = &result.status_output { out.push_str(&format!("\ngit status:\n{}\n", status)); }
     for warn in &result.invariant_warnings { out.push_str(&format!("⚠ {}\n", warn)); }
     if result.rebased.is_empty() && result.conflicts.is_empty() {

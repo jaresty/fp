@@ -2806,4 +2806,211 @@ mod tests {
             "max_count=1 must return at most 1 result; got {} results: {:?}", result.len(), result);
     }
 
+    // RS-LOCK1: rebase_stack acquires a lock (writes fp-lock) before rebasing each branch,
+    //           observable via the progress callback firing and the lock file being present at that moment.
+    #[test]
+    fn rebase_stack_acquires_lock_before_rebasing() {
+        use std::process::Command;
+        use tempfile::TempDir;
+
+        let remote_dir = TempDir::new().unwrap();
+        Command::new("git").args(["init", "--bare", "-b", "main"])
+            .current_dir(remote_dir.path()).output().unwrap();
+
+        let dir = TempDir::new().unwrap();
+        let path = dir.path();
+        let git = |args: &[&str]| Command::new("git").args(args).current_dir(path).output().unwrap();
+
+        git(&["init", "-b", "main"]);
+        git(&["config", "user.email", "test@test.com"]);
+        git(&["config", "user.name", "Test"]);
+        git(&["remote", "add", "origin", remote_dir.path().to_str().unwrap()]);
+
+        std::fs::write(path.join("a.txt"), "a").unwrap();
+        git(&["add", "."]);
+        git(&["commit", "-m", "A"]);
+        git(&["push", "origin", "main"]);
+
+        git(&["checkout", "-b", "feat/alpha"]);
+        std::fs::write(path.join("b.txt"), "b").unwrap();
+        git(&["add", "."]);
+        git(&["commit", "-m", "B"]);
+        git(&["push", "--set-upstream", "origin", "feat/alpha"]);
+        git(&["checkout", "main"]);
+
+        let branches = vec!["feat/alpha".to_string()];
+        let mut parent_of = std::collections::HashMap::new();
+        parent_of.insert("feat/alpha".to_string(), None);
+        let mut base_of = std::collections::HashMap::new();
+        base_of.insert("feat/alpha".to_string(), "main".to_string());
+
+        let git_dir = path.join(".git");
+        let lock_existed_during_rebase = std::sync::Arc::new(std::sync::Mutex::new(false));
+        let lock_existed_clone = lock_existed_during_rebase.clone();
+        let git_dir_clone = git_dir.clone();
+        // The debug callback fires right before the git rebase command (after worktree is ensured).
+        let debug_cb = move |msg: &str| {
+            if msg.contains("rebase_stack: branch=feat/alpha") {
+                let lp = crate::worktree::lock_path(&git_dir_clone, "feat/alpha");
+                if lp.exists() {
+                    *lock_existed_clone.lock().unwrap() = true;
+                }
+            }
+        };
+
+        rebase_stack(&branches, &parent_of, &base_of, path, &|_| {}, &debug_cb).unwrap();
+
+        assert!(
+            *lock_existed_during_rebase.lock().unwrap(),
+            "lock file must exist at the moment the debug 'rebase_stack: branch=feat/alpha' callback fires"
+        );
+    }
+
+    // RS-LOCK2: rebase_stack removes the lock after a successful rebase
+    #[test]
+    fn rebase_stack_removes_lock_after_success() {
+        use std::process::Command;
+        use tempfile::TempDir;
+
+        let remote_dir = TempDir::new().unwrap();
+        Command::new("git").args(["init", "--bare", "-b", "main"])
+            .current_dir(remote_dir.path()).output().unwrap();
+
+        let dir = TempDir::new().unwrap();
+        let path = dir.path();
+        let git = |args: &[&str]| Command::new("git").args(args).current_dir(path).output().unwrap();
+
+        git(&["init", "-b", "main"]);
+        git(&["config", "user.email", "test@test.com"]);
+        git(&["config", "user.name", "Test"]);
+        git(&["remote", "add", "origin", remote_dir.path().to_str().unwrap()]);
+
+        std::fs::write(path.join("a.txt"), "a").unwrap();
+        git(&["add", "."]);
+        git(&["commit", "-m", "A"]);
+        git(&["push", "origin", "main"]);
+
+        git(&["checkout", "-b", "feat/beta"]);
+        std::fs::write(path.join("c.txt"), "c").unwrap();
+        git(&["add", "."]);
+        git(&["commit", "-m", "C"]);
+        git(&["push", "--set-upstream", "origin", "feat/beta"]);
+        git(&["checkout", "main"]);
+
+        let branches = vec!["feat/beta".to_string()];
+        let mut parent_of = std::collections::HashMap::new();
+        parent_of.insert("feat/beta".to_string(), None);
+        let mut base_of = std::collections::HashMap::new();
+        base_of.insert("feat/beta".to_string(), "main".to_string());
+
+        rebase_stack(&branches, &parent_of, &base_of, path, &|_| {}, &|_| {}).unwrap();
+
+        let git_dir = path.join(".git");
+        let lock_path = crate::worktree::lock_path(&git_dir, "feat/beta");
+        assert!(!lock_path.exists(), "lock must not exist after successful rebase of feat/beta");
+    }
+
+    // RS-LOCK3: rebase_stack returns worktree path in RebaseResult when conflict occurs
+    #[test]
+    fn rebase_stack_conflict_result_includes_worktree_path() {
+        use std::process::Command;
+        use tempfile::TempDir;
+
+        let remote_dir = TempDir::new().unwrap();
+        Command::new("git").args(["init", "--bare", "-b", "main"])
+            .current_dir(remote_dir.path()).output().unwrap();
+
+        let dir = TempDir::new().unwrap();
+        let path = dir.path();
+        let git = |args: &[&str]| Command::new("git").args(args).current_dir(path).output().unwrap();
+
+        git(&["init", "-b", "main"]);
+        git(&["config", "user.email", "test@test.com"]);
+        git(&["config", "user.name", "Test"]);
+        git(&["remote", "add", "origin", remote_dir.path().to_str().unwrap()]);
+
+        std::fs::write(path.join("conflict.txt"), "main").unwrap();
+        git(&["add", "."]);
+        git(&["commit", "-m", "A"]);
+        git(&["push", "origin", "main"]);
+
+        git(&["checkout", "-b", "feat/conflict"]);
+        std::fs::write(path.join("conflict.txt"), "branch").unwrap();
+        git(&["add", "."]);
+        git(&["commit", "-m", "B"]);
+        git(&["push", "--set-upstream", "origin", "feat/conflict"]);
+
+        git(&["checkout", "main"]);
+        std::fs::write(path.join("conflict.txt"), "upstream").unwrap();
+        git(&["add", "."]);
+        git(&["commit", "-m", "X"]);
+        git(&["push", "origin", "main"]);
+
+        let branches = vec!["feat/conflict".to_string()];
+        let mut parent_of = std::collections::HashMap::new();
+        parent_of.insert("feat/conflict".to_string(), None);
+        let mut base_of = std::collections::HashMap::new();
+        base_of.insert("feat/conflict".to_string(), "main".to_string());
+
+        let result = rebase_stack(&branches, &parent_of, &base_of, path, &|_| {}, &|_| {}).unwrap();
+
+        assert!(!result.conflicts.is_empty(), "expected a conflict");
+        let expected_wt_path = crate::worktree::worktree_path(path, "feat/conflict");
+        assert_eq!(
+            result.conflict_worktree_path.as_deref(),
+            Some(expected_wt_path.to_str().unwrap()),
+            "RebaseResult must include the worktree path where the conflict occurred"
+        );
+    }
+
+    // RS-LOCK4: rebase_stack holds the lock after a conflict so the worktree stays owned
+    #[test]
+    fn rebase_stack_holds_lock_after_conflict() {
+        use std::process::Command;
+        use tempfile::TempDir;
+
+        let remote_dir = TempDir::new().unwrap();
+        Command::new("git").args(["init", "--bare", "-b", "main"])
+            .current_dir(remote_dir.path()).output().unwrap();
+
+        let dir = TempDir::new().unwrap();
+        let path = dir.path();
+        let git = |args: &[&str]| Command::new("git").args(args).current_dir(path).output().unwrap();
+
+        git(&["init", "-b", "main"]);
+        git(&["config", "user.email", "test@test.com"]);
+        git(&["config", "user.name", "Test"]);
+        git(&["remote", "add", "origin", remote_dir.path().to_str().unwrap()]);
+
+        std::fs::write(path.join("conflict.txt"), "main").unwrap();
+        git(&["add", "."]);
+        git(&["commit", "-m", "A"]);
+        git(&["push", "origin", "main"]);
+
+        git(&["checkout", "-b", "feat/held"]);
+        std::fs::write(path.join("conflict.txt"), "branch").unwrap();
+        git(&["add", "."]);
+        git(&["commit", "-m", "B"]);
+        git(&["push", "--set-upstream", "origin", "feat/held"]);
+
+        git(&["checkout", "main"]);
+        std::fs::write(path.join("conflict.txt"), "upstream").unwrap();
+        git(&["add", "."]);
+        git(&["commit", "-m", "X"]);
+        git(&["push", "origin", "main"]);
+
+        let branches = vec!["feat/held".to_string()];
+        let mut parent_of = std::collections::HashMap::new();
+        parent_of.insert("feat/held".to_string(), None);
+        let mut base_of = std::collections::HashMap::new();
+        base_of.insert("feat/held".to_string(), "main".to_string());
+
+        let result = rebase_stack(&branches, &parent_of, &base_of, path, &|_| {}, &|_| {}).unwrap();
+        assert!(!result.conflicts.is_empty(), "expected a conflict on feat/held");
+
+        let git_dir = path.join(".git");
+        let lock_path = crate::worktree::lock_path(&git_dir, "feat/held");
+        assert!(lock_path.exists(), "lock must be held after conflict so the worktree stays owned");
+    }
+
 }

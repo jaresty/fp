@@ -60,6 +60,7 @@ pub struct RebaseResult {
     pub rebased: Vec<String>,
     pub status_output: Option<String>,
     pub invariant_warnings: Vec<String>,
+    pub conflict_worktree_path: Option<String>,
 }
 
 /// Rebase each branch onto its parent's current tip, in stack_order.
@@ -153,6 +154,7 @@ pub fn rebase_stack(branches: &[String], parent_of: &HashMap<String, Option<Stri
     let mut rebased = Vec::new();
     let mut status_output: Option<String> = None;
     let mut invariant_warnings = Vec::new();
+    let mut conflict_worktree_path: Option<String> = None;
 
     // Snapshot parent SHA for each branch before any rebasing begins.
     // Used for the diff invariant check: pre-rebase diff must use the original parent SHA.
@@ -229,6 +231,9 @@ pub fn rebase_stack(branches: &[String], parent_of: &HashMap<String, Option<Stri
                 continue;
             }
         }
+
+        let lp = worktree::lock_path(&git_dir, branch);
+        let _ = worktree::write_lock(&lp, worktree::session_anchor_pid(), "rebase-stack", branch);
 
         debug(&format!("rebase_stack: branch={} parent={}", branch, parent));
         // Detect whether the parent branch has been merged (and its remote branch deleted).
@@ -344,6 +349,7 @@ pub fn rebase_stack(branches: &[String], parent_of: &HashMap<String, Option<Stri
                     .unwrap_or_default();
                 if remote_sha == post_rebase_sha {
                     // Remote already matches — skip push entirely
+                    let _ = worktree::remove_lock(&lp);
                     continue;
                 }
             }
@@ -368,7 +374,9 @@ pub fn rebase_stack(branches: &[String], parent_of: &HashMap<String, Option<Stri
                 .output()?;
             if push.status.success() {
                 rebased.push(branch.clone());
+                let _ = worktree::remove_lock(&lp);
             } else {
+                let _ = worktree::remove_lock(&lp);
                 conflicts.push(format!("{}: push failed", branch));
                 eprintln!("Push failed for {} — dependent branches skipped.", branch);
                 eprintln!("Retry with: fp rebase-stack");
@@ -376,9 +384,11 @@ pub fn rebase_stack(branches: &[String], parent_of: &HashMap<String, Option<Stri
             }
         } else {
             conflicts.push(branch.clone());
+            conflict_worktree_path = Some(wt_path.to_string_lossy().to_string());
             eprintln!("Conflict on {} — resolve with:", branch);
+            eprintln!("  cd {}", wt_path.display());
             eprintln!("  git add <resolved files> && git rebase --continue");
-            eprintln!("  fp rebase-stack");
+            eprintln!("  fp unlock {} && fp rebase-stack", branch);
             let status = std::process::Command::new("git")
                 .args(["status"])
                 .current_dir(&wt_path)
@@ -393,7 +403,7 @@ pub fn rebase_stack(branches: &[String], parent_of: &HashMap<String, Option<Stri
         }
     }
 
-    Ok(RebaseResult { conflicts, rebased, status_output, invariant_warnings })
+    Ok(RebaseResult { conflicts, rebased, status_output, invariant_warnings, conflict_worktree_path })
 }
 
 /// Rebase `branch` onto `new_base`, cutting away commits from `old_base_sha` (the pre-merge tip).
