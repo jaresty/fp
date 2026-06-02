@@ -440,6 +440,9 @@ enum AppCommands {
         /// One-time setup command to run per worktree before bootstrapping (e.g. npm install)
         #[arg(long)]
         setup: Option<String>,
+        /// Command to verify the app is running from the correct worktree (exit 0 = correct, non-zero = wrong)
+        #[arg(long)]
+        volume_check: Option<String>,
     },
     /// Assign a named app config to all PRs on a repo
     SetConfig {
@@ -756,8 +759,8 @@ fn main() -> Result<()> {
         Commands::App { subcommand } => {
             let store = app_config::AppConfigStore::open(app_config::AppConfigStore::default_path()?);
             match subcommand {
-                AppCommands::DefineConfig { name, bootstrap, teardown, startup_timeout, health_check, ephemeral, main_worktree, setup } => {
-                    let out = commands::cmd_app_define_config(&store, &name, &bootstrap, &teardown, &startup_timeout, health_check.as_deref(), ephemeral, main_worktree.as_deref(), setup.as_deref())?;
+                AppCommands::DefineConfig { name, bootstrap, teardown, startup_timeout, health_check, ephemeral, main_worktree, setup, volume_check } => {
+                    let out = commands::cmd_app_define_config(&store, &name, &bootstrap, &teardown, &startup_timeout, health_check.as_deref(), ephemeral, main_worktree.as_deref(), setup.as_deref(), volume_check.as_deref())?;
                     println!("{}", out);
                 }
                 AppCommands::SetConfig { repo, config_name } => {

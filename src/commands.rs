@@ -1086,8 +1086,23 @@ pub fn cmd_feature_status(
             .map(|wt| crate::worktree::repo_is_dirty(&wt).unwrap_or(false))
             .unwrap_or(false);
         let dirty_str = if dirty { " ⚠ dirty (uncommitted changes)" } else { "" };
+        let volume = state.records.get(&s.pr).and_then(|rec| {
+            let worktree = std::path::Path::new(&rec.worktree);
+            let results: Vec<bool> = rec.app_config_names.iter()
+                .filter_map(|cfg_name| config.load_app_config(cfg_name).ok().flatten())
+                .filter_map(|cfg| cfg.volume_check.map(|cmd| {
+                    crate::feature::health_check_service(&cmd, worktree, rec.pr, worktree)
+                }))
+                .collect();
+            if results.is_empty() { None } else { Some(results.iter().all(|&ok| ok)) }
+        });
+        let volume_str = match volume {
+            Some(true) => " ✓ vol ok",
+            Some(false) => " ✗ vol fail (wrong worktree?)",
+            None => "",
+        };
         if s.ephemeral {
-            out.push_str(&format!("  PR #{}{}  ✓ built{}{}\n", s.pr, apps, branch, dirty_str));
+            out.push_str(&format!("  PR #{}{}  ✓ built{}{}{}\n", s.pr, apps, branch, dirty_str, volume_str));
         } else {
             let pid = if s.pid_alive { "✓ running" } else { "✗ stopped" };
             let health = match s.service_healthy {
@@ -1110,7 +1125,7 @@ pub fn cmd_feature_status(
             } else {
                 String::new()
             };
-            out.push_str(&format!("  PR #{}{}  {}{}{}{}{}\n", s.pr, apps, pid, health, branch, dirty_str, recovery));
+            out.push_str(&format!("  PR #{}{}  {}{}{}{}{}{}\n", s.pr, apps, pid, health, volume_str, branch, dirty_str, recovery));
         }
     }
     for key in &dep_keys {
@@ -1136,7 +1151,7 @@ pub fn cmd_feature_status(
         .collect();
     for cfg_name in &all_cfg_names {
         if let Ok(Some(cfg)) = config.load_app_config(cfg_name)
-            && !scripts_reference_fp_worktree(&cfg.bootstrap, &cfg.teardown, cfg.health_check.as_deref(), cfg.setup.as_deref()) {
+            && !scripts_reference_fp_worktree(&cfg.bootstrap, &cfg.teardown, cfg.health_check.as_deref(), cfg.setup.as_deref(), cfg.volume_check.as_deref()) {
             out.push_str(&format!("\nWarning: app config '{}' scripts do not reference $FP_WORKTREE — scripts may run from the wrong directory.", cfg_name));
         }
     }
@@ -1168,6 +1183,7 @@ pub fn cmd_app_show(config: &crate::app_config::AppConfigStore, name: &str) -> a
     out.push_str(&format!("ephemeral:        {}\n", cfg.ephemeral));
     out.push_str(&format!("main_worktree:    {}\n", cfg.main_worktree.as_deref().unwrap_or("(none)")));
     out.push_str(&format!("setup:            {}\n", cfg.setup.as_deref().unwrap_or("(none)")));
+    out.push_str(&format!("volume_check:     {}\n", cfg.volume_check.as_deref().unwrap_or("(none)")));
     Ok(out.trim_end().to_string())
 }
 
@@ -1432,8 +1448,8 @@ pub fn cmd_feature_add(ps: &crate::process_store::ProcessStateStore, store: &cra
 }
 
 #[allow(clippy::too_many_arguments)]
-fn scripts_reference_fp_worktree(bootstrap: &str, teardown: &str, health_check: Option<&str>, setup: Option<&str>) -> bool {
-    let scripts = [Some(bootstrap), Some(teardown), health_check, setup];
+fn scripts_reference_fp_worktree(bootstrap: &str, teardown: &str, health_check: Option<&str>, setup: Option<&str>, volume_check: Option<&str>) -> bool {
+    let scripts = [Some(bootstrap), Some(teardown), health_check, setup, volume_check];
     scripts.iter().flatten().any(|s| s.contains("$FP_WORKTREE") || s.contains("${FP_WORKTREE}"))
 }
 
@@ -1448,6 +1464,7 @@ pub fn cmd_app_define_config(
     ephemeral: bool,
     main_worktree: Option<&str>,
     setup: Option<&str>,
+    volume_check: Option<&str>,
 ) -> anyhow::Result<String> {
     store.save_app_config(crate::app_config::AppConfig {
         name: name.to_string(),
@@ -1458,9 +1475,10 @@ pub fn cmd_app_define_config(
         ephemeral,
         main_worktree: main_worktree.map(str::to_string),
         setup: setup.map(str::to_string),
+        volume_check: volume_check.map(str::to_string),
     })?;
     let mut out = format!("Defined app config '{}'", name);
-    if !scripts_reference_fp_worktree(bootstrap, teardown, health_check, setup) {
+    if !scripts_reference_fp_worktree(bootstrap, teardown, health_check, setup, volume_check) {
         out.push_str("\nWarning: no script references $FP_WORKTREE — fp sets this to the branch worktree path when running bootstrap/teardown/health_check. Without it, scripts may run from the wrong directory.");
     }
     Ok(out)

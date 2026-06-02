@@ -69,6 +69,7 @@ fp app define-config <name> \
   --teardown "<cmd>" \                  # command to stop the app
   --startup-timeout <dur> \             # how long to wait for startup (default: 60s)
   [--health-check "<cmd>"] \            # optional: exit 0 = healthy
+  [--volume-check "<cmd>"] \            # optional: exit 0 = app is running from the correct worktree
   [--ephemeral] \                       # app exits immediately after install (health-check required)
   [--main-worktree <path>] \            # path to use when no PR owns this config slot
   [--setup "<cmd>"]                     # one-time setup command run per worktree before bootstrapping (e.g. npm install)
@@ -342,16 +343,20 @@ fp sets the following environment variables when running bootstrap, teardown, an
 
 These variables are available to the **host shell** running the command, not inside containers. Use them on the host side of any command pipeline.
 
-### Verifying Docker Volume Mounts
+### Verifying Worktree Correctness
 
-A service health-check that only tests liveness (`curl http://localhost:PORT/health`) will pass even if the container is mounted from the wrong directory (e.g., main instead of the PR worktree). To catch mount mismatches without changing the compose config, extend the health-check to verify the volume source using `docker inspect`:
+A liveness health-check (`curl http://localhost:PORT/health`) passes even if the app is running from the wrong directory — e.g., a stale Docker container mounted from main instead of the PR worktree. Use `--volume-check` to add a dedicated worktree-correctness check, run independently from health.
+
+`fp feature status` shows the result as `✓ vol ok` / `✗ vol fail (wrong worktree?)` alongside the health indicator.
+
+**Docker example** — verify the container has the PR worktree mounted:
 
 ```sh
 fp app define-config backend \
-  --bootstrap "docker compose up -d" \
+  --bootstrap "cd $FP_WORKTREE && docker compose up -d" \
   --teardown "docker compose down" \
-  --health-check "curl -sf http://127.0.0.1:6363/health && \
-    docker inspect \$(docker compose ps -q backend) \
+  --health-check "curl -sf http://127.0.0.1:6363/health" \
+  --volume-check "docker inspect \$(docker compose ps -q backend) \
       --format '{{range .Mounts}}{{.Source}} {{end}}' \
     | grep -qF \"$FP_WORKTREE\""
 ```
@@ -361,7 +366,7 @@ How this works:
 - `docker inspect ... --format '{{range .Mounts}}{{.Source}} {{end}}'` lists all host paths mounted into the container
 - `grep -qF "$FP_WORKTREE"` checks that the PR's worktree is one of them — fails if the container is serving from main or another PR's directory
 
-This gives a true mount-correct health signal without touching compose.yml.
+The volume-check command runs with `$FP_WORKTREE` set to the expected worktree path. Exit 0 = correct, non-zero = wrong.
 
 ## Agent-Context Manifest
 

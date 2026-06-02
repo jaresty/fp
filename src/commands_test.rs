@@ -274,7 +274,8 @@ mod tests {
         app_store.save_app_config(crate::app_config::AppConfig {
             name: "svc".into(), bootstrap: "echo up".into(), teardown: "echo down".into(),
             startup_timeout: "5s".into(), health_check: None, ephemeral: false, main_worktree: None, setup: None,
-        }).unwrap();
+            volume_check: None,
+}).unwrap();
         crate::feature::feature_new(&ps, "my-feature").unwrap();
         ps.activate(crate::process_store::ProcessRecord {
             pr: 42, expected_branch: "feat/x".into(), pid: Some(std::process::id()),
@@ -1615,7 +1616,8 @@ mod tests {
         app_store.save_app_config(crate::app_config::AppConfig {
             name: "svc".into(), bootstrap: "echo up".into(), teardown: "echo down".into(),
             startup_timeout: "5s".into(), health_check: None, ephemeral: false, main_worktree: None, setup: None,
-        }).unwrap();
+            volume_check: None,
+}).unwrap();
         // assign config via ProcessRecord (not set_pr_config)
         let mut state = ps.load().unwrap();
         state.records.insert(42, crate::process_store::ProcessRecord {
@@ -1670,6 +1672,7 @@ mod tests {
             false,
             None,
             None,
+            None,
         );
         assert!(result.is_ok(), "cmd_app_define_config must succeed: {:?}", result);
         let cfg = store.load_app_config("payments-api").unwrap().unwrap();
@@ -1696,6 +1699,7 @@ mod tests {
             false,
             None,
             Some("npm install"),
+            None,
         );
         assert!(result.is_ok(), "cmd_app_define_config must succeed: {:?}", result);
         let cfg = store.load_app_config("payments-api").unwrap().unwrap();
@@ -1717,11 +1721,72 @@ mod tests {
             false,
             Some("/path/to/main"),
             None,
+            None,
         );
         assert!(result.is_ok(), "cmd_app_define_config must succeed: {:?}", result);
         let cfg = store.load_app_config("payments-api").unwrap().unwrap();
         assert_eq!(cfg.main_worktree, Some("/path/to/main".to_string()),
             "cmd_app_define_config must store main_worktree, got: {:?}", cfg.main_worktree);
+    }
+
+    // volume_check field persists through define-config
+    #[test]
+    fn cmd_app_define_config_governs_volume_check_field_persists() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = crate::app_config::AppConfigStore::open(dir.path().join("config.toml"));
+        let result = crate::commands::cmd_app_define_config(
+            &store, "svc",
+            "cd $FP_WORKTREE && docker-compose up -d",
+            "docker-compose down",
+            "60s",
+            None,
+            false,
+            None,
+            None,
+            Some("docker inspect $(docker compose ps -q svc) --format '{{range .Mounts}}{{.Source}} {{end}}' | grep -qF \"$FP_WORKTREE\""),
+        );
+        assert!(result.is_ok(), "cmd_app_define_config must succeed with volume_check: {:?}", result);
+        let cfg = store.load_app_config("svc").unwrap().unwrap();
+        assert!(cfg.volume_check.is_some(),
+            "governs_volume_check_field_persists: volume_check must be stored, got: {:?}", cfg.volume_check);
+    }
+
+    // fp feature status shows volume_check result alongside health
+    #[test]
+    fn cmd_feature_status_governs_feature_status_shows_volume_check_result() {
+        let dir = tempfile::tempdir().unwrap();
+        let ps = crate::process_store::ProcessStateStore::open(dir.path());
+        let app_store = crate::app_config::AppConfigStore::open(dir.path().join("config.toml"));
+        let live_pid = std::process::id();
+        // App with a volume_check that always fails (exit 1)
+        app_store.save_app_config(crate::app_config::AppConfig {
+            name: "backend".into(),
+            bootstrap: "cd $FP_WORKTREE && npm start".into(),
+            teardown: "pkill node".into(),
+            startup_timeout: "30s".into(),
+            health_check: None,
+            ephemeral: false,
+            main_worktree: None,
+            setup: None,
+            volume_check: Some("exit 1".into()),
+        }).unwrap();
+        let rec = crate::process_store::ProcessRecord {
+            pr: 42,
+            expected_branch: "feat/x".into(),
+            pid: Some(live_pid),
+            feature_envelopes: vec!["my-feature".into()], feature_envelope: None,
+            worktree: dir.path().to_string_lossy().to_string(),
+            app_config_names: vec!["backend".into()],
+        };
+        ps.activate(rec).unwrap();
+        let mut state = ps.load().unwrap();
+        state.feature_envelopes.insert("my-feature".to_string());
+        ps.save_state(state).unwrap();
+        let result = crate::commands::cmd_feature_status(&ps, &app_store, "my-feature", false, std::path::Path::new("."));
+        assert!(result.is_ok(), "cmd_feature_status must succeed: {:?}", result);
+        let output = result.unwrap();
+        assert!(output.contains("volume") || output.contains("worktree") || output.contains("✗"),
+            "governs_feature_status_shows_volume_check_result: status must show volume_check result, got: {}", output);
     }
 
     // cmd_app_define_config warns when no script references $FP_WORKTREE
@@ -1736,6 +1801,7 @@ mod tests {
             "60s",
             None,
             false,
+            None,
             None,
             None,
         );
@@ -1757,6 +1823,7 @@ mod tests {
             "60s",
             None,
             false,
+            None,
             None,
             None,
         );
@@ -1783,6 +1850,7 @@ mod tests {
             ephemeral: false,
             main_worktree: None,
             setup: None,
+            volume_check: None,
         }).unwrap();
         let rec = crate::process_store::ProcessRecord {
             pr: 42,
@@ -1854,6 +1922,7 @@ mod tests {
             false,
             None,
             None,
+            None,
         ).unwrap();
         let cfg = store.load_app_config("svc").unwrap().unwrap();
         assert_eq!(cfg.health_check, Some("curl -f http://localhost:3000/health".into()),
@@ -1886,7 +1955,8 @@ mod tests {
         app_store.save_app_config(crate::app_config::AppConfig {
             name: "svc".into(), bootstrap: "echo up".into(), teardown: "echo down".into(),
             startup_timeout: "5s".into(), health_check: None, ephemeral: false, main_worktree: None, setup: None,
-        }).unwrap();
+            volume_check: None,
+}).unwrap();
         crate::feature::feature_new(&ps, "my-feature").unwrap();
         let rec1 = crate::process_store::ProcessRecord {
             pr: 10, expected_branch: "feat/a".into(), pid: None,
@@ -1922,7 +1992,8 @@ mod tests {
         app_store.save_app_config(crate::app_config::AppConfig {
             name: "svc".into(), bootstrap: "echo up".into(), teardown: "echo down".into(),
             startup_timeout: "5s".into(), health_check: None, ephemeral: false, main_worktree: None, setup: None,
-        }).unwrap();
+            volume_check: None,
+}).unwrap();
         crate::feature::feature_new(&ps, "my-feature").unwrap();
         ps.activate(crate::process_store::ProcessRecord {
             pr: 10, expected_branch: "feat/a".into(), pid: Some(std::process::id()),
@@ -1966,7 +2037,8 @@ mod tests {
         app_store.save_app_config(crate::app_config::AppConfig {
             name: "ext".into(), bootstrap: "echo rebuild-ok".into(), teardown: "echo down".into(),
             startup_timeout: "5s".into(), health_check: Some("true".into()), ephemeral: true, main_worktree: None, setup: None,
-        }).unwrap();
+            volume_check: None,
+}).unwrap();
         crate::feature::feature_new(&ps, "ext-feature").unwrap();
         ps.activate(crate::process_store::ProcessRecord {
             pr: 77, expected_branch: "feat/ext".into(), pid: None,
@@ -1994,7 +2066,8 @@ mod tests {
         app_store.save_app_config(crate::app_config::AppConfig {
             name: "svc".into(), bootstrap: "echo up".into(), teardown: "echo down".into(),
             startup_timeout: "5s".into(), health_check: None, ephemeral: false, main_worktree: None, setup: None,
-        }).unwrap();
+            volume_check: None,
+}).unwrap();
         crate::feature::feature_new(&ps, "my-feature").unwrap();
         ps.activate(crate::process_store::ProcessRecord {
             pr: 10, expected_branch: "feat/a".into(), pid: None,
@@ -2111,7 +2184,7 @@ mod tests {
         let app_store = crate::app_config::AppConfigStore::open(tmp.path().join("config.toml"));
         let worktree = tmp.path().to_string_lossy().to_string();
         // Define an app config
-        crate::commands::cmd_app_define_config(&app_store, "payments-api", "echo start", "echo stop", "5s", None, false, None, None).unwrap();
+        crate::commands::cmd_app_define_config(&app_store, "payments-api", "echo start", "echo stop", "5s", None, false, None, None, None).unwrap();
         // Create process record with NO bound configs
         let mut state = ps.load().unwrap();
         state.records.insert(10, crate::process_store::ProcessRecord {
@@ -2387,7 +2460,8 @@ mod tests {
             health_check: Some("test -d dist".into()),
             ephemeral: true,
             main_worktree: None, setup: None,
-        }).unwrap();
+            volume_check: None,
+}).unwrap();
         crate::feature::feature_new(&ps, "my-feat").unwrap();
         let mut state = ps.load().unwrap();
         state.records.insert(42, crate::process_store::ProcessRecord {
@@ -2434,7 +2508,8 @@ mod tests {
             health_check: None,
             ephemeral: true,
             main_worktree: None, setup: None,
-        }).unwrap();
+            volume_check: None,
+}).unwrap();
         crate::feature::feature_new(&ps, "my-feat").unwrap();
         let mut state = ps.load().unwrap();
         state.records.insert(42, crate::process_store::ProcessRecord {
@@ -2467,7 +2542,8 @@ mod tests {
             health_check: Some("true".into()),
             ephemeral: false,
             main_worktree: None, setup: None,
-        }).unwrap();
+            volume_check: None,
+}).unwrap();
         crate::feature::feature_new(&ps, "auth-refactor").unwrap();
         crate::feature::feature_new(&ps, "payment-v2").unwrap();
         // PR #42 in auth-refactor: no live PID, service healthy (health_check="true")
@@ -2507,11 +2583,13 @@ mod tests {
         store.save_app_config(crate::app_config::AppConfig {
             name: "backend".into(), bootstrap: "echo up".into(), teardown: "echo down".into(),
             startup_timeout: "5s".into(), health_check: None, ephemeral: false, main_worktree: None, setup: None,
-        }).unwrap();
+            volume_check: None,
+}).unwrap();
         store.save_app_config(crate::app_config::AppConfig {
             name: "frontend".into(), bootstrap: "echo up".into(), teardown: "echo down".into(),
             startup_timeout: "5s".into(), health_check: None, ephemeral: false, main_worktree: None, setup: None,
-        }).unwrap();
+            volume_check: None,
+}).unwrap();
         let result = crate::commands::cmd_app_list(&store);
         assert!(result.is_ok(), "cmd_app_list must succeed: {:?}", result);
         let out = result.unwrap();
@@ -2532,6 +2610,7 @@ mod tests {
             ephemeral: false,
             main_worktree: Some("/repos/main".into()),
             setup: Some("npm install".into()),
+            volume_check: None,
         }).unwrap();
         let result = crate::commands::cmd_app_show(&store, "payments-api");
         assert!(result.is_ok(), "cmd_app_show must succeed: {:?}", result);
@@ -2673,7 +2752,8 @@ mod tests {
             name: "svc".into(), bootstrap: "echo up".into(), teardown: "echo down".into(),
             startup_timeout: "5s".into(), health_check: Some("true".into()),
             ephemeral: false, main_worktree: None, setup: None,
-        }).unwrap();
+            volume_check: None,
+}).unwrap();
         let fake = make_fake_with_pr(42);
         let out = crate::commands::cmd_status_all(Some(&fake), &store, Some(&ps), Some(&app_store), &git_dir, "alice", "repo", false).unwrap();
         assert!(out.contains("healthy but untracked — another process may be listening"),
@@ -2691,7 +2771,8 @@ mod tests {
         app_store.save_app_config(crate::app_config::AppConfig {
             name: "svc".into(), bootstrap: "echo up".into(), teardown: teardown_cmd,
             startup_timeout: "5s".into(), health_check: None, ephemeral: false, main_worktree: None, setup: None,
-        }).unwrap();
+            volume_check: None,
+}).unwrap();
         let mut state = ps.load().unwrap();
         state.records.insert(99, crate::process_store::ProcessRecord {
             pr: 99, expected_branch: String::new(), pid: None,
@@ -2715,7 +2796,8 @@ mod tests {
             name: "svc".into(), bootstrap: "true".into(), teardown: "true".into(),
             startup_timeout: "1s".into(), health_check: None, ephemeral: false,
             main_worktree: None, setup: None,
-        }).unwrap();
+            volume_check: None,
+}).unwrap();
         let live_pid = std::process::id();
         let rec = crate::process_store::ProcessRecord {
             pr: 11, expected_branch: "".into(), pid: Some(live_pid),
@@ -2766,7 +2848,8 @@ mod tests {
             name: "svc".into(), bootstrap: "true".into(), teardown: "true".into(),
             startup_timeout: "1s".into(), health_check: Some("true".into()), ephemeral: false,
             main_worktree: None, setup: None,
-        }).unwrap();
+            volume_check: None,
+}).unwrap();
         // PR with no live pid (stopped) but app config has health_check=true (healthy)
         let rec = crate::process_store::ProcessRecord {
             pr: 55,
@@ -2857,7 +2940,8 @@ mod tests {
             ephemeral: false,
             main_worktree: None,
             setup: Some("true".into()),
-        };
+            volume_check: None,
+};
         app_store.save_app_config(cfg).unwrap();
         // Feature with a PR record pointing to the tmp worktree
         let mut state = ps.load().unwrap();
@@ -2897,6 +2981,7 @@ mod tests {
             ephemeral: false,
             main_worktree: None,
             setup: Some("true".into()),
+            volume_check: None,
         }).unwrap();
         let mut state = ps.load().unwrap();
         state.feature_envelopes.insert("my-feat".into());
@@ -2945,6 +3030,7 @@ mod tests {
             ephemeral: false,
             main_worktree: None,
             setup: Some("npm install".into()),
+            volume_check: None,
         }).unwrap();
         let mut state = ps.load().unwrap();
         state.feature_envelopes.insert("my-feat".into());
@@ -2981,6 +3067,7 @@ mod tests {
             ephemeral: false,
             main_worktree: None,
             setup: Some("true".into()),
+            volume_check: None,
         }).unwrap();
         let mut state = ps.load().unwrap();
         state.feature_envelopes.insert("my-feat".into());

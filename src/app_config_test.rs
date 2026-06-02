@@ -18,8 +18,9 @@ mod tests {
             health_check: None,
             ephemeral: false,
             main_worktree: None, setup: None,
+            volume_check: None,
         }
-    }
+}
 
     #[test]
     fn app_config_store_governs_main_worktree_defaults_none() {

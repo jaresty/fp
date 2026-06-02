@@ -17,6 +17,8 @@ pub struct AppConfig {
     pub main_worktree: Option<String>,
     #[serde(default)]
     pub setup: Option<String>,
+    #[serde(default)]
+    pub volume_check: Option<String>,
 }
 
 #[derive(Debug, Default, Serialize, Deserialize)]
