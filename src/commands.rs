@@ -1130,6 +1130,16 @@ pub fn cmd_feature_status(
     if let Some(cmd) = &test_command {
         out.push_str(&format!("  Test: {}\n  Run: fp feature test {}\n", cmd, name));
     }
+    let all_cfg_names: std::collections::HashSet<String> = state.records.values()
+        .filter(|r| r.in_envelope(name))
+        .flat_map(|r| r.app_config_names.iter().cloned())
+        .collect();
+    for cfg_name in &all_cfg_names {
+        if let Ok(Some(cfg)) = config.load_app_config(cfg_name)
+            && !scripts_reference_fp_worktree(&cfg.bootstrap, &cfg.teardown, cfg.health_check.as_deref(), cfg.setup.as_deref()) {
+            out.push_str(&format!("\nWarning: app config '{}' scripts do not reference $FP_WORKTREE — scripts may run from the wrong directory.", cfg_name));
+        }
+    }
     Ok(out.trim_end().to_string())
 }
 
@@ -1422,6 +1432,12 @@ pub fn cmd_feature_add(ps: &crate::process_store::ProcessStateStore, store: &cra
 }
 
 #[allow(clippy::too_many_arguments)]
+fn scripts_reference_fp_worktree(bootstrap: &str, teardown: &str, health_check: Option<&str>, setup: Option<&str>) -> bool {
+    let scripts = [Some(bootstrap), Some(teardown), health_check, setup];
+    scripts.iter().flatten().any(|s| s.contains("$FP_WORKTREE") || s.contains("${FP_WORKTREE}"))
+}
+
+#[allow(clippy::too_many_arguments)]
 pub fn cmd_app_define_config(
     store: &crate::app_config::AppConfigStore,
     name: &str,
@@ -1443,5 +1459,9 @@ pub fn cmd_app_define_config(
         main_worktree: main_worktree.map(str::to_string),
         setup: setup.map(str::to_string),
     })?;
-    Ok(format!("Defined app config '{}'", name))
+    let mut out = format!("Defined app config '{}'", name);
+    if !scripts_reference_fp_worktree(bootstrap, teardown, health_check, setup) {
+        out.push_str("\nWarning: no script references $FP_WORKTREE — fp sets this to the branch worktree path when running bootstrap/teardown/health_check. Without it, scripts may run from the wrong directory.");
+    }
+    Ok(out)
 }

@@ -1724,6 +1724,85 @@ mod tests {
             "cmd_app_define_config must store main_worktree, got: {:?}", cfg.main_worktree);
     }
 
+    // cmd_app_define_config warns when no script references $FP_WORKTREE
+    #[test]
+    fn cmd_app_define_config_governs_define_warns_missing_fp_worktree() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = crate::app_config::AppConfigStore::open(dir.path().join("config.toml"));
+        let result = crate::commands::cmd_app_define_config(
+            &store, "svc",
+            "docker-compose up -d",
+            "docker-compose down",
+            "60s",
+            None,
+            false,
+            None,
+            None,
+        );
+        assert!(result.is_ok(), "cmd_app_define_config must succeed: {:?}", result);
+        let output = result.unwrap();
+        assert!(output.contains("FP_WORKTREE"),
+            "cmd_app_define_config must warn about missing FP_WORKTREE, got: {}", output);
+    }
+
+    // cmd_app_define_config does not warn when a script references $FP_WORKTREE
+    #[test]
+    fn cmd_app_define_config_governs_no_warn_when_fp_worktree_present() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = crate::app_config::AppConfigStore::open(dir.path().join("config.toml"));
+        let result = crate::commands::cmd_app_define_config(
+            &store, "svc",
+            "cd $FP_WORKTREE && docker-compose up -d",
+            "docker-compose down",
+            "60s",
+            None,
+            false,
+            None,
+            None,
+        );
+        assert!(result.is_ok(), "cmd_app_define_config must succeed: {:?}", result);
+        let output = result.unwrap();
+        assert!(!output.contains("Warning"),
+            "cmd_app_define_config must not warn when FP_WORKTREE present, got: {}", output);
+    }
+
+    // cmd_feature_status warns when app config scripts don't reference $FP_WORKTREE
+    #[test]
+    fn cmd_feature_status_governs_feature_status_warns_missing_fp_worktree() {
+        let dir = tempfile::tempdir().unwrap();
+        let ps = crate::process_store::ProcessStateStore::open(dir.path());
+        let app_store = crate::app_config::AppConfigStore::open(dir.path().join("config.toml"));
+        let live_pid = std::process::id();
+        // Define an app config without $FP_WORKTREE in any script
+        app_store.save_app_config(crate::app_config::AppConfig {
+            name: "backend".into(),
+            bootstrap: "npm start".into(),
+            teardown: "pkill node".into(),
+            startup_timeout: "30s".into(),
+            health_check: None,
+            ephemeral: false,
+            main_worktree: None,
+            setup: None,
+        }).unwrap();
+        let rec = crate::process_store::ProcessRecord {
+            pr: 42,
+            expected_branch: "feat/x".into(),
+            pid: Some(live_pid),
+            feature_envelopes: vec!["my-feature".into()], feature_envelope: None,
+            worktree: dir.path().to_string_lossy().to_string(),
+            app_config_names: vec!["backend".into()],
+        };
+        ps.activate(rec).unwrap();
+        let mut state = ps.load().unwrap();
+        state.feature_envelopes.insert("my-feature".to_string());
+        ps.save_state(state).unwrap();
+        let result = crate::commands::cmd_feature_status(&ps, &app_store, "my-feature", false, std::path::Path::new("."));
+        assert!(result.is_ok(), "cmd_feature_status must succeed: {:?}", result);
+        let output = result.unwrap();
+        assert!(output.contains("FP_WORKTREE"),
+            "cmd_feature_status must warn about missing FP_WORKTREE in app config, got: {}", output);
+    }
+
     // Stage 3: fp feature list --running
     #[test]
     fn cmd_feature_list_running_governs_returns_only_live_envelopes() {
