@@ -230,3 +230,15 @@ fn cli_feature_status_json_flag_is_recognized() {
     assert!(!stderr.contains("unexpected argument"),
         "--json must be a recognized flag, got: {}", stderr);
 }
+
+/// fp feature delete must be a recognized subcommand
+#[test]
+fn cli_feature_delete_is_recognized() {
+    let dir = setup_repo();
+    let out = fp(dir.path(), &["feature", "delete", "nonexistent"]);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(!stderr.contains("unrecognized subcommand"),
+        "feature delete must be a recognized subcommand, got: {}", stderr);
+    assert!(!stderr.contains("unexpected argument"),
+        "feature delete must be a recognized subcommand, got: {}", stderr);
+}

@@ -3282,6 +3282,71 @@ mod tests {
             "session-start.sh must reference fp or worktree, got: {}", content);
     }
 
+    // fp feature delete: removes all member PRs from state
+    #[test]
+    fn cmd_feature_delete_governs_removes_all_member_prs() {
+        let dir = tempfile::tempdir().unwrap();
+        let ps = crate::process_store::ProcessStateStore::open(dir.path());
+        let mut state = ps.load().unwrap();
+        state.feature_envelopes.insert("my-feat".into());
+        state.records.insert(10, crate::process_store::ProcessRecord {
+            pr: 10, expected_branch: "feat/a".into(), pid: None,
+            feature_envelopes: vec!["my-feat".into()], feature_envelope: None,
+            worktree: "".into(), app_config_names: vec![],
+        });
+        state.records.insert(20, crate::process_store::ProcessRecord {
+            pr: 20, expected_branch: "feat/b".into(), pid: None,
+            feature_envelopes: vec!["my-feat".into()], feature_envelope: None,
+            worktree: "".into(), app_config_names: vec![],
+        });
+        ps.save_state(state).unwrap();
+        let result = crate::commands::cmd_feature_delete(&ps, "my-feat");
+        assert!(result.is_ok(), "cmd_feature_delete must succeed: {:?}", result);
+        let after = ps.load().unwrap();
+        assert!(!after.records.contains_key(&10), "cmd_feature_delete must remove PR #10");
+        assert!(!after.records.contains_key(&20), "cmd_feature_delete must remove PR #20");
+    }
+
+    // fp feature delete: removes all dep slots from envelope_deps
+    #[test]
+    fn cmd_feature_delete_governs_removes_all_dep_slots() {
+        let dir = tempfile::tempdir().unwrap();
+        let ps = crate::process_store::ProcessStateStore::open(dir.path());
+        let mut state = ps.load().unwrap();
+        state.feature_envelopes.insert("my-feat".into());
+        state.envelope_deps.insert("my-feat".into(), vec!["backend".into(), "worker".into()]);
+        ps.save_state(state).unwrap();
+        let result = crate::commands::cmd_feature_delete(&ps, "my-feat");
+        assert!(result.is_ok(), "cmd_feature_delete must succeed: {:?}", result);
+        let after = ps.load().unwrap();
+        let deps = after.envelope_deps.get("my-feat").map(|v| v.as_slice()).unwrap_or(&[]);
+        assert!(deps.is_empty(), "cmd_feature_delete must remove all dep slots, got: {:?}", deps);
+    }
+
+    // fp feature delete: removes the named envelope from feature_envelopes
+    #[test]
+    fn cmd_feature_delete_governs_removes_envelope_key() {
+        let dir = tempfile::tempdir().unwrap();
+        let ps = crate::process_store::ProcessStateStore::open(dir.path());
+        let mut state = ps.load().unwrap();
+        state.feature_envelopes.insert("my-feat".into());
+        ps.save_state(state).unwrap();
+        let result = crate::commands::cmd_feature_delete(&ps, "my-feat");
+        assert!(result.is_ok(), "cmd_feature_delete must succeed: {:?}", result);
+        let after = ps.load().unwrap();
+        assert!(!after.feature_envelopes.contains("my-feat"),
+            "cmd_feature_delete must remove the named envelope from feature_envelopes");
+    }
+
+    // fp feature delete: returns error when envelope does not exist
+    #[test]
+    fn cmd_feature_delete_governs_errors_when_envelope_missing() {
+        let dir = tempfile::tempdir().unwrap();
+        let ps = crate::process_store::ProcessStateStore::open(dir.path());
+        let result = crate::commands::cmd_feature_delete(&ps, "nonexistent");
+        assert!(result.is_err(), "cmd_feature_delete must error when envelope does not exist");
+    }
+
     #[test]
     fn cmd_install_hooks_governs_writes_pre_tool_use_guard_script() {
         let dir = tempfile::tempdir().unwrap();

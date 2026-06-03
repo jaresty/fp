@@ -320,6 +320,8 @@ enum FeatureCommands {
     Add { name: String, pr: u64, #[arg(long, action = clap::ArgAction::Append, value_name = "CONFIG")] config: Vec<String> },
     /// Declare a baseline app config dependency (no PR required)
     AddDep { name: String, app_config: String },
+    /// Delete a feature envelope and remove all its member PRs and dep slots
+    Delete { name: String },
     /// List feature envelopes and their member PRs
     List {
         /// Show only envelopes with at least one live instance
@@ -729,6 +731,10 @@ fn main() -> Result<()> {
                 }
                 FeatureCommands::Remove { name, pr } => {
                     let out = commands::cmd_feature_remove(&ps, &name, pr)?;
+                    print!("{}", out);
+                }
+                FeatureCommands::Delete { name } => {
+                    let out = commands::cmd_feature_delete(&ps, &name)?;
                     print!("{}", out);
                 }
                 FeatureCommands::RemoveDep { name, app_config } => {
