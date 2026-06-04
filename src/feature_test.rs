@@ -223,6 +223,20 @@ mod tests {
         assert!(result, "health_check_service must return true when command exits 0");
     }
 
+    // D8c: health_check_service returns false within bounded time for a blocking command
+    #[test]
+    fn health_check_service_governs_returns_false_within_timeout_for_blocking_cmd() {
+        let tmp = tempdir().unwrap();
+        let start = std::time::Instant::now();
+        // sleep 60 never exits within the timeout; the implementation must kill it and return false
+        let result = health_check_service("sleep 60", tmp.path(), 0, tmp.path());
+        let elapsed = start.elapsed().as_secs_f64();
+        assert!(!result,
+            "health_check_service must return false for blocking command that is killed by timeout, got true (elapsed {:.1}s)", elapsed);
+        assert!(elapsed < 12.0,
+            "health_check_service must complete within 12 seconds for blocking command (timeout), took {:.1}s", elapsed);
+    }
+
     // D8b: health_check_service returns false when command exits non-0
     #[test]
     fn feature_governs_health_check_service_returns_false_on_nonzero() {

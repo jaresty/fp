@@ -445,16 +445,33 @@ pub fn health_check_pid(pid: u32) -> bool {
 }
 
 pub fn health_check_service(cmd: &str, worktree: &Path, pr: u64, fp_worktree: &Path) -> bool {
-    std::process::Command::new("sh")
+    let mut child = match std::process::Command::new("sh")
         .args(["-c", cmd])
         .current_dir(worktree)
         .env("FP_WORKTREE", fp_worktree)
         .env("FP_PR", pr.to_string())
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null())
-        .status()
-        .map(|s| s.success())
-        .unwrap_or(false)
+        .spawn()
+    {
+        Ok(c) => c,
+        Err(_) => return false,
+    };
+    let timeout = std::time::Duration::from_secs(10);
+    let start = std::time::Instant::now();
+    loop {
+        match child.try_wait() {
+            Ok(Some(status)) => return status.success(),
+            Ok(None) => {
+                if start.elapsed() >= timeout {
+                    let _ = child.kill();
+                    return false;
+                }
+                std::thread::sleep(std::time::Duration::from_millis(100));
+            }
+            Err(_) => return false,
+        }
+    }
 }
 
 pub fn check_conflicts(ps: &ProcessStateStore, envelope_name: &str) -> Result<ConflictResult> {

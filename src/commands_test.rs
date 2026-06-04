@@ -3014,6 +3014,46 @@ mod tests {
     }
 
     #[test]
+    fn cmd_feature_app_setup_governs_sets_fp_worktree_env_var() {
+        let tmp = tempfile::tempdir().unwrap();
+        let marker = tmp.path().join("fp_worktree_value.txt");
+        let setup_cmd = format!("printf '%s' \"$FP_WORKTREE\" > {}", marker.display());
+        let git_dir = tmp.path().join(".git");
+        std::fs::create_dir_all(&git_dir).unwrap();
+        let ps = crate::process_store::ProcessStateStore::open(&git_dir);
+        let app_store_dir = tempfile::tempdir().unwrap();
+        let app_store = crate::app_config::AppConfigStore::open(app_store_dir.path().join("config.toml"));
+        app_store.save_app_config(crate::app_config::AppConfig {
+            name: "svc".into(),
+            bootstrap: "true".into(),
+            teardown: "true".into(),
+            startup_timeout: "60s".into(),
+            health_check: None,
+            ephemeral: false,
+            main_worktree: None,
+            setup: Some(setup_cmd),
+            volume_check: None,
+        }).unwrap();
+        let worktree = tmp.path().to_string_lossy().to_string();
+        let mut state = ps.load().unwrap();
+        state.feature_envelopes.insert("my-feat".into());
+        state.records.insert(10, crate::process_store::ProcessRecord {
+            pr: 10,
+            expected_branch: "feat/x".into(),
+            pid: None,
+            feature_envelopes: vec!["my-feat".into()], feature_envelope: None,
+            worktree: worktree.clone(),
+            app_config_names: vec!["svc".into()],
+        });
+        ps.save_state(state).unwrap();
+        let result = crate::commands::cmd_feature_app_setup(&ps, &app_store, "my-feat", "svc");
+        assert!(result.is_ok(), "cmd_feature_app_setup must succeed: {:?}", result);
+        let written = std::fs::read_to_string(&marker).unwrap_or_default();
+        assert_eq!(written, worktree,
+            "cmd_feature_app_setup must set FP_WORKTREE env var to worktree path '{}', got '{}'", worktree, written);
+    }
+
+    #[test]
     fn cmd_feature_up_governs_warns_when_setup_not_run() {
         let tmp = tempfile::tempdir().unwrap();
         let git_dir = tmp.path().join(".git");

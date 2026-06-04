@@ -1414,6 +1414,8 @@ pub fn cmd_feature_app_setup(
             .arg("-c")
             .arg(&setup_cmd)
             .current_dir(worktree)
+            .env("FP_WORKTREE", worktree)
+            .env("FP_PR", "0")
             .status()?;
         if !status.success() {
             anyhow::bail!("setup command failed in {} with exit code: {:?}", worktree, status.code());
