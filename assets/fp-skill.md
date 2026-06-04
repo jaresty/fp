@@ -7,6 +7,12 @@ when_to_use: |
   - Is the user asking about PR status, CI failures, review threads, or stacked branches?
   - Is the user asking how to get a PR merged or marked ready?
   - Is the agent about to use git worktree, git checkout, or cd to reach a PR branch?
+  - Did the user say "get this merged", "get it merged", or "help me merge"?
+  - Did the user say "CI is failing", "CI is red", "fix failing check", "check is failing", or "tests are failing in my PR"?
+  - Did the user say "stuck PR", "PR is stuck", "PR is blocked", or "what's blocking my PR"?
+  - Did the user say "rebase stack", "rebase my stack", or "rebase stacked branches"?
+  - Did the user say "respond to comment", "respond to review", "review comment", or "address review feedback"?
+  - Did the user say "worktree" in the context of a PR branch?
 requires:
   - fp CLI installed and on PATH
   - GITHUB_TOKEN environment variable set
