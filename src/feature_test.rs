@@ -1197,4 +1197,25 @@ mod tests {
         assert!(a.prs.contains(&42) && b.prs.contains(&42),
             "PR 42 must appear in both envelope-a and envelope-b, got a.prs={:?}, b.prs={:?}", a.prs, b.prs);
     }
+
+    // D-early-crash: bootstrap_pr must return Err when process dies immediately (no health_check)
+    #[test]
+    fn bootstrap_pr_governs_early_crash_no_health_check_returns_err_with_log() {
+        let (ps, _dir) = ps_store();
+        let wt = tempdir().unwrap();
+        let cfg = AppConfig {
+            name: "svc".into(),
+            bootstrap: "echo crash-log-marker && exit 1".into(),
+            teardown: "true".into(),
+            startup_timeout: "2s".into(),
+            health_check: None,
+            ephemeral: false, main_worktree: None, setup: None, volume_check: None,
+        };
+        let result = bootstrap_pr(&ps, &cfg, 99, wt.path(), "org", "repo");
+        assert!(result.is_err(),
+            "bootstrap_pr must return Err when process exits immediately, got Ok");
+        let msg = format!("{}", result.unwrap_err());
+        assert!(msg.contains("crash-log-marker") || msg.contains("failure") || msg.contains("startup"),
+            "error must reference startup failure, got: {}", msg);
+    }
 }

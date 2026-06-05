@@ -240,7 +240,7 @@ pub fn feature_up(ps: &ProcessStateStore, config: &crate::app_config::AppConfigS
             ("FP_PR", "0"),
             ("COMPOSE_PROJECT_NAME", &instance),
         ];
-        let child = spawn_daemon(&cfg.bootstrap, worktree, envs, &log_path)?;
+        let mut child = spawn_daemon(&cfg.bootstrap, worktree, envs, &log_path)?;
         let pid = child.id();
         let key = format!("{}:{}", name, dep_cfg_name);
         let mut state = ps.load()?;
@@ -251,6 +251,7 @@ pub fn feature_up(ps: &ProcessStateStore, config: &crate::app_config::AppConfigS
             worktree: worktree_str,
         });
         ps.save_state(state)?;
+        check_startup(&mut child, &cfg, &log_path, worktree, 0)?;
         messages.push(format!("dep {} (main): started", dep_cfg_name));
     }
     Ok(messages)
@@ -387,6 +388,57 @@ pub fn feature_rebuild(ps: &ProcessStateStore, config: &crate::app_config::AppCo
     Ok(messages)
 }
 
+fn parse_timeout_secs(s: &str) -> u64 {
+    s.trim_end_matches('s').parse().unwrap_or(30)
+}
+
+fn read_log_tail(path: &Path, lines: usize) -> String {
+    std::fs::read_to_string(path)
+        .map(|s| {
+            let all: Vec<&str> = s.lines().collect();
+            let start = all.len().saturating_sub(lines);
+            all[start..].join("\n")
+        })
+        .unwrap_or_default()
+}
+
+fn check_startup(child: &mut std::process::Child, config: &AppConfig, log_path: &Path, worktree: &Path, pr: u64) -> Result<()> {
+    let timeout_secs = parse_timeout_secs(&config.startup_timeout);
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(timeout_secs);
+    if let Some(health_cmd) = &config.health_check {
+        loop {
+            if let Ok(Some(status)) = child.try_wait() {
+                if !status.success() {
+                    let tail = read_log_tail(log_path, 20);
+                    anyhow::bail!("process exited with failure during startup.\nLog:\n{}", tail);
+                }
+                return Ok(());
+            }
+            if health_check_service(health_cmd, worktree, pr, worktree) {
+                return Ok(());
+            }
+            if std::time::Instant::now() >= deadline {
+                let tail = read_log_tail(log_path, 20);
+                anyhow::bail!("health check did not pass within {}s.\nLog:\n{}", timeout_secs, tail);
+            }
+            std::thread::sleep(std::time::Duration::from_millis(200));
+        }
+    } else {
+        let poll_end = std::time::Instant::now() + std::time::Duration::from_secs(timeout_secs.min(2));
+        while std::time::Instant::now() < poll_end {
+            std::thread::sleep(std::time::Duration::from_millis(100));
+            if let Ok(Some(status)) = child.try_wait() {
+                if !status.success() {
+                    let tail = read_log_tail(log_path, 20);
+                    anyhow::bail!("process exited with failure during startup.\nLog:\n{}", tail);
+                }
+                return Ok(());
+            }
+        }
+        Ok(())
+    }
+}
+
 pub fn bootstrap_pr(ps: &ProcessStateStore, config: &AppConfig, pr: u64, worktree: &Path, org: &str, repo: &str) -> Result<()> {
     let instance = format!("fp-{}-{}-{}", org, repo, pr).to_lowercase().replace('/', "-");
     let log_dir = ps.path.parent().unwrap_or(Path::new(".")).join("logs");
@@ -400,13 +452,14 @@ pub fn bootstrap_pr(ps: &ProcessStateStore, config: &AppConfig, pr: u64, worktre
         ("FP_PR", &pr_str),
         ("COMPOSE_PROJECT_NAME", &instance),
     ];
-    let child = spawn_daemon(&config.bootstrap, worktree, envs, &log_path)?;
+    let mut child = spawn_daemon(&config.bootstrap, worktree, envs, &log_path)?;
     let pid = child.id();
     let mut state = ps.load()?;
     let rec = state.records.entry(pr).or_insert_with(|| ProcessRecord::new(pr, String::new(), String::new()));
     rec.pid = Some(pid);
     rec.worktree = worktree.to_string_lossy().to_string();
-    ps.save_state(state)
+    ps.save_state(state)?;
+    check_startup(&mut child, config, &log_path, worktree, pr)
 }
 
 pub fn teardown_pr(ps: &ProcessStateStore, config: &AppConfig, pr: u64, worktree: &Path, org: &str, repo: &str) -> Result<()> {
