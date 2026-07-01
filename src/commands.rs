@@ -146,7 +146,7 @@ pub fn cmd_status_one(
     if json {
         Ok(serde_json::to_string_pretty(&tasks)?)
     } else {
-        Ok(crate::display::format_single_pr_status(pr_number, &tasks, lock.as_deref()))
+        Ok(crate::display::format_single_pr_status(pr_number, &tasks, lock.as_deref(), pr_state.is_closed, pr_state.is_merged, pr_state.draft))
     }
 }
 

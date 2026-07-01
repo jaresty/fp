@@ -246,7 +246,7 @@ mod tests {
             pr: 7, task_type: TaskType::FixCi, blocking: true,
             description: "Fix ci/test".into(), context_hint: "ci/test".into(),
         }];
-        let out = crate::format_single_pr_status(7, &tasks, Some("🔒 you"));
+        let out = crate::format_single_pr_status(7, &tasks, Some("🔒 you"), false, false, false);
         assert!(out.contains("🔒") || out.contains("you"),
             "single-pr status must include lock info when present, got: {}", out);
     }
@@ -255,7 +255,7 @@ mod tests {
     #[test]
     fn format_single_pr_status_omits_lock_when_absent() {
         let tasks: Vec<crate::tasks::Task> = vec![];
-        let out = crate::format_single_pr_status(7, &tasks, None);
+        let out = crate::format_single_pr_status(7, &tasks, None, false, false, false);
         assert!(!out.contains("🔒"), "single-pr status must not show lock when absent, got: {}", out);
     }
 

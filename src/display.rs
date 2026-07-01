@@ -58,12 +58,14 @@ pub fn repo_header(owner: &str, repo: &str) -> String {
     format!("{}/{}", owner, repo)
 }
 
-pub fn format_single_pr_status(pr: u64, tasks: &[tasks::Task], lock: Option<&str>) -> String {
+pub fn format_single_pr_status(pr: u64, tasks: &[tasks::Task], lock: Option<&str>, is_closed: bool, is_merged: bool, draft: bool) -> String {
     let lock_str = lock.map(|s| format!("  {}", s)).unwrap_or_default();
+    let state_tag = if is_merged { "  [merged]" } else if is_closed { "  [closed]" } else { "" };
+    let draft_tag = if draft { "  [draft]" } else { "" };
     if tasks.is_empty() {
-        format!("PR #{} is ready.{}", pr, lock_str)
+        format!("PR #{} is ready.{}{}{}", pr, lock_str, state_tag, draft_tag)
     } else {
-        let mut lines = vec![format!("PR #{} — {} task(s):{}", pr, tasks.len(), lock_str)];
+        let mut lines = vec![format!("PR #{} — {} task(s):{}{}{}", pr, tasks.len(), lock_str, state_tag, draft_tag)];
         for t in tasks {
             let flag = if t.blocking { "[blocking]" } else { "[waiting]" };
             lines.push(format!("  {} {:?}: {}", flag, t.task_type, t.description));
