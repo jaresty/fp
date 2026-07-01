@@ -53,7 +53,7 @@ mod tests {
             crate::tasks::Task { pr: 7, task_type: crate::tasks::TaskType::FixCi, description: "Fix ci/test".into(), blocking: true, context_hint: "".into() },
             crate::tasks::Task { pr: 7, task_type: crate::tasks::TaskType::AwaitingReview, description: "Waiting for review".into(), blocking: false, context_hint: "".into() },
         ];
-        let out = crate::display::format_pr_status_all_entry("", 7, "My PR", &tasks, "", None);
+        let out = crate::display::format_pr_status_all_entry("", 7, "My PR", &tasks, "", None, false, false);
         assert!(out.contains("PR #7"), "must contain PR number, got: {}", out);
         assert!(out.contains("[blocking]"), "must show blocking flag, got: {}", out);
         assert!(out.contains("Fix ci/test"), "must show task description, got: {}", out);
@@ -62,7 +62,7 @@ mod tests {
 
     #[test]
     fn display_governs_format_pr_status_all_entry_shows_ready_when_no_tasks() {
-        let out = crate::display::format_pr_status_all_entry("", 3, "Clean PR", &[], "", None);
+        let out = crate::display::format_pr_status_all_entry("", 3, "Clean PR", &[], "", None, false, false);
         assert!(out.contains("ready"), "must say ready when no tasks, got: {}", out);
         assert!(!out.contains("[blocking]"), "must not show blocking when no tasks, got: {}", out);
     }
@@ -70,7 +70,7 @@ mod tests {
     #[test]
     fn display_governs_format_pr_status_all_entry_respects_prefix() {
         let tasks = vec![crate::tasks::Task { pr: 4, task_type: crate::tasks::TaskType::FixCi, description: "fix".into(), blocking: true, context_hint: "".into() }];
-        let out = crate::display::format_pr_status_all_entry("  └─ ", 4, "Child PR", &tasks, "", None);
+        let out = crate::display::format_pr_status_all_entry("  └─ ", 4, "Child PR", &tasks, "", None, false, false);
         assert!(out.starts_with("  └─ "), "must start with prefix, got: {}", out);
     }
 
@@ -102,5 +102,23 @@ mod tests {
         let threads = crate::model::parse_resolved_review_threads_from_graphql(json).unwrap();
         assert_eq!(threads.len(), 1, "model::parse_resolved_review_threads_from_graphql must parse one resolved thread");
         assert_eq!(threads[0].body, "fix this");
+    }
+
+    #[test]
+    fn display_governs_format_pr_status_all_entry_shows_closed_tag() {
+        let out = crate::display::format_pr_status_all_entry("", 5, "Old PR", &[], "", None, true, false);
+        assert!(out.contains("[closed]"), "must show [closed] tag when is_closed=true, got: {}", out);
+    }
+
+    #[test]
+    fn display_governs_format_pr_status_all_entry_shows_merged_tag() {
+        let out = crate::display::format_pr_status_all_entry("", 6, "Done PR", &[], "", None, false, true);
+        assert!(out.contains("[merged]"), "must show [merged] tag when is_merged=true, got: {}", out);
+    }
+
+    #[test]
+    fn display_governs_format_pr_status_all_entry_no_tag_when_open() {
+        let out = crate::display::format_pr_status_all_entry("", 7, "Open PR", &[], "", None, false, false);
+        assert!(!out.contains("[closed]") && !out.contains("[merged]"), "must not show closed/merged when open, got: {}", out);
     }
 }

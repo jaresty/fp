@@ -159,7 +159,7 @@ mod tests {
             }],
             needs_parent_rebase: false,
             has_merge_conflict: false,
-            codeowners_eligibility: Default::default(), created_at: None, is_stacked: false,
+            codeowners_eligibility: Default::default(), created_at: None, is_stacked: false, is_closed: false, is_merged: false,
         });
         fake
     }
@@ -792,13 +792,13 @@ mod tests {
             number: 1, title: "parent".into(), branch: "feat/parent".into(), base: "main".into(),
             head_sha: "parent_sha".into(), draft: false, approved: false,
             checks: vec![], threads: vec![], needs_parent_rebase: false, has_merge_conflict: false,
-            codeowners_eligibility: Default::default(), created_at: None, is_stacked: false,
+            codeowners_eligibility: Default::default(), created_at: None, is_stacked: false, is_closed: false, is_merged: false,
         });
         fake.set_pr(2, crate::model::PrState {
             number: 2, title: "child".into(), branch: "feat/child".into(), base: "feat/parent".into(),
             head_sha: "child_sha".into(), draft: false, approved: false,
             checks: vec![], threads: vec![], needs_parent_rebase: false, has_merge_conflict: false,
-            codeowners_eligibility: Default::default(), created_at: None, is_stacked: false,
+            codeowners_eligibility: Default::default(), created_at: None, is_stacked: false, is_closed: false, is_merged: false,
         });
         fake.head_behind = true; // child is behind parent
 
@@ -1006,7 +1006,7 @@ mod tests {
             number: 2, title: "Child".into(), branch: "feat/child".into(), base: "feat/parent".into(),
             head_sha: String::new(), draft: false, approved: false, checks: vec![], threads: vec![],
             needs_parent_rebase: false, has_merge_conflict: false,
-            codeowners_eligibility: Default::default(), created_at: None, is_stacked: false,
+            codeowners_eligibility: Default::default(), created_at: None, is_stacked: false, is_closed: false, is_merged: false,
         });
 
         let log = std::cell::RefCell::new(Vec::<String>::new());
@@ -1091,7 +1091,7 @@ mod tests {
             head_sha: parent_tip.clone(),
             draft: false, approved: false, checks: vec![], threads: vec![],
             needs_parent_rebase: false, has_merge_conflict: false,
-            codeowners_eligibility: Default::default(), created_at: None, is_stacked: false,
+            codeowners_eligibility: Default::default(), created_at: None, is_stacked: false, is_closed: false, is_merged: false,
         });
         // Set created_at on PR #99 so squash detection runs (min created_at used as --since bound)
         fake.set_pr_created_at(99, "2020-01-01T00:00:00Z");
@@ -1171,7 +1171,7 @@ mod tests {
             head_sha: parent_tip.clone(),
             draft: false, approved: false, checks: vec![], threads: vec![],
             needs_parent_rebase: false, has_merge_conflict: false,
-            codeowners_eligibility: Default::default(), created_at: None, is_stacked: false,
+            codeowners_eligibility: Default::default(), created_at: None, is_stacked: false, is_closed: false, is_merged: false,
         });
         // Set a far-future created_at — if the code uses this as --since, no squash commits
         // will be found and the test will fail. Branch tip date must be used instead.
@@ -1281,7 +1281,7 @@ mod tests {
             head_sha: parent_tip.clone(),
             draft: false, approved: false, checks: vec![], threads: vec![],
             needs_parent_rebase: false, has_merge_conflict: false,
-            codeowners_eligibility: Default::default(), created_at: None, is_stacked: false,
+            codeowners_eligibility: Default::default(), created_at: None, is_stacked: false, is_closed: false, is_merged: false,
         });
 
         let result = crate::commands::cmd_rebase_stack(
@@ -1371,7 +1371,7 @@ mod tests {
             head_sha: unrelated_head_sha.clone(),
             draft: false, approved: false, checks: vec![], threads: vec![],
             needs_parent_rebase: false, has_merge_conflict: false,
-            codeowners_eligibility: Default::default(), created_at: None, is_stacked: false,
+            codeowners_eligibility: Default::default(), created_at: None, is_stacked: false, is_closed: false, is_merged: false,
         });
         fake.set_pr_created_at(99, "2020-01-01T00:00:00Z");
 
@@ -1459,7 +1459,7 @@ mod tests {
             head_sha: parent_tip.clone(),
             draft: false, approved: false, checks: vec![], threads: vec![],
             needs_parent_rebase: false, has_merge_conflict: false,
-            codeowners_eligibility: Default::default(), created_at: None, is_stacked: false,
+            codeowners_eligibility: Default::default(), created_at: None, is_stacked: false, is_closed: false, is_merged: false,
         });
         fake.set_pr_created_at(99, "2020-01-01T00:00:00Z");
 
@@ -1562,20 +1562,20 @@ mod tests {
             number: 10, title: "Mid".into(), branch: "feat/mid".into(), base: "main".into(),
             head_sha: String::new(), draft: false, approved: false, checks: vec![], threads: vec![],
             needs_parent_rebase: false, has_merge_conflict: false,
-            codeowners_eligibility: Default::default(), created_at: None, is_stacked: false,
+            codeowners_eligibility: Default::default(), created_at: None, is_stacked: false, is_closed: false, is_merged: false,
         });
         fake.set_pr(11, crate::model::PrState {
             number: 11, title: "Top".into(), branch: "feat/top".into(), base: "feat/mid".into(),
             head_sha: String::new(), draft: false, approved: false, checks: vec![], threads: vec![],
             needs_parent_rebase: false, has_merge_conflict: false,
-            codeowners_eligibility: Default::default(), created_at: None, is_stacked: false,
+            codeowners_eligibility: Default::default(), created_at: None, is_stacked: false, is_closed: false, is_merged: false,
         });
         fake.set_pr(55, crate::model::PrState {
             number: 55, title: "Root".into(), branch: "feat/root".into(), base: "main".into(),
             head_sha: root_tip.clone(),
             draft: false, approved: false, checks: vec![], threads: vec![],
             needs_parent_rebase: false, has_merge_conflict: false,
-            codeowners_eligibility: Default::default(), created_at: None, is_stacked: false,
+            codeowners_eligibility: Default::default(), created_at: None, is_stacked: false, is_closed: false, is_merged: false,
         });
 
         let result = crate::commands::cmd_rebase_stack(
@@ -3176,7 +3176,7 @@ mod tests {
             number: 1, title: "Dirty PR".into(), branch: "feat/dirty".into(), base: "main".into(),
             head_sha: "abc".into(), draft: false, approved: true, checks: vec![], threads: vec![],
             needs_parent_rebase: false, has_merge_conflict: false,
-            codeowners_eligibility: Default::default(), created_at: None, is_stacked: false,
+            codeowners_eligibility: Default::default(), created_at: None, is_stacked: false, is_closed: false, is_merged: false,
         });
         let out = crate::commands::cmd_status_all(Some(&fake), &store, None, None, &git_dir, "alice", "repo", false).unwrap();
         assert!(out.contains("dirty") || out.contains("uncommitted"),

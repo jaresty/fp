@@ -28,6 +28,8 @@ mod trait_tests {
             has_merge_conflict: false,
             codeowners_eligibility: Default::default(), created_at: None,
             is_stacked: false,
+            is_closed: false,
+            is_merged: false,
         });
         let pr = fake.fetch_pr("owner", "repo", 7).unwrap();
         assert_eq!(pr.title, "test pr");
@@ -2573,5 +2575,37 @@ mod tests {
         let thread = pr.threads.iter().find(|t| t.author == "reviewer").unwrap();
         assert_eq!(thread.state, ThreadState::Open,
             "issue thread must remain Open when author reply does not @mention reviewer, got {:?}", thread.state);
+    }
+
+    // CS1: fetch_pr populates is_closed and is_merged from GitHub API state/merged fields
+    #[test]
+    fn fetch_pr_governs_is_closed_and_is_merged_from_api_state() {
+        let mut server = mockito::Server::new();
+        let branch = "feat/done";
+        let encoded = branch.replace('/', "%2F");
+        server.mock("GET", "/repos/owner/repo/pulls/300")
+            .with_status(200).with_header("content-type", "application/json")
+            .with_body(r#"{"number":300,"state":"closed","merged":true,"title":"done","draft":false,"head":{"ref":"feat/done","sha":""},"base":{"ref":"main"},"user":{"login":"author"}}"#)
+            .create();
+        server.mock("GET", format!("/repos/owner/repo/commits/{}/check-runs", encoded).as_str())
+            .with_status(200).with_header("content-type","application/json").with_body(r#"{"check_runs":[]}"#).create();
+        server.mock("GET", format!("/repos/owner/repo/branches/{}/protection", encoded).as_str())
+            .with_status(404).create();
+        server.mock("GET", "/repos/owner/repo/branches/main/protection")
+            .with_status(404).expect_at_least(1).create();
+        server.mock("GET", "/repos/owner/repo/commits//statuses")
+            .with_status(200).with_header("content-type","application/json").with_body(r#"[]"#).expect_at_least(1).create();
+        server.mock("GET", "/repos/owner/repo/pulls/300/reviews?per_page=100&page=1")
+            .with_status(200).with_header("content-type","application/json").with_body(r#"[]"#).create();
+        server.mock("GET", "/repos/owner/repo/pulls/300/comments?per_page=100&page=1")
+            .with_status(200).with_header("content-type","application/json").with_body(r#"[]"#).create();
+        server.mock("GET", "/repos/owner/repo/pulls/300/requested_reviewers")
+            .with_status(200).with_header("content-type","application/json").with_body(r#"{"users":[],"teams":[]}"#).create();
+        server.mock("GET", "/repos/owner/repo/issues/300/comments?per_page=100&page=1")
+            .with_status(200).with_header("content-type","application/json").with_body(r#"[]"#).expect_at_least(1).create();
+
+        let pr = mock_client(&server).fetch_pr("owner", "repo", 300).unwrap();
+        assert!(pr.is_closed, "fetch_pr must set is_closed=true when API state=closed, got is_closed={}", pr.is_closed);
+        assert!(pr.is_merged, "fetch_pr must set is_merged=true when API merged=true, got is_merged={}", pr.is_merged);
     }
 }

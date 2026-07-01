@@ -23,6 +23,8 @@ mod tests {
             needs_parent_rebase: false,
             has_merge_conflict: false, codeowners_eligibility: Default::default(), created_at: None,
             is_stacked: false,
+            is_closed: false,
+            is_merged: false,
         }
     }
 
@@ -258,6 +260,8 @@ mod tests {
             threads: vec![],
             head_sha: "".into(), needs_parent_rebase: false, has_merge_conflict: false, codeowners_eligibility: Default::default(), created_at: None,
             is_stacked: false,
+            is_closed: false,
+            is_merged: false,
         };
         let tasks = generate_tasks(&pr);
         assert!(
@@ -282,6 +286,8 @@ mod tests {
             head_sha: "".into(), needs_parent_rebase: false,
             has_merge_conflict: false, codeowners_eligibility: Default::default(), created_at: None,
             is_stacked: false,
+            is_closed: false,
+            is_merged: false,
         };
         let tasks = generate_tasks(&pr);
         assert!(
@@ -303,7 +309,7 @@ mod tests {
             checks: vec![Check { name: "ci".into(), status: CheckStatus::Pass, required: true, details_url: None, log_snippet: None }],
             threads: vec![],
             head_sha: "".into(), needs_parent_rebase: false, has_merge_conflict: false, codeowners_eligibility: Default::default(), created_at: None,
-            is_stacked: true,
+            is_stacked: true, is_closed: false, is_merged: false,
         };
         let tasks = generate_tasks(&pr);
         assert!(

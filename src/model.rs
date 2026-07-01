@@ -70,6 +70,10 @@ pub struct PrState {
     pub created_at: Option<String>,
     #[serde(default)]
     pub is_stacked: bool,
+    #[serde(default)]
+    pub is_closed: bool,
+    #[serde(default)]
+    pub is_merged: bool,
 }
 
 #[derive(Debug, Clone)]
