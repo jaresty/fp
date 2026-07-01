@@ -243,7 +243,7 @@ pub fn cmd_status_all(
             out.push_str(&serde_json::to_string_pretty(&tasks).unwrap());
             out.push('\n');
         } else {
-            out.push_str(&crate::display::format_pr_status_all_entry(&prefix, cached.number, &cached.title, &tasks, &lock, health, pr_state.is_closed, pr_state.is_merged));
+            out.push_str(&crate::display::format_pr_status_all_entry(&prefix, cached.number, &cached.title, &tasks, &lock, health, pr_state.is_closed, pr_state.is_merged, pr_state.draft));
         }
     }
     Ok(out)

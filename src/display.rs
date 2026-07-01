@@ -22,14 +22,15 @@ pub fn format_watch_initial_state(pr: u64, title: &str, task_list: &[tasks::Task
 }
 
 #[allow(clippy::too_many_arguments)]
-pub fn format_pr_status_all_entry(prefix: &str, number: u64, title: &str, tasks: &[tasks::Task], lock: &str, health: Option<&str>, is_closed: bool, is_merged: bool) -> String {
+pub fn format_pr_status_all_entry(prefix: &str, number: u64, title: &str, tasks: &[tasks::Task], lock: &str, health: Option<&str>, is_closed: bool, is_merged: bool, draft: bool) -> String {
     let health_str = health.map(|h| format!("  [{}]", h)).unwrap_or_default();
     let state_tag = if is_merged { "  [merged]" } else if is_closed { "  [closed]" } else { "" };
+    let draft_tag = if draft { "  [draft]" } else { "" };
     if tasks.is_empty() {
-        return format!("{}PR #{} {} — ready{}{}{}\n", prefix, number, title, lock, health_str, state_tag);
+        return format!("{}PR #{} {} — ready{}{}{}{}\n", prefix, number, title, lock, health_str, state_tag, draft_tag);
     }
     let task_prefix = prefix.replace("└─ ", "   ");
-    let mut out = format!("{}PR #{} {} — {} task(s){}{}{}\n", prefix, number, title, tasks.len(), lock, health_str, state_tag);
+    let mut out = format!("{}PR #{} {} — {} task(s){}{}{}{}\n", prefix, number, title, tasks.len(), lock, health_str, state_tag, draft_tag);
     for t in tasks {
         let flag = if t.blocking { "[blocking]" } else { "[waiting]" };
         out.push_str(&format!("{}  {} {:?}: {}\n", task_prefix, flag, t.task_type, t.description));
